@@ -49,7 +49,7 @@ public class ListenerFile extends OutputFile {
 		parserName = g.getRecognizerName();
 		grammarName = g.name;
 
-		namedActions = buildNamedActions(factory.getGrammar());
+		namedActions = buildNamedActions(factory.getGrammar(), ast -> ast.getScope() == null);
 
 		for (Map.Entry<String, List<RuleAST>> entry : g.contextASTs.entrySet()) {
 			for (RuleAST ruleAST : entry.getValue()) {
