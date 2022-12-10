@@ -267,7 +267,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-gpg-plugin</artifactId>
                 <!-- override the version inherited from the parent -->
-                <version>1.6</version>
+                <version>3.0.1</version>
                 <configuration>
                     <useAgent>true</useAgent>
                 </configuration>
