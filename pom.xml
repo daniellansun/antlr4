@@ -79,6 +79,7 @@
     </modules>
 
     <properties>
+        <maven.javadoc.failOnError>false</maven.javadoc.failOnError>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <java5.home>${env.JAVA5_HOME}</java5.home>
@@ -88,6 +89,10 @@
         <bootclasspath.compile>${bootclasspath.java6}</bootclasspath.compile>
         <bootclasspath.testCompile>${bootclasspath.java6}</bootclasspath.testCompile>
         <antlr.testinprocess>true</antlr.testinprocess>
+
+        <nexus.url>https://oss.sonatype.org</nexus.url>
+        <project.repository>daniellansun/antlr4</project.repository>
+        <repository.url>git@github.com:${project.repository}.git</repository.url>
     </properties>
 
     <mailingLists>
@@ -223,6 +228,17 @@
                 <artifactId>maven-source-plugin</artifactId>
                 <!-- override the version inherited from the parent -->
                 <version>2.4</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <attach>true</attach>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
 
             <plugin>
@@ -232,7 +248,19 @@
                 <version>2.10.3</version>
                 <configuration>
                     <quiet>true</quiet>
+                    <additionalparam>-Xdoclint:none</additionalparam>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <attach>true</attach>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
 
             <plugin>
@@ -240,6 +268,23 @@
                 <artifactId>maven-gpg-plugin</artifactId>
                 <!-- override the version inherited from the parent -->
                 <version>1.6</version>
+                <configuration>
+                    <useAgent>true</useAgent>
+                </configuration>
+                <executions>
+                    <execution>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>sign</goal>
+                        </goals>
+                        <configuration>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
 
             <plugin>
@@ -251,6 +296,17 @@
                     <arguments>-Psonatype-oss-release ${release.arguments}</arguments>
                     <autoVersionSubmodules>true</autoVersionSubmodules>
                     <tagNameFormat>@{project.version}-opt</tagNameFormat>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.sonatype.plugins</groupId>
+                <artifactId>nexus-staging-maven-plugin</artifactId>
+                <version>1.6.8</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <serverId>sonatype-nexus-staging</serverId>
+                    <nexusUrl>${nexus.url}</nexusUrl>
+                    <autoReleaseAfterClose>true</autoReleaseAfterClose>
                 </configuration>
             </plugin>
         </plugins>
