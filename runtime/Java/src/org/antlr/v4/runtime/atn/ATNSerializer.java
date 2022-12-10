@@ -185,7 +185,7 @@ public class ATNSerializer {
 		List<IntervalSet> bmpSets = new ArrayList<IntervalSet>();
 		List<IntervalSet> smpSets = new ArrayList<IntervalSet>();
 		for (IntervalSet set : sets.keySet()) {
-			if (set.getMaxElement() <= Character.MAX_VALUE) {
+			if (!set.isNil() && set.getMaxElement() <= Character.MAX_VALUE) {
 				bmpSets.add(set);
 			}
 			else {
