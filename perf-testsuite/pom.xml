@@ -8,7 +8,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.tunnelvisionlabs</groupId>
+        <groupId>me.sunlan</groupId>
         <artifactId>antlr4-master</artifactId>
         <version>4.11.0</version>
     </parent>
@@ -26,19 +26,19 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>com.tunnelvisionlabs</groupId>
+            <groupId>me.sunlan</groupId>
             <artifactId>antlr4</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.tunnelvisionlabs</groupId>
+            <groupId>me.sunlan</groupId>
             <artifactId>antlr4-runtime</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.tunnelvisionlabs</groupId>
+            <groupId>me.sunlan</groupId>
             <artifactId>antlr4-annotations</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
@@ -114,7 +114,7 @@
 
         <plugins>
             <plugin>
-                <groupId>com.tunnelvisionlabs</groupId>
+                <groupId>me.sunlan</groupId>
                 <artifactId>antlr4-maven-plugin</artifactId>
                 <version>${project.version}</version>
                 <configuration>

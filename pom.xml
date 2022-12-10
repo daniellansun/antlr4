@@ -13,7 +13,7 @@
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
-    <groupId>com.tunnelvisionlabs</groupId>
+    <groupId>me.sunlan</groupId>
     <artifactId>antlr4-master</artifactId>
     <version>4.11.0</version>
     <packaging>pom</packaging>

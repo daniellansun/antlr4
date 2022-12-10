@@ -7,7 +7,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.tunnelvisionlabs</groupId>
+        <groupId>me.sunlan</groupId>
         <artifactId>antlr4-master</artifactId>
         <version>4.11.0</version>
     </parent>
@@ -73,7 +73,7 @@
         </dependency>
 
         <dependency>
-            <groupId>com.tunnelvisionlabs</groupId>
+            <groupId>me.sunlan</groupId>
             <artifactId>runtime-testsuite</artifactId>
             <version>${project.version}</version>
         </dependency>

@@ -8,7 +8,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.tunnelvisionlabs</groupId>
+        <groupId>me.sunlan</groupId>
         <artifactId>antlr4-master</artifactId>
         <version>4.11.0</version>
     </parent>
@@ -26,13 +26,13 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>com.tunnelvisionlabs</groupId>
+            <groupId>me.sunlan</groupId>
             <artifactId>antlr4-runtime</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.tunnelvisionlabs</groupId>
+            <groupId>me.sunlan</groupId>
             <artifactId>antlr4-annotations</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
@@ -74,7 +74,7 @@
                         <configuration>
                             <includeDependencySources>true</includeDependencySources>
                             <dependencySourceIncludes>
-                                <dependencySourceInclude>com.tunnelvisionlabs:antlr4-*</dependencySourceInclude>
+                                <dependencySourceInclude>me.sunlan:antlr4-*</dependencySourceInclude>
                             </dependencySourceIncludes>
                         </configuration>
                     </plugin>
@@ -98,13 +98,13 @@
                                     <shadedClassifierName>complete</shadedClassifierName>
                                     <filters>
                                         <filter>
-                                            <artifact>com.tunnelvisionlabs:antlr4-runtime</artifact>
+                                            <artifact>me.sunlan:antlr4-runtime</artifact>
                                             <includes>
                                                 <include>org/antlr/v4/runtime/**</include>
                                             </includes>
                                         </filter>
                                         <filter>
-                                            <artifact>com.tunnelvisionlabs:antlr4-annotations</artifact>
+                                            <artifact>me.sunlan:antlr4-annotations</artifact>
                                             <includes>
                                                 <include>org/antlr/v4/runtime/**</include>
                                             </includes>
@@ -241,7 +241,7 @@
             </plugin>
 
             <plugin>
-                <groupId>com.tunnelvisionlabs</groupId>
+                <groupId>me.sunlan</groupId>
                 <artifactId>antlr4-testgen-maven-plugin</artifactId>
                 <version>${project.version}</version>
                 <executions>
