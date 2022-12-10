@@ -24,11 +24,11 @@
     <inceptionYear>1992</inceptionYear>
     <organization>
         <!--
-          The organization name is used in the manifests of the Jar files. Set to Tunnel Vision Labs for this custom
+          The organization name is used in the manifests of the Jar files. Set to Daniel Sun for this custom
           build.
         -->
-        <name>Tunnel Vision Laboratories, LLC</name>
-        <url>http://tunnelvisionlabs.com</url>
+        <name>Daniel Sun</name>
+        <url>https://sunlan.me</url>
     </organization>
 
     <licenses>
