@@ -131,7 +131,7 @@
             </plugin>
 
             <plugin>
-                <groupId>me.sunlan</groupId>
+                <groupId>com.tunnelvisionlabs</groupId>
                 <artifactId>antlr4-maven-plugin</artifactId>
                 <version>4.7.2</version>
                 <configuration>
