@@ -375,7 +375,7 @@ public class ParseTreePatternMatcher {
 				TagChunk tagChunk = (TagChunk)chunk;
 				// add special rule token or conjure up new token from name
 				if ( Character.isUpperCase(tagChunk.getTag().charAt(0)) ) {
-					Integer ttype = parser.getTokenType(tagChunk.getTag());
+					int ttype = parser.getTokenType(tagChunk.getTag());
 					if ( ttype==Token.INVALID_TYPE ) {
 						throw new IllegalArgumentException("Unknown token "+tagChunk.getTag()+" in pattern: "+pattern);
 					}
