@@ -1185,9 +1185,7 @@ public class ParserATNSimulator extends ATNSimulator {
 
 				contextElements.add(nextContextElement);
 				if (nextContextElement != PredictionContext.EMPTY_FULL_STATE_KEY) {
-					for (int i = 0; i < closureConfigs.size(); i++) {
-						closureConfigs.set(i, closureConfigs.get(i).appendContext(nextContextElement, contextCache));
-					}
+					closureConfigs.replaceAll(atnConfig -> atnConfig.appendContext(nextContextElement, contextCache));
 				}
 			}
 		} while (useContext && stepIntoGlobal);
