@@ -6,7 +6,6 @@
 package org.antlr.v4.runtime;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
@@ -18,6 +17,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CoderResult;
 import java.nio.charset.CodingErrorAction;
+import java.nio.file.Files;
 
 /** This class represents the primary interface for creating {@link CharStream}s
  *  from a variety of sources as of 4.7.  The motivation was to support
@@ -80,7 +80,7 @@ public enum CharStreams {
 	 */
 	public static CharStream fromFile(File file, Charset charset) throws IOException {
 		long size = file.length();
-		return fromStream(new FileInputStream(file), charset, file.toString(), size);
+		return fromStream(Files.newInputStream(file.toPath()), charset, file.toString(), size);
 	}
 
 	/**
