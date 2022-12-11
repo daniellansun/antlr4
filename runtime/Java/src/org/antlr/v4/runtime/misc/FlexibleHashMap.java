@@ -257,19 +257,4 @@ public class FlexibleHashMap<K,V> implements Map<K, V> {
 		}
 		return buf.toString();
 	}
-
-	public static void main(String[] args) {
-		FlexibleHashMap<String,Integer> map = new FlexibleHashMap<String,Integer>();
-		map.put("hi", 1);
-		map.put("mom", 2);
-		map.put("foo", 3);
-		map.put("ach", 4);
-		map.put("cbba", 5);
-		map.put("d", 6);
-		map.put("edf", 7);
-		map.put("mom", 8);
-		map.put("hi", 9);
-		System.out.println(map);
-		System.out.println(map.toTableString());
-	}
 }
