@@ -29,7 +29,7 @@ public class LexerInterpreter extends Lexer {
 
 	@Deprecated
 	public LexerInterpreter(String grammarFileName, Collection<String> tokenNames, Collection<String> ruleNames, Collection<String> modeNames, ATN atn, CharStream input) {
-		this(grammarFileName, VocabularyImpl.fromTokenNames(tokenNames.toArray(new String[tokenNames.size()])), ruleNames, null, modeNames, atn, input);
+		this(grammarFileName, VocabularyImpl.fromTokenNames(tokenNames.toArray(new String[0])), ruleNames, null, modeNames, atn, input);
 	}
 
 	@Deprecated
@@ -51,9 +51,9 @@ public class LexerInterpreter extends Lexer {
 			tokenNames[i] = vocabulary.getDisplayName(i);
 		}
 
-		this.ruleNames = ruleNames.toArray(new String[ruleNames.size()]);
-		this.channelNames = channelNames != null ? channelNames.toArray(new String[channelNames.size()]) : null;
-		this.modeNames = modeNames.toArray(new String[modeNames.size()]);
+		this.ruleNames = ruleNames.toArray(new String[0]);
+		this.channelNames = channelNames != null ? channelNames.toArray(new String[0]) : null;
+		this.modeNames = modeNames.toArray(new String[0]);
 		this.vocabulary = vocabulary;
 		this._interp = new LexerATNSimulator(this,atn);
 	}

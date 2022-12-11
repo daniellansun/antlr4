@@ -427,7 +427,7 @@ public class RuleDependencyProcessor extends AbstractProcessor {
 			}
 		}
 
-		return result.toArray(new String[result.size()]);
+		return result.toArray(new String[0]);
 	}
 
 	public static List<Tuple2<RuleDependency, Element>> getDependencies(RoundEnvironment roundEnv) {

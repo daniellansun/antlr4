@@ -1588,7 +1588,7 @@ public class ParserATNSimulator extends ATNSimulator {
 		}
 
 //		System.out.println(Arrays.toString(altToPred)+"->"+pairs);
-		return pairs.toArray(new DFAState.PredPrediction[pairs.size()]);
+		return pairs.toArray(new DFAState.PredPrediction[0]);
 	}
 
 	/** Look through a list of predicate/alt pairs, returning alts for the
@@ -2076,7 +2076,7 @@ public class ParserATNSimulator extends ATNSimulator {
 						exact = false;
 						break;
 					}
-					
+
 					currentAlt = alt;
 				}
 			}
