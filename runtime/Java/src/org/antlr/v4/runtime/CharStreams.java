@@ -17,6 +17,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CoderResult;
 import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
 /** This class represents the primary interface for creating {@link CharStream}s
@@ -69,7 +70,7 @@ public enum CharStreams {
 	 * Reads the entire contents of the file into the result before returning.
 	 */
 	public static CharStream fromFile(File file) throws IOException {
-		return fromFile(file, Charset.forName("UTF-8"));
+		return fromFile(file, StandardCharsets.UTF_8);
 	}
 
 	/**
@@ -90,7 +91,7 @@ public enum CharStreams {
 	 * Reads the entire contents of the file into the result before returning.
 	 */
 	public static CharStream fromFileName(String fileName) throws IOException {
-		return fromFileName(fileName, Charset.forName("UTF-8"));
+		return fromFileName(fileName, StandardCharsets.UTF_8);
 	}
 
 	/**
@@ -113,7 +114,7 @@ public enum CharStreams {
 	 * the result before returning, then closes the {@code InputStream}.
 	 */
 	public static CharStream fromStream(InputStream is) throws IOException {
-		return fromStream(is, Charset.forName("UTF-8"));
+		return fromStream(is, StandardCharsets.UTF_8);
 	}
 
 	/**
@@ -145,7 +146,7 @@ public enum CharStreams {
 	 * the result before returning, then closes the {@code channel}.
 	 */
 	public static CharStream fromChannel(ReadableByteChannel channel) throws IOException {
-		return fromChannel(channel, Charset.forName("UTF-8"));
+		return fromChannel(channel, StandardCharsets.UTF_8);
 	}
 
 	/**
@@ -229,7 +230,7 @@ public enum CharStreams {
 		String sourceName)
 		throws IOException
 	{
-		return fromChannel(channel, Charset.forName("UTF-8"), bufferSize, decodingErrorAction, sourceName, -1);
+		return fromChannel(channel, StandardCharsets.UTF_8, bufferSize, decodingErrorAction, sourceName, -1);
 	}
 
 	public static CodePointCharStream fromChannel(
