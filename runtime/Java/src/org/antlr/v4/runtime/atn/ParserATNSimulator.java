@@ -2006,7 +2006,7 @@ public class ParserATNSimulator extends ATNSimulator {
 		}
 
 		List<ATNConfig> configs = new ArrayList<ATNConfig>(configset);
-		Collections.sort(configs, STATE_ALT_SORT_COMPARATOR);
+		configs.sort(STATE_ALT_SORT_COMPARATOR);
 
 		boolean exact = !configset.getDipsIntoOuterContext();
 		BitSet alts = new BitSet();
