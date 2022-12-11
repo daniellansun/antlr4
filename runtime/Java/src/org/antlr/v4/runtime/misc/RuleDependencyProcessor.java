@@ -84,12 +84,8 @@ public class RuleDependencyProcessor extends AbstractProcessor {
 			= new HashMap<TypeMirror, List<Tuple2<RuleDependency, Element>>>();
 		for (Tuple2<RuleDependency, Element> dependency : dependencies) {
 			TypeMirror recognizerType = getRecognizerType(dependency.getItem1());
-			List<Tuple2<RuleDependency, Element>> list = recognizerDependencies.get(recognizerType);
-			if (list == null) {
-				list = new ArrayList<Tuple2<RuleDependency, Element>>();
-				recognizerDependencies.put(recognizerType, list);
-			}
-
+			List<Tuple2<RuleDependency, Element>> list =
+					recognizerDependencies.computeIfAbsent(recognizerType, k -> new ArrayList<Tuple2<RuleDependency, Element>>());
 			list.add(dependency);
 		}
 
