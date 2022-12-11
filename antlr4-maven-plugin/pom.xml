@@ -21,7 +21,7 @@
 
     <name>ANTLR 4 Maven plugin</name>
     <description>Maven plugin for ANTLR 4 grammars</description>
-    <url>http://www.antlr.org</url>
+    <url>https://github.com/daniellansun/antlr4</url>
 
     <prerequisites>
         <maven>3.0</maven>

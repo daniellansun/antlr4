@@ -17,7 +17,7 @@
 
     <name>ANTLR 4 Test Generator Maven plugin</name>
     <description>Maven plugin for generating ANTLR 4 runtime tests</description>
-    <url>http://www.antlr.org</url>
+    <url>https://github.com/daniellansun/antlr4</url>
 
     <prerequisites>
         <maven>3.0</maven>

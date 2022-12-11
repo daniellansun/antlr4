@@ -18,7 +18,7 @@
 
     <name>ANTLR 4 Runtime Test Generator</name>
     <description>A collection of tests for ANTLR 4 Runtime libraries.</description>
-    <url>http://www.antlr.org</url>
+    <url>https://github.com/daniellansun/antlr4</url>
 
     <prerequisites>
         <maven>3.0</maven>

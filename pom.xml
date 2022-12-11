@@ -20,7 +20,7 @@
 
     <name>ANTLR 4</name>
     <description>ANTLR 4 Master Build POM</description>
-    <url>http://www.antlr.org</url>
+    <url>https://github.com/daniellansun/antlr4</url>
     <inceptionYear>1992</inceptionYear>
     <organization>
         <!--
@@ -66,6 +66,13 @@
             </roles>
         </developer>
 
+        <developer>
+            <name>Daniel Sun</name>
+            <url>https://sunlan.me</url>
+            <roles>
+                <role>Developer</role>
+            </roles>
+        </developer>
     </developers>
 
     <modules>
@@ -248,6 +255,7 @@
                 <version>2.10.4</version>
                 <configuration>
                     <quiet>true</quiet>
+                    <locale>en_US</locale>
                     <additionalparam>-Xdoclint:none</additionalparam>
                 </configuration>
                 <executions>
