@@ -4,9 +4,11 @@
 coverage:
   status:
     project:
-      default: false
+      default:
+        informational: true
     patch:
-      default: false
+      default:
+        informational: true
 
 comment:
   layout: "diff, flags, files, footer"

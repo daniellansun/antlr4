@@ -2,6 +2,7 @@
 
 [![Java 8+](https://img.shields.io/badge/java-8+-4c7e9f.svg)](http://java.oracle.com) [![License](https://img.shields.io/badge/license-BSD-blue.svg)](https://raw.githubusercontent.com/tunnelvisionlabs/antlr4/master/LICENSE.txt)
 [![GithubActions](https://github.com/daniellansun/antlr4/actions/workflows/build-test.yml/badge.svg?branch=opt)](https://github.com/daniellansun/antlr4/actions?query=branch%3Aopt++)
+[![codecov](https://codecov.io/gh/daniellansun/antlr4/branch/opt/graph/badge.svg)](https://codecov.io/gh/daniellansun/antlr4)
 
 **ANTLR** (ANother Tool for Language Recognition) is a powerful parser generator for reading, processing, executing, or translating structured text or binary files. It's widely used to build languages, tools, and frameworks. From a grammar, ANTLR generates a parser that can build parse trees and also generates a listener interface (or visitor) that makes it easy to respond to the recognition of phrases of interest.
 

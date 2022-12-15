@@ -36,7 +36,9 @@ jobs:
       - name: Install maven
         run: wget https://archive.apache.org/dist/maven/maven-3/3.8.6/binaries/apache-maven-3.8.6-bin.zip && unzip -qq apache-maven-3.8.6-bin.zip
       - name: Set environment variables
-        run: export M2_HOME=$PWD/apache-maven-3.8.6 && export PATH=$M2_HOME/bin:$PATH && echo "MAVEN_OPTS='-Xmx1g -DENABLE_JACOCO=false'" > ~/.mavenrc
+        run: export M2_HOME=$PWD/apache-maven-3.8.6 && export PATH=$M2_HOME/bin:$PATH && echo "MAVEN_OPTS='-Xmx1g -DENABLE_JACOCO=true'" > ~/.mavenrc
       - name: Test with Maven
         run: mvn test -Dantlr.testinprocess=true -DJDK_SOURCE_ROOT=../runtime/Java/src -Dperformance.package=
         timeout-minutes: 60
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
