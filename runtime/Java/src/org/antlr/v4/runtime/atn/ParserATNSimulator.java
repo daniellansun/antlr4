@@ -31,7 +31,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -2010,7 +2009,8 @@ public class ParserATNSimulator extends ATNSimulator {
 
 		boolean exact = !configset.getDipsIntoOuterContext();
 		BitSet alts = new BitSet();
-		int minAlt = configs.get(0).getAlt();
+		final ATNConfig firstConfig = configs.get(0);
+		int minAlt = firstConfig.getAlt();
 		alts.set(minAlt);
 
 		/* Quick checks come first (single pass, no context joining):
@@ -2025,7 +2025,8 @@ public class ParserATNSimulator extends ATNSimulator {
 		// quick check 1 & 2 => if we assume #1 holds and check #2 against the
 		// minAlt from the first state, #2 will fail if the assumption was
 		// incorrect
-		int currentState = configs.get(0).getState().getNonStopStateNumber();
+		final ATNState firstConfigState = firstConfig.getState();
+		int currentState = firstConfigState.getNonStopStateNumber();
 		for (ATNConfig config : configs) {
 			int stateNumber = config.getState().getNonStopStateNumber();
 			if (stateNumber != currentState) {
@@ -2039,7 +2040,7 @@ public class ParserATNSimulator extends ATNSimulator {
 
 		BitSet representedAlts;
 		if (exact) {
-			currentState = configs.get(0).getState().getNonStopStateNumber();
+			currentState = firstConfigState.getNonStopStateNumber();
 
 			// get the represented alternatives of the first state
 			representedAlts = new BitSet();
@@ -2055,7 +2056,7 @@ public class ParserATNSimulator extends ATNSimulator {
 			}
 
 			// quick check #3:
-			currentState = configs.get(0).getState().getNonStopStateNumber();
+			currentState = firstConfigState.getNonStopStateNumber();
 			int currentAlt = minAlt;
 			for (ATNConfig config : configs) {
 				int stateNumber = config.getState().getNonStopStateNumber();
@@ -2080,11 +2081,12 @@ public class ParserATNSimulator extends ATNSimulator {
 			}
 		}
 
-		currentState = configs.get(0).getState().getNonStopStateNumber();
-		int firstIndexCurrentState = 0;
+		currentState = firstConfigState.getNonStopStateNumber();
+		int firstIndexCurrentState;
 		int lastIndexCurrentStateMinAlt = 0;
-		PredictionContext joinedCheckContext = configs.get(0).getContext();
-		for (int i = 1; i < configs.size(); i++) {
+		PredictionContext joinedCheckContext = firstConfig.getContext();
+		final int configCnt = configs.size();
+		for (int i = 1; i < configCnt; i++) {
 			ATNConfig config = configs.get(i);
 			if (config.getAlt() != minAlt) {
 				break;
@@ -2095,10 +2097,10 @@ public class ParserATNSimulator extends ATNSimulator {
 			}
 
 			lastIndexCurrentStateMinAlt = i;
-			joinedCheckContext = contextCache.join(joinedCheckContext, configs.get(i).getContext());
+			joinedCheckContext = contextCache.join(joinedCheckContext, config.getContext());
 		}
 
-		for (int i = lastIndexCurrentStateMinAlt + 1; i < configs.size(); i++) {
+		for (int i = lastIndexCurrentStateMinAlt + 1; i < configCnt; i++) {
 			ATNConfig config = configs.get(i);
 			ATNState state = config.getState();
 			alts.set(config.getAlt());
@@ -2107,7 +2109,7 @@ public class ParserATNSimulator extends ATNSimulator {
 				firstIndexCurrentState = i;
 				lastIndexCurrentStateMinAlt = i;
 				joinedCheckContext = config.getContext();
-				for (int j = firstIndexCurrentState + 1; j < configs.size(); j++) {
+				for (int j = firstIndexCurrentState + 1; j < configCnt; j++) {
 					ATNConfig config2 = configs.get(j);
 					if (config2.getAlt() != minAlt) {
 						break;
@@ -2128,7 +2130,7 @@ public class ParserATNSimulator extends ATNSimulator {
 			PredictionContext joinedCheckContext2 = config.getContext();
 			int currentAlt = config.getAlt();
 			int lastIndexCurrentStateCurrentAlt = i;
-			for (int j = lastIndexCurrentStateCurrentAlt + 1; j < configs.size(); j++) {
+			for (int j = lastIndexCurrentStateCurrentAlt + 1; j < configCnt; j++) {
 				ATNConfig config2 = configs.get(j);
 				if (config2.getAlt() != currentAlt) {
 					break;
