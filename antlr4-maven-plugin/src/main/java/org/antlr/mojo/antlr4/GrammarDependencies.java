@@ -15,11 +15,10 @@ import org.antlr.v4.tool.ast.GrammarRootAST;
 import org.apache.maven.plugin.logging.Log;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.nio.file.Files;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -73,8 +72,7 @@ class GrammarDependencies {
         if (!grammars.isEmpty()) {
             log.debug("Persisting grammars dependency status: " + statusFile);
 
-            ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(
-                        statusFile));
+            ObjectOutputStream out = new ObjectOutputStream(Files.newOutputStream(statusFile.toPath()));
 
             try {
                 out.writeObject(grammars);
@@ -283,8 +281,7 @@ class GrammarDependencies {
             log.debug("Load grammars dependency status: " + statusFile);
 
             try {
-                ObjectInputStream in = new ObjectInputStream(new FileInputStream(
-                            statusFile));
+                ObjectInputStream in = new ObjectInputStream(Files.newInputStream(statusFile.toPath()));
 
                 try {
                     @SuppressWarnings("unchecked")

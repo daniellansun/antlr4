@@ -7,9 +7,9 @@
 package org.antlr.mojo.antlr4;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
@@ -24,7 +24,7 @@ class MojoUtils {
      */
     public static byte[] checksum(File file) throws IOException {
         try {
-            InputStream in = new FileInputStream(file);
+            InputStream in = Files.newInputStream(file.toPath());
             byte[] buffer = new byte[2048];
             MessageDigest complete = MessageDigest.getInstance("MD5");
 
