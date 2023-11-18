@@ -540,11 +540,11 @@ public class TokenStreamRewriter {
 			List<? extends InsertBeforeOp> prevInserts = getKindOfOps(rewrites, InsertBeforeOp.class, i);
 			for (InsertBeforeOp prevIop : prevInserts) {
 				if ( prevIop.index==iop.index ) {
-					if ( InsertAfterOp.class.isInstance(prevIop) ) {
+					if (prevIop instanceof InsertAfterOp) {
 						iop.text = catOpText(prevIop.text, iop.text);
 						rewrites.set(prevIop.instructionIndex, null);
 					}
-					else if ( InsertBeforeOp.class.isInstance(prevIop) ) { // combine objects
+					else if (prevIop instanceof InsertBeforeOp) { // combine objects
 						// convert to strings...we're in process of toString'ing
 						// whole token buffer so no lazy eval issue with any templates
 						iop.text = catOpText(iop.text, prevIop.text);
