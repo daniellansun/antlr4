@@ -323,9 +323,9 @@ public class LexerATNSimulator extends ATNSimulator {
 				System.out.format(Locale.getDefault(), "testing %s at %s\n", getTokenName(t), c.toString(recog, true));
 			}
 
-			int n = c.getState().getNumberOfOptimizedTransitions();
-			for (int ti=0; ti<n; ti++) {               // for each optimized transition
-				Transition trans = c.getState().getOptimizedTransition(ti);
+			final ATNState state = c.getState();
+			for (int ti = 0, n = state.getNumberOfOptimizedTransitions(); ti < n; ti++) {               // for each optimized transition
+				Transition trans = state.getOptimizedTransition(ti);
 				ATNState target = getReachableTarget(trans, t);
 				if ( target!=null ) {
 					LexerActionExecutor lexerActionExecutor = c.getLexerActionExecutor();
@@ -400,10 +400,11 @@ public class LexerATNSimulator extends ATNSimulator {
 			System.out.println("closure("+config.toString(recog, true)+")");
 		}
 
-		if ( config.getState() instanceof RuleStopState ) {
+		final ATNState configState = config.getState();
+		if ( configState instanceof RuleStopState ) {
 			if ( debug ) {
 				if ( recog!=null ) {
-					System.out.format(Locale.getDefault(), "closure at %s rule stop %s\n", recog.getRuleNames()[config.getState().ruleIndex], config);
+					System.out.format(Locale.getDefault(), "closure at %s rule stop %s\n", recog.getRuleNames()[configState.ruleIndex], config);
 				}
 				else {
 					System.out.format(Locale.getDefault(), "closure at rule stop %s\n", config);
@@ -416,11 +417,11 @@ public class LexerATNSimulator extends ATNSimulator {
 				return true;
 			}
 			else if ( context.hasEmpty() ) {
-				configs.add(config.transform(config.getState(), PredictionContext.EMPTY_FULL, true));
+				configs.add(config.transform(configState, PredictionContext.EMPTY_FULL, true));
 				currentAltReachedAcceptState = true;
 			}
 
-			for (int i = 0; i < context.size(); i++) {
+			for (int i = 0, n = context.size(); i < n; i++) {
 				int returnStateNumber = context.getReturnState(i);
 				if (returnStateNumber == PredictionContext.EMPTY_FULL_STATE_KEY) {
 					continue;
@@ -436,15 +437,14 @@ public class LexerATNSimulator extends ATNSimulator {
 		}
 
 		// optimization
-		if ( !config.getState().onlyHasEpsilonTransitions() )	{
+		if ( !configState.onlyHasEpsilonTransitions() )	{
 			if (!currentAltReachedAcceptState || !config.hasPassedThroughNonGreedyDecision()) {
 				configs.add(config);
 			}
 		}
 
-		ATNState p = config.getState();
-		for (int i=0; i<p.getNumberOfOptimizedTransitions(); i++) {
-			Transition t = p.getOptimizedTransition(i);
+        for (int i = 0, n = configState.getNumberOfOptimizedTransitions(); i < n; i++) {
+			Transition t = configState.getOptimizedTransition(i);
 			ATNConfig c = getEpsilonTarget(input, config, t, configs, speculative, treatEofAsEpsilon);
 			if ( c!=null ) {
 				currentAltReachedAcceptState = closure(input, c, configs, currentAltReachedAcceptState, speculative, treatEofAsEpsilon);
@@ -511,9 +511,9 @@ public class LexerATNSimulator extends ATNSimulator {
 			else {
 				c = null;
 			}
-			
+
 			break;
-			
+
 		case Transition.ACTION:
 			if (config.getContext().hasEmpty()) {
 				// execute actions anywhere in the start rule for a token.

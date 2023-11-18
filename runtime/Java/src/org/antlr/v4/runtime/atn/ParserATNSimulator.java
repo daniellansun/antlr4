@@ -1697,14 +1697,15 @@ public class ParserATNSimulator extends ATNSimulator {
 	{
 		if ( debug ) System.out.println("closure("+config.toString(parser,true)+")");
 
+		final PredictionContext predictionContext = config.getContext();
 		if ( config.getState() instanceof RuleStopState ) {
 			// We hit rule end. If we have context info, use it
-			if ( !config.getContext().isEmpty() ) {
-				boolean hasEmpty = config.getContext().hasEmpty();
-				int nonEmptySize = config.getContext().size() - (hasEmpty ? 1 : 0);
+			if ( !predictionContext.isEmpty() ) {
+				boolean hasEmpty = predictionContext.hasEmpty();
+				int nonEmptySize = predictionContext.size() - (hasEmpty ? 1 : 0);
 				for (int i = 0; i < nonEmptySize; i++) {
-					PredictionContext newContext = config.getContext().getParent(i); // "pop" return state
-					ATNState returnState = atn.states.get(config.getContext().getReturnState(i));
+					PredictionContext newContext = predictionContext.getParent(i); // "pop" return state
+					ATNState returnState = atn.states.get(predictionContext.getReturnState(i));
 					ATNConfig c = ATNConfig.create(returnState, config.getAlt(), newContext, config.getSemanticContext());
 					// While we have context to pop back from, we may have
 					// gotten that context AFTER having fallen off a rule.
@@ -1730,11 +1731,11 @@ public class ParserATNSimulator extends ATNSimulator {
 				if ( debug ) System.out.println("FALLING off rule "+
 												getRuleName(config.getState().ruleIndex));
 
-				if (config.getContext() == PredictionContext.EMPTY_FULL) {
+				if (predictionContext == PredictionContext.EMPTY_FULL) {
 					// no need to keep full context overhead when we step out
 					config = config.transform(config.getState(), PredictionContext.EMPTY_LOCAL, false);
 				}
-				else if (!config.getReachesIntoOuterContext() && PredictionContext.isEmptyLocal(config.getContext())) {
+				else if (!config.getReachesIntoOuterContext() && PredictionContext.isEmptyLocal(predictionContext)) {
 					// add stop state when leaving decision rule for the first time
 					configs.add(config, contextCache);
 				}
@@ -1750,14 +1751,14 @@ public class ParserATNSimulator extends ATNSimulator {
             if ( debug ) System.out.println("added config "+configs);
         }
 
-        for (int i=0; i<p.getNumberOfOptimizedTransitions(); i++) {
+		for (int i = 0, n = p.getNumberOfOptimizedTransitions(); i < n; i++) {
 			// This block implements first-edge elimination of ambiguous LR
 			// alternatives as part of dynamic disambiguation during prediction.
 			// See antlr/antlr4#1398.
 			if (i == 0
 				&& p.getStateType() == ATNState.STAR_LOOP_ENTRY
 				&& ((StarLoopEntryState)p).precedenceRuleDecision
-				&& !config.getContext().hasEmpty()) {
+				&& !predictionContext.hasEmpty()) {
 
 				StarLoopEntryState precedenceDecision = (StarLoopEntryState)p;
 
@@ -1766,8 +1767,8 @@ public class ParserATNSimulator extends ATNSimulator {
 				// operation can dynamically disambiguate by suppressing this
 				// edge during the closure operation.
 				boolean suppress = true;
-				for (int j = 0; j < config.getContext().size(); j++) {
-					if (!precedenceDecision.precedenceLoopbackStates.get(config.getContext().getReturnState(j))) {
+				for (int j = 0, predictionContextSize = predictionContext.size(); j < predictionContextSize; j++) {
+					if (!precedenceDecision.precedenceLoopbackStates.get(predictionContext.getReturnState(j))) {
 						suppress = false;
 						break;
 					}
@@ -1817,13 +1818,13 @@ public class ParserATNSimulator extends ATNSimulator {
 					if ( debug ) System.out.println("dips into outer ctx: "+c);
 				}
 				else if (t instanceof RuleTransition) {
-					if (optimize_tail_calls && ((RuleTransition)t).optimizedTailCall && (!tail_call_preserves_sll || !PredictionContext.isEmptyLocal(config.getContext()))) {
-						assert c.getContext() == config.getContext();
+					if (optimize_tail_calls && ((RuleTransition)t).optimizedTailCall && (!tail_call_preserves_sll || !PredictionContext.isEmptyLocal(predictionContext))) {
+						assert c.getContext() == predictionContext;
 						if (newDepth == 0) {
 							// the pop/push of a tail call would keep the depth
 							// constant, except we latch if it goes negative
 							newDepth--;
-							if (!tail_call_preserves_sll && PredictionContext.isEmptyLocal(config.getContext())) {
+							if (!tail_call_preserves_sll && PredictionContext.isEmptyLocal(predictionContext)) {
 								// make sure the SLL config "dips into the outer context" or prediction may not fall back to LL on conflict
 								c.setOuterContextDepth(c.getOuterContextDepth() + 1);
 							}
