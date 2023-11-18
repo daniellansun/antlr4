@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class SerializedATN extends OutputModelObject {
+	private static final String[] EMPTY_STRING_ARRAY = new String[0];
 	// TODO: make this into a kind of decl or multiple?
 	public List<String> serialized;
 	public SerializedATN(OutputModelFactory factory, ATN atn, List<String> ruleNames) {
@@ -33,7 +34,7 @@ public class SerializedATN extends OutputModelObject {
 		int segmentLimit = factory.getTarget().getSerializedATNSegmentLimit();
 		for (int i = 0; i < serialized.size(); i += segmentLimit) {
 			List<String> currentSegment = serialized.subList(i, Math.min(i + segmentLimit, serialized.size()));
-			segments.add(currentSegment.toArray(new String[currentSegment.size()]));
+			segments.add(currentSegment.toArray(EMPTY_STRING_ARRAY));
 		}
 
 		return segments.toArray(new String[segments.size()][]);

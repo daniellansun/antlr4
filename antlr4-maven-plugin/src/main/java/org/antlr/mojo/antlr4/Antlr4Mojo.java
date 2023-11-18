@@ -58,8 +58,9 @@ import java.util.Set;
 	requiresDependencyResolution = ResolutionScope.COMPILE,
 	requiresProject = true)
 public class Antlr4Mojo extends AbstractMojo {
+	private static final String[] EMPTY_STRING_ARRAY = new String[0];
 
-    // First, let's deal with the options that the ANTLR tool itself
+	// First, let's deal with the options that the ANTLR tool itself
     // can be configured by.
     //
 
@@ -277,7 +278,7 @@ public class Antlr4Mojo extends AbstractMojo {
 		for (List<String> args : argumentSets) {
 			try {
 				// Create an instance of the ANTLR 4 build tool
-				tool = new CustomTool(args.toArray(new String[args.size()]));
+				tool = new CustomTool(args.toArray(EMPTY_STRING_ARRAY));
 			} catch (Exception e) {
 				log.error("The attempt to create the ANTLR 4 build tool failed, see exception report for details", e);
 				throw new MojoFailureException("Error creating an instanceof the ANTLR tool.", e);
