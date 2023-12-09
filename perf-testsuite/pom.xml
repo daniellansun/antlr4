@@ -10,7 +10,7 @@
     <parent>
         <groupId>me.sunlan</groupId>
         <artifactId>antlr4-master</artifactId>
-        <version>4.13.1.2</version>
+        <version>4.13.1.3</version>
     </parent>
 
     <artifactId>antlr4-perf-testsuite</artifactId>
