@@ -252,13 +252,14 @@ public abstract class PredictionContext {
 		}
 
 		boolean changed = false;
-		PredictionContext[] parents = new PredictionContext[context.size()];
+		final int size = context.size();
+		PredictionContext[] parents = new PredictionContext[size];
 		for (int i = 0; i < parents.length; i++) {
 			PredictionContext parent = getCachedContext(context.getParent(i), contextCache, visited);
 			if (changed || parent != context.getParent(i)) {
 				if (!changed) {
-					parents = new PredictionContext[context.size()];
-					for (int j = 0; j < context.size(); j++) {
+					parents = new PredictionContext[size];
+					for (int j = 0; j < size; j++) {
 						parents[j] = context.getParent(j);
 					}
 
