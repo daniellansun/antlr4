@@ -169,10 +169,9 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			return;
 		}
 
-		for (int i = 0; i < configs.size(); i++) {
-			ATNConfig config = configs.get(i);
-			config.setContext(interpreter.atn.getCachedContext(config.getContext()));
-		}
+        for (ATNConfig config : configs) {
+            config.setContext(interpreter.atn.getCachedContext(config.getContext()));
+        }
 	}
 
 	public ATNConfigSet clone(boolean readonly) {
