@@ -231,7 +231,7 @@ public class FlexibleHashMap<K,V> implements Map<K, V> {
 				if ( e==null ) break;
 				if ( first ) first=false;
 				else buf.append(", ");
-				buf.append(e.toString());
+				buf.append(e);
 			}
 		}
 		buf.append('}');
@@ -251,7 +251,7 @@ public class FlexibleHashMap<K,V> implements Map<K, V> {
 				if ( first ) first=false;
 				else buf.append(" ");
 				if ( e==null ) buf.append("_");
-				else buf.append(e.toString());
+				else buf.append(e);
 			}
 			buf.append("]\n");
 		}

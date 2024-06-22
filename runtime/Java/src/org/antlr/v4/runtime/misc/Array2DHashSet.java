@@ -403,7 +403,7 @@ public class Array2DHashSet<T> implements Set<T> {
 				if ( o==null ) break;
 				if ( first ) first=false;
 				else buf.append(", ");
-				buf.append(o.toString());
+				buf.append(o);
 			}
 		}
 		buf.append('}');
@@ -423,7 +423,7 @@ public class Array2DHashSet<T> implements Set<T> {
 				if ( first ) first=false;
 				else buf.append(" ");
 				if ( o==null ) buf.append("_");
-				else buf.append(o.toString());
+				else buf.append(o);
 			}
 			buf.append("]\n");
 		}
