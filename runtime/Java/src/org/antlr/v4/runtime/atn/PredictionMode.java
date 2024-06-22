@@ -555,11 +555,7 @@ public enum PredictionMode {
 	public static Collection<BitSet> getConflictingAltSubsets(@NotNull ATNConfigSet configs) {
 		AltAndContextMap configToAlts = new AltAndContextMap();
 		for (ATNConfig c : configs) {
-			BitSet alts = configToAlts.get(c);
-			if ( alts==null ) {
-				alts = new BitSet();
-				configToAlts.put(c, alts);
-			}
+			BitSet alts = configToAlts.computeIfAbsent(c, k -> new BitSet());
 			alts.set(c.getAlt());
 		}
 		return configToAlts.values();
@@ -577,11 +573,7 @@ public enum PredictionMode {
 	public static Map<ATNState, BitSet> getStateToAltMap(@NotNull ATNConfigSet configs) {
 		Map<ATNState, BitSet> m = new HashMap<ATNState, BitSet>();
 		for (ATNConfig c : configs) {
-			BitSet alts = m.get(c.getState());
-			if ( alts==null ) {
-				alts = new BitSet();
-				m.put(c.getState(), alts);
-			}
+			BitSet alts = m.computeIfAbsent(c.getState(), k -> new BitSet());
 			alts.set(c.getAlt());
 		}
 		return m;
