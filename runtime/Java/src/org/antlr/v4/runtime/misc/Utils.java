@@ -80,12 +80,8 @@ public class Utils {
 	}
 
 	public static void writeFile(@NotNull File file, @NotNull byte[] content) throws IOException {
-		FileOutputStream fos = new FileOutputStream(file);
-		try {
+		try (FileOutputStream fos = new FileOutputStream(file)) {
 			fos.write(content);
-		}
-		finally {
-			fos.close();
 		}
 	}
 

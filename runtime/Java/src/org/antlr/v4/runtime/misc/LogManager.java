@@ -57,13 +57,9 @@ public class LogManager {
 
     public void save(String filename) throws IOException {
         FileWriter fw = new FileWriter(filename);
-        BufferedWriter bw = new BufferedWriter(fw);
-        try {
-            bw.write(toString());
-        }
-        finally {
-            bw.close();
-        }
+		try (BufferedWriter bw = new BufferedWriter(fw)) {
+			bw.write(toString());
+		}
     }
 
     public String save() throws IOException {
