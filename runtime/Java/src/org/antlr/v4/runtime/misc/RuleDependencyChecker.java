@@ -133,9 +133,7 @@ public class RuleDependencyChecker {
 					RuleVersion ruleVersion = ruleMethod.getAnnotation(RuleVersion.class);
 					int version = ruleVersion != null ? ruleVersion.value() : 0;
 					versions[index] = version;
-				} catch (IllegalArgumentException ex) {
-					LOGGER.log(Level.WARNING, null, ex);
-				} catch (IllegalAccessException ex) {
+				} catch (IllegalArgumentException | IllegalAccessException ex) {
 					LOGGER.log(Level.WARNING, null, ex);
 				}
 			}
@@ -159,13 +157,7 @@ public class RuleDependencyChecker {
 		try {
 			Field ruleNames = recognizerClass.getField("ruleNames");
 			return (String[])ruleNames.get(null);
-		} catch (NoSuchFieldException ex) {
-			LOGGER.log(Level.WARNING, null, ex);
-		} catch (SecurityException ex) {
-			LOGGER.log(Level.WARNING, null, ex);
-		} catch (IllegalArgumentException ex) {
-			LOGGER.log(Level.WARNING, null, ex);
-		} catch (IllegalAccessException ex) {
+		} catch (NoSuchFieldException | IllegalAccessException | IllegalArgumentException | SecurityException ex) {
 			LOGGER.log(Level.WARNING, null, ex);
 		}
 
