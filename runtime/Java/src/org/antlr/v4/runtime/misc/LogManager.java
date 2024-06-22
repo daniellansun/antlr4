@@ -79,7 +79,7 @@ public class LogManager {
     @Override
     public String toString() {
         if ( records==null ) return "";
-        String nl = System.getProperty("line.separator");
+        String nl = System.lineSeparator();
         StringBuilder buf = new StringBuilder();
         for (Record r : records) {
             buf.append(r);
