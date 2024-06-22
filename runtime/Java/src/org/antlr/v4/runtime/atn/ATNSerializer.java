@@ -24,7 +24,7 @@ import java.util.UUID;
 
 public class ATNSerializer {
 	public ATN atn;
-	private List<String> ruleNames;
+	private final List<String> ruleNames;
 	private List<String> tokenNames;
 
 	private interface CodePointSerializer {

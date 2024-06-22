@@ -15,7 +15,7 @@ import java.util.List;
  */
 public class IntegerList {
 
-	private static int[] EMPTY_DATA = new int[0];
+	private static final int[] EMPTY_DATA = new int[0];
 
 	private static final int INITIAL_SIZE = 4;
 	private static final int MAX_ARRAY_SIZE = Integer.MAX_VALUE - 8;
