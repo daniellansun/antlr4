@@ -125,7 +125,7 @@ public class TokenStreamRewriter {
 		public String toString() {
 			String opName = getClass().getName();
 			int $index = opName.indexOf('$');
-			opName = opName.substring($index+1, opName.length());
+			opName = opName.substring($index+1);
 			return "<"+opName+"@"+tokens.get(index)+
 					":\""+text+"\">";
 		}

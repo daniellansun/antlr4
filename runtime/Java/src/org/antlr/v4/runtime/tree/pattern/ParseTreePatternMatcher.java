@@ -474,7 +474,7 @@ public class ParseTreePatternMatcher {
 			int colon = tag.indexOf(':');
 			if ( colon >= 0 ) {
 				label = tag.substring(0,colon);
-				ruleOrToken = tag.substring(colon+1, tag.length());
+				ruleOrToken = tag.substring(colon+1);
 			}
 			chunks.add(new TagChunk(label, ruleOrToken));
 			if ( i+1 < ntags ) {
