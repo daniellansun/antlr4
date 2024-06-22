@@ -7,7 +7,6 @@ package org.antlr.v4.runtime.dfa;
 
 import java.util.AbstractSet;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  *
@@ -56,7 +55,7 @@ public abstract class AbstractEdgeMap<T> implements EdgeMap<T> {
 				int key = (Integer)entry.getKey();
 				Object value = entry.getValue();
 				T existing = get(key);
-				return Objects.equals(existing, value);
+				return value == existing || (existing != null && existing.equals(value));
 			}
 
 			return false;

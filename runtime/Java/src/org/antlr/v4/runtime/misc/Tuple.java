@@ -6,8 +6,6 @@
 
 package org.antlr.v4.runtime.misc;
 
-import java.util.Objects;
-
 /**
  *
  * @author Sam Harwell
@@ -23,7 +21,7 @@ public final class Tuple {
 	}
 
 	/*package*/ static boolean equals(Object x, Object y) {
-		return Objects.equals(x, y);
+		return x == y || (x != null && x.equals(y));
 	}
 
 	// static utility class

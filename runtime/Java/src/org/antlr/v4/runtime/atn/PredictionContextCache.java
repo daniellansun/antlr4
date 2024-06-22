@@ -8,7 +8,6 @@ package org.antlr.v4.runtime.atn;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 
 /** Used to cache {@link PredictionContext} objects. Its used for the shared
  *  context cash associated with contexts in DFA states. This cache
@@ -102,7 +101,7 @@ public class PredictionContextCache {
 
             PredictionContextAndInt other = (PredictionContextAndInt)obj;
             return this.value == other.value
-                && (Objects.equals(this.obj, other.obj));
+                && (this.obj == other.obj || (this.obj != null && this.obj.equals(other.obj)));
         }
 
         @Override
