@@ -1981,23 +1981,18 @@ public class ParserATNSimulator extends ATNSimulator {
 	}
 
 	private static final Comparator<ATNConfig> STATE_ALT_SORT_COMPARATOR =
-		new Comparator<ATNConfig>() {
-
-			@Override
-			public int compare(ATNConfig o1, ATNConfig o2) {
-				int diff = o1.getState().getNonStopStateNumber() - o2.getState().getNonStopStateNumber();
-				if (diff != 0) {
-					return diff;
-				}
-
-				diff = o1.getAlt() - o2.getAlt();
-				if (diff != 0) {
-					return diff;
-				}
-
-				return 0;
+		(o1, o2) -> {
+			int diff = o1.getState().getNonStopStateNumber() - o2.getState().getNonStopStateNumber();
+			if (diff != 0) {
+				return diff;
 			}
 
+			diff = o1.getAlt() - o2.getAlt();
+			if (diff != 0) {
+				return diff;
+			}
+
+			return 0;
 		};
 
 	private ConflictInfo isConflicted(@NotNull ATNConfigSet configset, PredictionContextCache contextCache) {

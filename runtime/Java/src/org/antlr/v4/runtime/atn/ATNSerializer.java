@@ -195,21 +195,11 @@ public class ATNSerializer {
 		serializeSets(
 			data,
 			bmpSets,
-			new CodePointSerializer() {
-				@Override
-				public void serializeCodePoint(IntegerList data, int cp) {
-					data.add(cp);
-				}
-			});
+			(data12, cp) -> data12.add(cp));
 		serializeSets(
 			data,
 			smpSets,
-			new CodePointSerializer() {
-				@Override
-				public void serializeCodePoint(IntegerList data, int cp) {
-					serializeInt(data, cp);
-				}
-			});
+			(data1, cp) -> serializeInt(data1, cp));
 		Map<IntervalSet, Integer> setIndices = new HashMap<IntervalSet, Integer>();
 		int setIndex = 0;
 		for (IntervalSet bmpSet : bmpSets) {

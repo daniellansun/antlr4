@@ -20,7 +20,6 @@ import org.antlr.v4.runtime.misc.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -76,13 +75,7 @@ public class DFASerializer {
 
 		if ( dfa.states!=null ) {
 			List<DFAState> states = new ArrayList<DFAState>(dfa.states.values());
-			Collections.sort(states, new Comparator<DFAState>(){
-
-				@Override
-				public int compare(DFAState o1, DFAState o2) {
-					return o1.stateNumber - o2.stateNumber;
-				}
-			});
+			Collections.sort(states, (o1, o2) -> o1.stateNumber - o2.stateNumber);
 
 			for (DFAState s : states) {
 				Map<Integer, DFAState> edges = s.getEdgeMap();

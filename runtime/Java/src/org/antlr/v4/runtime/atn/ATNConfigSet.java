@@ -14,7 +14,6 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -440,18 +439,15 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	public String toString(boolean showContext) {
 		StringBuilder buf = new StringBuilder();
 		List<ATNConfig> sortedConfigs = new ArrayList<ATNConfig>(configs);
-		Collections.sort(sortedConfigs, new Comparator<ATNConfig>() {
-			@Override
-			public int compare(ATNConfig o1, ATNConfig o2) {
-				if (o1.getAlt() != o2.getAlt()) {
-					return o1.getAlt() - o2.getAlt();
-				}
-				else if (o1.getState().stateNumber != o2.getState().stateNumber) {
-					return o1.getState().stateNumber - o2.getState().stateNumber;
-				}
-				else {
-					return o1.getSemanticContext().toString().compareTo(o2.getSemanticContext().toString());
-				}
+		Collections.sort(sortedConfigs, (o1, o2) -> {
+			if (o1.getAlt() != o2.getAlt()) {
+				return o1.getAlt() - o2.getAlt();
+			}
+			else if (o1.getState().stateNumber != o2.getState().stateNumber) {
+				return o1.getState().stateNumber - o2.getState().stateNumber;
+			}
+			else {
+				return o1.getSemanticContext().toString().compareTo(o2.getSemanticContext().toString());
 			}
 		});
 
