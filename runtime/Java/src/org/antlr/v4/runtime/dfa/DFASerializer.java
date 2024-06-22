@@ -138,11 +138,11 @@ public class DFASerializer {
 			ATNState state = atn.states.get(i);
 			int ruleIndex = state.ruleIndex;
 			if (ruleNames != null && ruleIndex >= 0 && ruleIndex < ruleNames.length) {
-				return "ctx:" + String.valueOf(i) + "(" + ruleNames[ruleIndex] + ")";
+				return "ctx:" + i + "(" + ruleNames[ruleIndex] + ")";
 			}
 		}
 
-		return "ctx:" + String.valueOf(i);
+		return "ctx:" + i;
 	}
 
 	protected String getEdgeLabel(int i) {
