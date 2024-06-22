@@ -568,10 +568,9 @@ public class TokenStreamRewriter {
 		}
 		// System.out.println("rewrites after="+rewrites);
 		Map<Integer, RewriteOperation> m = new HashMap<Integer, RewriteOperation>();
-		for (int i = 0; i < rewrites.size(); i++) {
-			RewriteOperation op = rewrites.get(i);
-			if ( op==null ) continue; // ignore deleted ops
-			if ( m.get(op.index)!=null ) {
+		for (RewriteOperation op : rewrites) {
+			if (op == null) continue; // ignore deleted ops
+			if (m.get(op.index) != null) {
 				throw new Error("should only be one op per index");
 			}
 			m.put(op.index, op);

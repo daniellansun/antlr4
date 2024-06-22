@@ -64,8 +64,8 @@ public class ParseInfo {
 	public long getTotalTimeInPrediction() {
 		DecisionInfo[] decisions = atnSimulator.getDecisionInfo();
 		long t = 0;
-		for (int i=0; i<decisions.length; i++) {
-			t += decisions[i].timeInPrediction;
+		for (DecisionInfo decision : decisions) {
+			t += decision.timeInPrediction;
 		}
 		return t;
 	}
@@ -78,8 +78,8 @@ public class ParseInfo {
 	public long getTotalSLLLookaheadOps() {
 		DecisionInfo[] decisions = atnSimulator.getDecisionInfo();
 		long k = 0;
-		for (int i = 0; i < decisions.length; i++) {
-			k += decisions[i].SLL_TotalLook;
+		for (DecisionInfo decision : decisions) {
+			k += decision.SLL_TotalLook;
 		}
 		return k;
 	}
@@ -92,8 +92,8 @@ public class ParseInfo {
 	public long getTotalLLLookaheadOps() {
 		DecisionInfo[] decisions = atnSimulator.getDecisionInfo();
 		long k = 0;
-		for (int i = 0; i < decisions.length; i++) {
-			k += decisions[i].LL_TotalLook;
+		for (DecisionInfo decision : decisions) {
+			k += decision.LL_TotalLook;
 		}
 		return k;
 	}
@@ -105,8 +105,8 @@ public class ParseInfo {
 	public long getTotalSLLATNLookaheadOps() {
 		DecisionInfo[] decisions = atnSimulator.getDecisionInfo();
 		long k = 0;
-		for (int i = 0; i < decisions.length; i++) {
-			k += decisions[i].SLL_ATNTransitions;
+		for (DecisionInfo decision : decisions) {
+			k += decision.SLL_ATNTransitions;
 		}
 		return k;
 	}
@@ -118,8 +118,8 @@ public class ParseInfo {
 	public long getTotalLLATNLookaheadOps() {
 		DecisionInfo[] decisions = atnSimulator.getDecisionInfo();
 		long k = 0;
-		for (int i = 0; i < decisions.length; i++) {
-			k += decisions[i].LL_ATNTransitions;
+		for (DecisionInfo decision : decisions) {
+			k += decision.LL_ATNTransitions;
 		}
 		return k;
 	}
@@ -135,9 +135,9 @@ public class ParseInfo {
 	public long getTotalATNLookaheadOps() {
 		DecisionInfo[] decisions = atnSimulator.getDecisionInfo();
 		long k = 0;
-		for (int i = 0; i < decisions.length; i++) {
-			k += decisions[i].SLL_ATNTransitions;
-			k += decisions[i].LL_ATNTransitions;
+		for (DecisionInfo decision : decisions) {
+			k += decision.SLL_ATNTransitions;
+			k += decision.LL_ATNTransitions;
 		}
 		return k;
 	}
