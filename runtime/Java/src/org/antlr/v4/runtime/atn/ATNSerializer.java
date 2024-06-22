@@ -195,11 +195,11 @@ public class ATNSerializer {
 		serializeSets(
 			data,
 			bmpSets,
-			(data12, cp) -> data12.add(cp));
+			IntegerList::add);
 		serializeSets(
 			data,
 			smpSets,
-			(data1, cp) -> serializeInt(data1, cp));
+			this::serializeInt);
 		Map<IntervalSet, Integer> setIndices = new HashMap<IntervalSet, Integer>();
 		int setIndex = 0;
 		for (IntervalSet bmpSet : bmpSets) {
