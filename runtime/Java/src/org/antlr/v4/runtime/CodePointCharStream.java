@@ -7,7 +7,7 @@ package org.antlr.v4.runtime;
 
 import org.antlr.v4.runtime.misc.Interval;
 
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Alternative to {@link ANTLRInputStream} which treats the input
@@ -161,7 +161,7 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 			// We know the maximum code point in byteArray is U+00FF,
 			// so we can treat this as if it were ISO-8859-1, aka Latin-1,
 			// which shares the same code points up to 0xFF.
-			return new String(byteArray, startIdx, len, Charset.forName("ISO-8859-1"));
+			return new String(byteArray, startIdx, len, StandardCharsets.ISO_8859_1);
 		}
 
 		@Override
