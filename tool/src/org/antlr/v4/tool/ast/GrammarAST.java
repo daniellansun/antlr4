@@ -24,6 +24,7 @@ import java.util.LinkedList;
 import java.util.List;
 
 public class GrammarAST extends CommonTree {
+	private static final GrammarAST[] EMPTY_GRAMMARAST_ARRAY = new GrammarAST[0];
 	/** For error msgs, nice to know which grammar this AST lives in */
 	// TODO: try to remove
 	public Grammar g;
@@ -53,7 +54,7 @@ public class GrammarAST extends CommonTree {
     }
 
 	public GrammarAST[] getChildrenAsArray() {
-		return children.toArray(new GrammarAST[0]);
+		return children.toArray(EMPTY_GRAMMARAST_ARRAY);
 	}
 
 	public List<GrammarAST> getNodesWithType(int ttype) {

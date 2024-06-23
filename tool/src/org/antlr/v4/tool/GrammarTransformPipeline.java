@@ -37,6 +37,9 @@ import java.util.Set;
 
 /** Handle left-recursion and block-set transforms */
 public class GrammarTransformPipeline {
+	private static final Tree[] EMPTY_TREE_ARRAY = new Tree[0];
+	private static final GrammarAST[] EMPTY_GRAMMARAST_ARRAY = new GrammarAST[0];
+	private static final GrammarASTWithOptions[] EMPTY_GRAMMARASTWITHOPTIONS_ARRAY = new GrammarASTWithOptions[0];
 	public Grammar g;
 	public Tool tool;
 
@@ -213,7 +216,7 @@ public class GrammarTransformPipeline {
 					tokensRoot.g = rootGrammar;
 					root.insertChild(1, tokensRoot); // ^(GRAMMAR ID TOKENS...)
 				}
-				tokensRoot.addChildren(Arrays.asList(imp_tokensRoot.getChildren().toArray(new Tree[0])));
+				tokensRoot.addChildren(Arrays.asList(imp_tokensRoot.getChildren().toArray(EMPTY_TREE_ARRAY)));
 			}
 
 			List<GrammarAST> all_actionRoots = new ArrayList<GrammarAST>();
@@ -384,7 +387,7 @@ public class GrammarTransformPipeline {
 		GrammarRootAST combinedAST = combinedGrammar.ast;
 		//tool.log("grammar", "before="+combinedAST.toStringTree());
 		GrammarASTAdaptor adaptor = new GrammarASTAdaptor(combinedAST.token.getInputStream());
-		GrammarAST[] elements = combinedAST.getChildren().toArray(new GrammarAST[0]);
+		GrammarAST[] elements = combinedAST.getChildren().toArray(EMPTY_GRAMMARAST_ARRAY);
 
 		// MAKE A GRAMMAR ROOT and ID
 		String lexerName = combinedAST.getChild(0).getText()+"Lexer";
@@ -400,7 +403,7 @@ public class GrammarTransformPipeline {
 		if ( optionsRoot!=null && optionsRoot.getChildCount()!=0 ) {
 			GrammarAST lexerOptionsRoot = adaptor.dupNode(optionsRoot);
 			lexerAST.addChild(lexerOptionsRoot);
-			GrammarAST[] options = optionsRoot.getChildren().toArray(new GrammarAST[0]);
+			GrammarAST[] options = optionsRoot.getChildren().toArray(EMPTY_GRAMMARAST_ARRAY);
 			for (GrammarAST o : options) {
 				String optionName = o.getChild(0).getText();
 				if ( Grammar.lexerOptions.contains(optionName) &&
@@ -439,10 +442,10 @@ public class GrammarTransformPipeline {
 		List<GrammarAST> rulesWeMoved = new ArrayList<GrammarAST>();
 		GrammarASTWithOptions[] rules;
 		if (combinedRulesRoot.getChildCount() > 0) {
-			rules = combinedRulesRoot.getChildren().toArray(new GrammarASTWithOptions[0]);
+			rules = combinedRulesRoot.getChildren().toArray(EMPTY_GRAMMARASTWITHOPTIONS_ARRAY);
 		}
 		else {
-			rules = new GrammarASTWithOptions[0];
+			rules = EMPTY_GRAMMARASTWITHOPTIONS_ARRAY;
 		}
 
 		for (GrammarASTWithOptions r : rules) {
