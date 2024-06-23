@@ -21,17 +21,11 @@ import org.antlr.v4.runtime.tree.Trees;
 import javax.imageio.ImageIO;
 import javax.print.PrintException;
 import javax.swing.*;
-import javax.swing.event.ChangeEvent;
-import javax.swing.event.ChangeListener;
-import javax.swing.event.TreeSelectionEvent;
-import javax.swing.event.TreeSelectionListener;
 import javax.swing.filechooser.FileFilter;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.TreePath;
 import javax.swing.tree.TreeSelectionModel;
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.event.WindowListener;
@@ -355,36 +349,21 @@ public class TreeViewer extends JComponent {
 
 		JButton ok = new JButton("OK");
 		ok.addActionListener(
-			new ActionListener() {
-				@Override
-				public void actionPerformed(ActionEvent e) {
-					dialog.dispatchEvent(new WindowEvent(dialog, WindowEvent.WINDOW_CLOSING));
-				}
-			}
+			e -> dialog.dispatchEvent(new WindowEvent(dialog, WindowEvent.WINDOW_CLOSING))
 		);
 		wrapper.add(ok);
 
 		// Add an export-to-png button right of the "OK" button
 		JButton png = new JButton("Export as PNG");
 		png.addActionListener(
-			new ActionListener() {
-				@Override
-				public void actionPerformed(ActionEvent e) {
-					generatePNGFile(viewer, dialog);
-				}
-			}
+			e -> generatePNGFile(viewer, dialog)
 		);
 		wrapper.add(png);
 
 		// Add an export-to-png button right of the "OK" button
 		JButton svg = new JButton("Export as SVG");
 		svg.addActionListener(
-			new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				generateSVGFile(viewer, dialog);
-			}
-		}
+			e -> generateSVGFile(viewer, dialog)
 		);
 		wrapper.add(svg);
 
@@ -398,12 +377,9 @@ public class TreeViewer extends JComponent {
 		final JSlider scaleSlider = new JSlider(JSlider.HORIZONTAL, -999, 1000, sliderValue);
 
 		scaleSlider.addChangeListener(
-			new ChangeListener() {
-				@Override
-				public void stateChanged(ChangeEvent e) {
-					int v = scaleSlider.getValue();
-					viewer.setScale(v / 1000.0 + 1.0);
-				}
+			e -> {
+				int v = scaleSlider.getValue();
+				viewer.setScale(v / 1000.0 + 1.0);
 			}
 		);
 		bottomPanel.add(scaleSlider, BorderLayout.CENTER);
@@ -424,18 +400,15 @@ public class TreeViewer extends JComponent {
 		final JTree tree = new JTree(nodeRoot);
 		tree.getSelectionModel().setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION);
 
-		tree.addTreeSelectionListener(new TreeSelectionListener() {
-			@Override
-			public void valueChanged(TreeSelectionEvent e) {
+		tree.addTreeSelectionListener(e -> {
 
-				JTree selectedTree = (JTree) e.getSource();
-				TreePath path = selectedTree.getSelectionPath();
-				if (path!=null) {
-					TreeNodeWrapper treeNode = (TreeNodeWrapper) path.getLastPathComponent();
+			JTree selectedTree = (JTree) e.getSource();
+			TreePath path = selectedTree.getSelectionPath();
+			if (path!=null) {
+				TreeNodeWrapper treeNode = (TreeNodeWrapper) path.getLastPathComponent();
 
-					// Set the clicked AST.
-					viewer.setTree((Tree) treeNode.getUserObject());
-				}
+				// Set the clicked AST.
+				viewer.setTree((Tree) treeNode.getUserObject());
 			}
 		});
 
@@ -643,12 +616,7 @@ public class TreeViewer extends JComponent {
 
 			@Override
 			public JDialog call() throws Exception {
-				SwingUtilities.invokeAndWait(new Runnable() {
-					@Override
-					public void run() {
-						result = showInDialog(viewer);
-					}
-				});
+				SwingUtilities.invokeAndWait(() -> result = showInDialog(viewer));
 
 				return result;
 			}

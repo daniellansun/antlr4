@@ -15,14 +15,9 @@ import javax.print.SimpleDoc;
 import javax.print.StreamPrintServiceFactory;
 import javax.print.attribute.HashPrintRequestAttributeSet;
 import javax.print.attribute.PrintRequestAttributeSet;
-import javax.swing.JComponent;
-
-import java.awt.Color;
-import java.awt.Graphics;
-import java.awt.Graphics2D;
-import java.awt.Rectangle;
+import javax.swing.*;
+import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.awt.print.PageFormat;
 import java.awt.print.Printable;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -42,26 +37,23 @@ public class GraphicsSupport {
 			if (factories.length > 0) {
 				FileOutputStream out = new FileOutputStream(fileName);
 				PrintService service = factories[0].getPrintService(out);
-				SimpleDoc doc = new SimpleDoc(new Printable() {
-					@Override
-					public int print(Graphics g, PageFormat pf, int page) {
-						if (page >= 1) return Printable.NO_SUCH_PAGE;
-						else {
-							Graphics2D g2 = (Graphics2D) g;
-							g2.translate((pf.getWidth() - pf.getImageableWidth()) / 2,
-										 (pf.getHeight() - pf.getImageableHeight()) / 2);
-							if ( comp.getWidth() > pf.getImageableWidth() ||
-								 comp.getHeight() > pf.getImageableHeight() )
-							{
-								double sf1 = pf.getImageableWidth() / (comp.getWidth() + 1);
-								double sf2 = pf.getImageableHeight() / (comp.getHeight() + 1);
-								double s = Math.min(sf1, sf2);
-								g2.scale(s, s);
-							}
-
-							comp.paint(g);
-							return Printable.PAGE_EXISTS;
+				SimpleDoc doc = new SimpleDoc((Printable) (g, pf, page) -> {
+					if (page >= 1) return Printable.NO_SUCH_PAGE;
+					else {
+						Graphics2D g2 = (Graphics2D) g;
+						g2.translate((pf.getWidth() - pf.getImageableWidth()) / 2,
+									 (pf.getHeight() - pf.getImageableHeight()) / 2);
+						if ( comp.getWidth() > pf.getImageableWidth() ||
+							 comp.getHeight() > pf.getImageableHeight() )
+						{
+							double sf1 = pf.getImageableWidth() / (comp.getWidth() + 1);
+							double sf2 = pf.getImageableHeight() / (comp.getHeight() + 1);
+							double s = Math.min(sf1, sf2);
+							g2.scale(s, s);
 						}
+
+						comp.paint(g);
+						return Printable.PAGE_EXISTS;
 					}
 				}, flavor, null);
 				DocPrintJob job = service.createPrintJob();
