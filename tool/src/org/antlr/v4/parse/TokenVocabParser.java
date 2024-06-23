@@ -62,7 +62,7 @@ public class TokenVocabParser {
 					String tokenTypeS = matcher.group(2);
 					int tokenType;
 					try {
-						tokenType = Integer.valueOf(tokenTypeS);
+						tokenType = Integer.parseInt(tokenTypeS);
 					}
 					catch (NumberFormatException nfe) {
 						tool.errMgr.toolError(ErrorType.TOKENS_FILE_SYNTAX_ERROR,
@@ -149,7 +149,7 @@ public class TokenVocabParser {
 		if ( f.exists() ) {
 			return f;
 		}
-		
+
 		// Still not found? Use the grammar's subfolder then.
 		String fileDirectory;
 
