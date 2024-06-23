@@ -692,36 +692,34 @@ public class LexerATNFactory extends ParserATNFactory {
 			if (!ruleCommands.equals("mode")) {
 				String firstCommand = null;
 
-				if (command.equals("skip")) {
-					if (ruleCommands.contains("more")) {
-						firstCommand = "more";
-					}
-					else if (ruleCommands.contains("type")) {
-						firstCommand = "type";
-					}
-					else if (ruleCommands.contains("channel")) {
-						firstCommand = "channel";
-					}
-				}
-				else if (command.equals("more")) {
-					if (ruleCommands.contains("skip")) {
-						firstCommand = "skip";
-					}
-					else if (ruleCommands.contains("type")) {
-						firstCommand = "type";
-					}
-					else if (ruleCommands.contains("channel")) {
-						firstCommand = "channel";
-					}
-				}
-				else if (command.equals("type") || command.equals("channel")) {
-					if (ruleCommands.contains("more")) {
-						firstCommand = "more";
-					}
-					else if (ruleCommands.contains("skip")) {
-						firstCommand = "skip";
-					}
-				}
+                switch (command) {
+                    case "skip":
+                        if (ruleCommands.contains("more")) {
+                            firstCommand = "more";
+                        } else if (ruleCommands.contains("type")) {
+                            firstCommand = "type";
+                        } else if (ruleCommands.contains("channel")) {
+                            firstCommand = "channel";
+                        }
+                        break;
+                    case "more":
+                        if (ruleCommands.contains("skip")) {
+                            firstCommand = "skip";
+                        } else if (ruleCommands.contains("type")) {
+                            firstCommand = "type";
+                        } else if (ruleCommands.contains("channel")) {
+                            firstCommand = "channel";
+                        }
+                        break;
+                    case "type":
+                    case "channel":
+                        if (ruleCommands.contains("more")) {
+                            firstCommand = "more";
+                        } else if (ruleCommands.contains("skip")) {
+                            firstCommand = "skip";
+                        }
+                        break;
+                }
 
 				if (firstCommand != null) {
 					g.tool.errMgr.grammarError(ErrorType.INCOMPATIBLE_COMMANDS, g.fileName, commandToken, firstCommand, command);
