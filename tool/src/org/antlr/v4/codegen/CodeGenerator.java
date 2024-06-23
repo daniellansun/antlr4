@@ -82,27 +82,8 @@ public class CodeGenerator {
 			Constructor<? extends Target> ctor = c.getConstructor(CodeGenerator.class);
 			target = ctor.newInstance(this);
 		}
-		catch (ClassNotFoundException cnfe) {
-			tool.errMgr.toolError(ErrorType.CANNOT_CREATE_TARGET_GENERATOR,
-						 cnfe,
-						 targetName);
-		}
-		catch (NoSuchMethodException nsme) {
-			tool.errMgr.toolError(ErrorType.CANNOT_CREATE_TARGET_GENERATOR,
-						 nsme,
-						 targetName);
-		}
-		catch (InvocationTargetException ite) {
-			tool.errMgr.toolError(ErrorType.CANNOT_CREATE_TARGET_GENERATOR,
-						 ite,
-						 targetName);
-		}
-		catch (InstantiationException ie) {
-			tool.errMgr.toolError(ErrorType.CANNOT_CREATE_TARGET_GENERATOR,
-						 ie,
-						 targetName);
-		}
-		catch (IllegalAccessException cnfe) {
+		catch (ClassNotFoundException | IllegalAccessException | InstantiationException | InvocationTargetException |
+			   NoSuchMethodException cnfe) {
 			tool.errMgr.toolError(ErrorType.CANNOT_CREATE_TARGET_GENERATOR,
 						 cnfe,
 						 targetName);

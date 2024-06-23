@@ -726,17 +726,8 @@ public class ParserATNFactory implements ATNFactory {
 			else s.setRuleIndex(currentRule.index);
 			atn.addState(s);
 			return s;
-		} catch (InstantiationException ex) {
-			cause = ex;
-		} catch (IllegalAccessException ex) {
-			cause = ex;
-		} catch (IllegalArgumentException ex) {
-			cause = ex;
-		} catch (InvocationTargetException ex) {
-			cause = ex;
-		} catch (NoSuchMethodException ex) {
-			cause = ex;
-		} catch (SecurityException ex) {
+		} catch (InstantiationException | SecurityException | NoSuchMethodException | InvocationTargetException |
+				 IllegalArgumentException | IllegalAccessException ex) {
 			cause = ex;
 		}
 
