@@ -42,7 +42,7 @@ public class Utils {
 	public static String sortLinesInString(String s) {
 		String lines[] = s.split("\n");
 		Arrays.sort(lines);
-		List<String> linesL = Arrays.asList(lines);
+		String[] linesL = lines;
 		StringBuilder buf = new StringBuilder();
 		for (String l : linesL) {
 			buf.append(l);
