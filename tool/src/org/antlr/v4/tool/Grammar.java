@@ -1412,11 +1412,7 @@ public class Grammar implements AttributeResolver {
 		@Override
 		public void discoverOuterAlt(AltAST alt) {
 			if (alt.altLabel != null) {
-				List<Tuple2<Integer, AltAST>> list = labeledAlternatives.get(alt.altLabel.getText());
-				if (list == null) {
-					list = new ArrayList<Tuple2<Integer, AltAST>>();
-					labeledAlternatives.put(alt.altLabel.getText(), list);
-				}
+				List<Tuple2<Integer, AltAST>> list = labeledAlternatives.computeIfAbsent(alt.altLabel.getText(), k -> new ArrayList<Tuple2<Integer, AltAST>>());
 
 				list.add(Tuple.create(currentOuterAltNumber, alt));
 			}

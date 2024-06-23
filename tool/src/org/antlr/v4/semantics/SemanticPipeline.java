@@ -64,11 +64,7 @@ public class SemanticPipeline {
 
 		// CLONE RULE ASTs FOR CONTEXT REFERENCE
 		for (Rule rule : ruleCollector.rules.values()) {
-			List<RuleAST> list = g.contextASTs.get(rule.getBaseContext());
-			if (list == null) {
-				list = new ArrayList<RuleAST>();
-				g.contextASTs.put(rule.getBaseContext(), list);
-			}
+			List<RuleAST> list = g.contextASTs.computeIfAbsent(rule.getBaseContext(), k -> new ArrayList<RuleAST>());
 
 			list.add((RuleAST)rule.ast.dupTree());
 		}

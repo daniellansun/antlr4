@@ -147,17 +147,13 @@ public class Rule implements AttributeResolver {
 	/** Lexer actions are numbered across rules 0..n-1 */
 	public void defineLexerAction(ActionAST actionAST) {
 		actionIndex = g.lexerActions.size();
-		if ( g.lexerActions.get(actionAST)==null ) {
-			g.lexerActions.put(actionAST, actionIndex);
-		}
+		g.lexerActions.computeIfAbsent(actionAST, k -> actionIndex);
 	}
 
 	public void definePredicateInAlt(int currentAlt, PredAST predAST) {
 		actions.add(predAST);
 		alt[currentAlt].actions.add(predAST);
-		if ( g.sempreds.get(predAST)==null ) {
-			g.sempreds.put(predAST, g.sempreds.size());
-		}
+		g.sempreds.computeIfAbsent(predAST, k -> g.sempreds.size());
 	}
 
 	public Attribute resolveRetvalOrProperty(String y) {
@@ -219,11 +215,7 @@ public class Rule implements AttributeResolver {
 		for (int i=1; i<=numberOfAlts; i++) {
 			GrammarAST altLabel = alt[i].ast.altLabel;
 			if ( altLabel!=null ) {
-				List<Tuple2<Integer, AltAST>> list = labels.get(altLabel.getText());
-				if (list == null) {
-					list = new ArrayList<Tuple2<Integer, AltAST>>();
-					labels.put(altLabel.getText(), list);
-				}
+				List<Tuple2<Integer, AltAST>> list = labels.computeIfAbsent(altLabel.getText(), k -> new ArrayList<Tuple2<Integer, AltAST>>());
 
 				list.add(Tuple.create(i, alt[i].ast));
 			}

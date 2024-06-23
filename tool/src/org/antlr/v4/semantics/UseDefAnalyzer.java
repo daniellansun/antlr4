@@ -80,11 +80,7 @@ public class UseDefAnalyzer {
 		for (Rule r : rules) {
 			List<GrammarAST> tokenRefs = r.ast.getNodesWithType(ANTLRParser.TOKEN_REF);
 			for (GrammarAST tref : tokenRefs) {
-				Set<Rule> calls = dependencies.get(r);
-				if ( calls==null ) {
-					calls = new HashSet<Rule>();
-					dependencies.put(r, calls);
-				}
+				Set<Rule> calls = dependencies.computeIfAbsent(r, k -> new HashSet<Rule>());
 				calls.add(g.getRule(tref.getText()));
 			}
 		}

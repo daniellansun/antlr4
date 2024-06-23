@@ -171,11 +171,7 @@ public class RuleFunction extends OutputModelObject {
 			try {
 				unlabeledAlternatives.addAll(rule.g.getUnlabeledAlternatives(ast));
 				for (Map.Entry<String, List<Tuple2<Integer, AltAST>>> entry : rule.g.getLabeledAlternatives(ast).entrySet()) {
-					List<AltAST> list = labeledAlternatives.get(entry.getKey());
-					if (list == null) {
-						list = new ArrayList<AltAST>();
-						labeledAlternatives.put(entry.getKey(), list);
-					}
+					List<AltAST> list = labeledAlternatives.computeIfAbsent(entry.getKey(), k -> new ArrayList<AltAST>());
 
 					for (Tuple2<Integer, AltAST> tuple : entry.getValue()) {
 						list.add(tuple.getItem2());

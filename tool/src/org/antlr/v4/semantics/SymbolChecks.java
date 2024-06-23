@@ -94,11 +94,8 @@ public class SymbolChecks {
 				scope = nameNode.getText();
 				name = ampersandAST.getChild(1).getText();
 			}
-			Set<String> scopeActions = actionScopeToActionNames.get(scope);
-			if (scopeActions == null) { // init scope
-				scopeActions = new HashSet<String>();
-				actionScopeToActionNames.put(scope, scopeActions);
-			}
+			Set<String> scopeActions = actionScopeToActionNames.computeIfAbsent(scope, k -> new HashSet<String>());
+			// init scope
 			if (!scopeActions.contains(name)) {
 				scopeActions.add(name);
 			}

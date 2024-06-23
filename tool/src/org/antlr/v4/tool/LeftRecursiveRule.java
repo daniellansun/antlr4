@@ -122,11 +122,7 @@ public class LeftRecursiveRule extends Rule {
 		if ( recPrimaryAlts!=null ) {
 			for (LeftRecursiveRuleAltInfo altInfo : recPrimaryAlts) {
 				if (altInfo.altLabel != null) {
-					List<Tuple2<Integer, AltAST>> pairs = labels.get(altInfo.altLabel);
-					if (pairs == null) {
-						pairs = new ArrayList<Tuple2<Integer, AltAST>>();
-						labels.put(altInfo.altLabel, pairs);
-					}
+					List<Tuple2<Integer, AltAST>> pairs = labels.computeIfAbsent(altInfo.altLabel, k -> new ArrayList<Tuple2<Integer, AltAST>>());
 
 					pairs.add(Tuple.create(altInfo.altNum, altInfo.originalAltAST));
 				}
@@ -136,11 +132,7 @@ public class LeftRecursiveRule extends Rule {
 			for (int i = 0; i < recOpAlts.size(); i++) {
 				LeftRecursiveRuleAltInfo altInfo = recOpAlts.getElement(i);
 				if ( altInfo.altLabel!=null ) {
-					List<Tuple2<Integer, AltAST>> pairs = labels.get(altInfo.altLabel);
-					if (pairs == null) {
-						pairs = new ArrayList<Tuple2<Integer, AltAST>>();
-						labels.put(altInfo.altLabel, pairs);
-					}
+					List<Tuple2<Integer, AltAST>> pairs = labels.computeIfAbsent(altInfo.altLabel, k -> new ArrayList<Tuple2<Integer, AltAST>>());
 
 					pairs.add(Tuple.create(altInfo.altNum, altInfo.originalAltAST));
 				}
