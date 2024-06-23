@@ -176,7 +176,7 @@ public class SymbolChecks {
 				return altAST.altLabel.toString();
 			}
 			else if (altAST.leftRecursiveAltInfo != null) {
-				return altAST.leftRecursiveAltInfo.altLabel.toString();
+				return altAST.leftRecursiveAltInfo.altLabel;
 			}
 			else {
 				return findAltLabelName(label.parent);
@@ -418,7 +418,7 @@ public class SymbolChecks {
 					}
 					else {
 						String text = terminalAST.token.getText();
-						currentValue.append(text.substring(1, text.length() - 1));
+						currentValue.append(text, 1, text.length() - 1);
 					}
 				}
 
