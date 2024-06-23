@@ -87,12 +87,8 @@ public class Trees {
 	{
 		String ps = getPS(t, ruleNames, fontName, fontSize);
 		FileWriter f = new FileWriter(fileName);
-		BufferedWriter bw = new BufferedWriter(f);
-		try {
+		try (BufferedWriter bw = new BufferedWriter(f)) {
 			bw.write(ps);
-		}
-		finally {
-			bw.close();
 		}
 	}
 

@@ -745,12 +745,8 @@ public class Tool {
 		content.append(serializedATN.toString());
 
 		try {
-			Writer fw = getOutputFileWriter(g, g.name + ".interp");
-			try {
+			try (Writer fw = getOutputFileWriter(g, g.name + ".interp")) {
 				fw.write(content.toString());
-			}
-			finally {
-				fw.close();
 			}
 		}
 		catch (IOException ioe) {
@@ -886,12 +882,8 @@ public class Tool {
 	}
 
 	protected void writeDOTFile(Grammar g, String name, String dot) throws IOException {
-		Writer fw = getOutputFileWriter(g, name + ".dot");
-		try {
+		try (Writer fw = getOutputFileWriter(g, name + ".dot")) {
 			fw.write(dot);
-		}
-		finally {
-			fw.close();
 		}
 	}
 
