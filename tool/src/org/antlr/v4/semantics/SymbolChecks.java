@@ -358,9 +358,7 @@ public class SymbolChecks {
 				// Collect string literal lexer rules for each mode
 				List<Rule> stringLiteralRules = new ArrayList<Rule>();
 				List<List<String>> stringLiteralValues = new ArrayList<List<String>>();
-				for (int i = 0; i < rules.size(); i++) {
-					Rule rule = rules.get(i);
-
+				for (Rule rule : rules) {
 					List<String> ruleStringAlts = getSingleTokenValues(rule);
 					if (ruleStringAlts != null && ruleStringAlts.size() > 0) {
 						stringLiteralRules.add(rule);

@@ -101,8 +101,7 @@ public class ATNOptimizer {
 					IntervalSet set =  matchTransition.label();
 					List<Interval> intervals = set.getIntervals();
 					int n = intervals.size();
-					for (int k = 0; k < n; k++) {
-						Interval setInterval = intervals.get(k);
+					for (Interval setInterval : intervals) {
 						int a = setInterval.a;
 						int b = setInterval.b;
 						if (a != -1 && b != -1) {
@@ -110,9 +109,9 @@ public class ATNOptimizer {
 								if (matchSet.contains(v)) {
 									// TODO: Token is missing (i.e. position in source will not be displayed).
 									g.tool.errMgr.grammarError(ErrorType.CHARACTERS_COLLISION_IN_SET, g.fileName,
-											null,
-											CharSupport.getANTLRCharLiteralForChar(v),
-											CharSupport.getIntervalSetEscapedString(matchSet));
+										null,
+										CharSupport.getANTLRCharLiteralForChar(v),
+										CharSupport.getIntervalSetEscapedString(matchSet));
 									break;
 								}
 							}

@@ -16,7 +16,7 @@ import org.antlr.v4.runtime.misc.Utils;
 import org.antlr.v4.runtime.tree.ErrorNode;
 import org.antlr.v4.runtime.tree.Tree;
 
-import java.awt.Dimension;
+import java.awt.*;
 import java.awt.geom.Rectangle2D;
 import java.util.List;
 
@@ -118,8 +118,8 @@ public class TreePostScriptGenerator {
 		}
 		double x = box.x+nodeWidthPadding;
 		double y = box.y+nodeHeightPaddingBelow;
-		for (int i = 0; i < lines.length; i++) {
-			doc.text(lines[i], x, y);
+		for (String line : lines) {
+			doc.text(line, x, y);
 			y += doc.getLineHeight();
 		}
 	}
