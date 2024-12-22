@@ -10,13 +10,19 @@ import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
 public class LogManager {
     protected static class Record {
-		long timestamp;
+        private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss:SSS");
+        private static final ZoneId ZONE = ZoneId.systemDefault();
+        long timestamp;
 		StackTraceElement location;
 		String component;
 		String msg;
@@ -26,19 +32,11 @@ public class LogManager {
 		}
 
 		@Override
-		public String toString() {
-            StringBuilder buf = new StringBuilder();
-            buf.append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:SSS").format(new Date(timestamp)));
-            buf.append(" ");
-            buf.append(component);
-            buf.append(" ");
-            buf.append(location.getFileName());
-            buf.append(":");
-            buf.append(location.getLineNumber());
-            buf.append(" ");
-            buf.append(msg);
-            return buf.toString();
-		}
+        public String toString() {
+            String result = DATE_TIME_FORMATTER.format(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZONE)) +
+                    " " + component + " " + location.getFileName() + ":" + location.getLineNumber() + " " + msg;
+            return result;
+        }
 	}
 
 	protected List<Record> records;
