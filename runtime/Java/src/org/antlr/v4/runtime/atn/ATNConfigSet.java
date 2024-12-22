@@ -261,7 +261,7 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			return true;
 		}
 
-		for (int i = 0, n = unmerged.size(); i < n; i++) {
+		for (int i = 0; i < unmerged.size(); i++) {
 			ATNConfig unmergedConfig = unmerged.get(i);
 			if (canMerge(e, key, unmergedConfig)) {
 				unmergedConfig.setOuterContextDepth(Math.max(unmergedConfig.getOuterContextDepth(), e.getOuterContextDepth()));
@@ -522,15 +522,15 @@ public class ATNConfigSet implements Set<ATNConfig> {
 
 	public void remove(int index) {
 		ensureWritable();
-		final ATNConfig config = configs.get(index);
+		ATNConfig config = configs.get(index);
 		configs.remove(config);
 		long key = getKey(config);
 		if (mergedConfigs.get(key) == config) {
 			mergedConfigs.remove(key);
 		} else {
-			for (Iterator<ATNConfig> iterator = unmerged.iterator(); iterator.hasNext(); ) {
-				if (iterator.next() == config) {
-					iterator.remove();
+			for (int i = 0; i < unmerged.size(); i++) {
+				if (unmerged.get(i) == config) {
+					unmerged.remove(i);
 					return;
 				}
 			}
