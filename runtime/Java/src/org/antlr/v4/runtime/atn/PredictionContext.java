@@ -163,26 +163,24 @@ public abstract class PredictionContext {
 		boolean canReturnLeft = true;
 		boolean canReturnRight = true;
 		while (leftIndex < context0size && rightIndex < context1size) {
-			final int context0ReturnState = context0.getReturnState(leftIndex);
-			final int context1ReturnState = context1.getReturnState(rightIndex);
-			if (context0ReturnState == context1ReturnState) {
+			if (context0.getReturnState(leftIndex) == context1.getReturnState(rightIndex)) {
 				parentsList[count] = contextCache.join(context0.getParent(leftIndex), context1.getParent(rightIndex));
-				returnStatesList[count] = context0ReturnState;
+				returnStatesList[count] = context0.getReturnState(leftIndex);
 				canReturnLeft = canReturnLeft && parentsList[count] == context0.getParent(leftIndex);
 				canReturnRight = canReturnRight && parentsList[count] == context1.getParent(rightIndex);
 				leftIndex++;
 				rightIndex++;
 			}
-			else if (context0ReturnState < context1ReturnState) {
+			else if (context0.getReturnState(leftIndex) < context1.getReturnState(rightIndex)) {
 				parentsList[count] = context0.getParent(leftIndex);
-				returnStatesList[count] = context0ReturnState;
+				returnStatesList[count] = context0.getReturnState(leftIndex);
 				canReturnRight = false;
 				leftIndex++;
 			}
 			else {
-				assert context1ReturnState < context0ReturnState;
+				assert context1.getReturnState(rightIndex) < context0.getReturnState(leftIndex);
 				parentsList[count] = context1.getParent(rightIndex);
-				returnStatesList[count] = context1ReturnState;
+				returnStatesList[count] = context1.getReturnState(rightIndex);
 				canReturnLeft = false;
 				rightIndex++;
 			}
