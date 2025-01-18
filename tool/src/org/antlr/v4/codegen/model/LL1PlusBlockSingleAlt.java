@@ -30,7 +30,10 @@ public class LL1PlusBlockSingleAlt extends LL1Loop {
 
 		IntervalSet loopBackLook = altLookSets[0];
 		TO_ADD_PREAMBLEOP.set(false);
-		loopExpr = addCodeForLoopLookaheadTempVar(loopBackLook);
-		TO_ADD_PREAMBLEOP.remove();
+		try {
+			loopExpr = addCodeForLoopLookaheadTempVar(loopBackLook);
+		} finally {
+			TO_ADD_PREAMBLEOP.remove();
+		}
 	}
 }
