@@ -162,20 +162,17 @@ public class IntervalSet implements IntSet {
 
 	@Override
 	public IntervalSet addAll(IntSet set) {
-		if ( set==null ) {
+		if (set == null) {
 			return this;
 		}
 
 		if (set instanceof IntervalSet) {
-			IntervalSet other = (IntervalSet)set;
+			IntervalSet other = (IntervalSet) set;
 			// walk set and add each interval
-			int n = other.intervals.size();
-			for (int i = 0; i < n; i++) {
-				Interval I = other.intervals.get(i);
-				this.add(I.a,I.b);
+			for (Interval interval : other.intervals) {
+				add(interval.a, interval.b);
 			}
-		}
-		else {
+		} else {
 			for (int value : set.toList()) {
 				add(value);
 			}
