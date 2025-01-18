@@ -106,39 +106,22 @@ public class IntervalSet implements IntSet {
 
 	// copy on write so we can cache a..a intervals and sets of that
 	protected void add(Interval addition) {
-        if ( readonly ) throw new IllegalStateException("can't alter readonly IntervalSet");
-		//System.out.println("add "+addition+" to "+intervals.toString());
-		if ( addition.b<addition.a ) {
+		if (readonly) throw new IllegalStateException("can't alter readonly IntervalSet");
+		if (addition.b < addition.a) {
 			return;
 		}
 		// find position in list
 		// Use iterators as we modify list in place
 		for (ListIterator<Interval> iter = intervals.listIterator(); iter.hasNext();) {
-			Interval r = iter.next();
-			if ( addition.equals(r) ) {
+			final Interval r = iter.next();
+			if (addition.equals(r)) {
 				return;
 			}
-			if ( addition.adjacent(r) || !addition.disjoint(r) ) {
-				// next to each other, make a single larger interval
-				Interval bigger = addition.union(r);
-				iter.set(bigger);
-				// make sure we didn't just create an interval that
-				// should be merged with next interval in list
-				while ( iter.hasNext() ) {
-					Interval next = iter.next();
-					if ( !bigger.adjacent(next) && bigger.disjoint(next) ) {
-						break;
-					}
-
-					// if we bump up against or overlap next, merge
-					iter.remove();   // remove this one
-					iter.previous(); // move backwards to what we just set
-					iter.set(bigger.union(next)); // set to 3 merged ones
-					iter.next(); // first call to next after previous duplicates the result
-				}
+			if (addition.adjacent(r) || !addition.disjoint(r)) {
+				mergeIntervals(addition, r, iter);
 				return;
 			}
-			if ( addition.startsBeforeDisjoint(r) ) {
+			if (addition.startsBeforeDisjoint(r)) {
 				// insert before r
 				iter.previous();
 				iter.add(addition);
@@ -149,6 +132,25 @@ public class IntervalSet implements IntSet {
 		// ok, must be after last interval (and disjoint from last interval)
 		// just add it
 		intervals.add(addition);
+	}
+
+	private static void mergeIntervals(final Interval addition, final Interval r, final ListIterator<Interval> iter) {
+		// next to each other, make a single larger interval
+		final Interval bigger = addition.union(r);
+		iter.set(bigger);
+		// make sure we didn't just create an interval that
+		// should be merged with next interval in list
+		while (iter.hasNext()) {
+			final Interval next = iter.next();
+			if ( !bigger.adjacent(next) && bigger.disjoint(next) ) {
+				break;
+			}
+			// if we bump up against or overlap next, merge
+			iter.remove();   // remove this one
+			iter.previous(); // move backwards to what we just set
+			iter.set(bigger.union(next)); // set to 3 merged ones
+			iter.next(); // first call to next after previous duplicates the result
+		}
 	}
 
 	/** combine all sets in the array returned the or'd value */
