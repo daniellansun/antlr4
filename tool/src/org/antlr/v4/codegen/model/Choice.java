@@ -53,14 +53,17 @@ public abstract class Choice extends RuleElement {
 		return altLook;
 	}
 
+	public static final ThreadLocal<Boolean> TO_ADD_PREAMBLEOP = ThreadLocal.withInitial(() -> true);
 	public TestSetInline addCodeForLookaheadTempVar(IntervalSet look) {
 		List<SrcOp> testOps = factory.getLL1Test(look, ast);
 		TestSetInline expr = Utils.find(testOps, TestSetInline.class);
 		if (expr != null) {
 			Decl d = new TokenTypeDecl(factory, expr.varName);
 			factory.getCurrentRuleFunction().addLocalDecl(d);
-			CaptureNextTokenType nextType = new CaptureNextTokenType(factory,expr.varName);
-			addPreambleOp(nextType);
+			if (TO_ADD_PREAMBLEOP.get()) {
+				CaptureNextTokenType nextType = new CaptureNextTokenType(factory,expr.varName);
+				addPreambleOp(nextType);
+			}
 		}
 		return expr;
 	}
