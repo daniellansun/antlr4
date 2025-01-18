@@ -55,10 +55,9 @@ public class IntervalSet implements IntSet {
 	}
 
 	public IntervalSet(int... els) {
-		if ( els==null ) {
+		if (els == null || els.length == 0) {
 			intervals = new ArrayList<Interval>(2); // most sets are 1 or 2 elements
-		}
-		else {
+		} else {
 			intervals = new ArrayList<Interval>(els.length);
 			for (int e : els) add(e);
 		}
