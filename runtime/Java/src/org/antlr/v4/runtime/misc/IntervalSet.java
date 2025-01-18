@@ -577,25 +577,24 @@ public class IntervalSet implements IntSet {
 	}
 
     @Override
-    public int size() {
-		int n = 0;
+	public int size() {
 		int numIntervals = intervals.size();
-		if ( numIntervals==1 ) {
-			Interval firstInterval = this.intervals.get(0);
-			return firstInterval.b-firstInterval.a+1;
+		if (numIntervals == 1) {
+			Interval firstInterval = intervals.get(0);
+			return firstInterval.b - firstInterval.a + 1;
 		}
-		for (Interval I : intervals) {
-			n += (I.b - I.a + 1);
+		int n = 0;
+		for (Interval interval : intervals) {
+			n += (interval.b - interval.a + 1);
 		}
 		return n;
-    }
+	}
 
 	public IntegerList toIntegerList() {
 		IntegerList values = new IntegerList(size());
-		int n = intervals.size();
-		for (Interval I : intervals) {
-			int a = I.a;
-			int b = I.b;
+		for (Interval interval : intervals) {
+			int a = interval.a;
+			int b = interval.b;
 			for (int v = a; v <= b; v++) {
 				values.add(v);
 			}
@@ -605,11 +604,10 @@ public class IntervalSet implements IntSet {
 
     @Override
     public List<Integer> toList() {
-		List<Integer> values = new ArrayList<Integer>();
-		int n = intervals.size();
-        for (Interval I : intervals) {
-            int a = I.a;
-            int b = I.b;
+		List<Integer> values = new ArrayList<Integer>(size());
+        for (Interval interval : intervals) {
+            int a = interval.a;
+            int b = interval.b;
             for (int v = a; v <= b; v++) {
                 values.add(v);
             }
@@ -618,11 +616,11 @@ public class IntervalSet implements IntSet {
 	}
 
 	public Set<Integer> toSet() {
-		Set<Integer> s = new HashSet<Integer>();
+		Set<Integer> s = new HashSet<Integer>(size());
 		for (Interval I : intervals) {
 			int a = I.a;
 			int b = I.b;
-			for (int v=a; v<=b; v++) {
+			for (int v = a; v <= b; v++) {
 				s.add(v);
 			}
 		}
@@ -635,38 +633,37 @@ public class IntervalSet implements IntSet {
 
 	@Override
 	public void remove(int el) {
-        if ( readonly ) throw new IllegalStateException("can't alter readonly IntervalSet");
-        int n = intervals.size();
-        for (int i = 0; i < n; i++) {
-            Interval I = intervals.get(i);
-            int a = I.a;
-            int b = I.b;
-            if ( el<a ) {
-                break; // list is sorted and el is before this interval; not here
-            }
-            // if whole interval x..x, rm
-            if ( el==a && el==b ) {
-                intervals.remove(i);
-                break;
-            }
-            // if on left edge x..b, adjust left
-            if ( el==a ) {
-                intervals.set(i, Interval.of(I.a + 1, I.b));
-                break;
-            }
-            // if on right edge a..x, adjust right
-            if ( el==b ) {
-                intervals.set(i, Interval.of(I.a, I.b - 1));
-                break;
-            }
-            // if in middle a..x..b, split interval
-            if ( el>a && el<b ) { // found in this interval
-                int oldb = I.b;
-                intervals.set(i, Interval.of(I.a, el - 1)); // [a..x-1]
-                add(el+1, oldb); // add [x+1..b]
-            }
-        }
-    }
+		if (readonly) throw new IllegalStateException("can't alter readonly IntervalSet");
+		for (int i = 0, n = intervals.size(); i < n; i++) {
+			Interval interval = intervals.get(i);
+			int a = interval.a;
+			int b = interval.b;
+			if (el < a) {
+				break; // list is sorted and el is before this interval; not here
+			}
+			// if whole interval x..x, rm
+			if (el == a && el == b) {
+				intervals.remove(i);
+				break;
+			}
+			// if on left edge x..b, adjust left
+			if (el == a) {
+				intervals.set(i, Interval.of(interval.a + 1, interval.b));
+				break;
+			}
+			// if on right edge a..x, adjust right
+			if (el == b) {
+				intervals.set(i, Interval.of(interval.a, interval.b - 1));
+				break;
+			}
+			// if in middle a..x..b, split interval
+			if (el > a && el < b) { // found in this interval
+				int oldb = interval.b;
+				intervals.set(i, Interval.of(interval.a, el - 1)); // [a..x-1]
+				add(el + 1, oldb); // add [x+1..b]
+			}
+		}
+	}
 
     public boolean isReadonly() {
         return readonly;
