@@ -1,6 +1,6 @@
 # ANTLR v4
 
-[![Java 8+](https://img.shields.io/badge/java-8+-4c7e9f.svg)](http://java.oracle.com) [![License](https://img.shields.io/badge/license-BSD-blue.svg)](https://raw.githubusercontent.com/tunnelvisionlabs/antlr4/master/LICENSE.txt)
+[![Java 8+](https://img.shields.io/badge/java-8+-4c7e9f.svg)](http://java.oracle.com) [![License](https://img.shields.io/badge/license-BSD-blue.svg)](https://raw.githubusercontent.com/daniellansun/antlr4/master/LICENSE.txt)
 [![GithubActions](https://github.com/daniellansun/antlr4/actions/workflows/build-test.yml/badge.svg?branch=opt)](https://github.com/daniellansun/antlr4/actions?query=branch%3Aopt++)
 [![codecov](https://codecov.io/gh/daniellansun/antlr4/branch/opt/graph/badge.svg)](https://codecov.io/gh/daniellansun/antlr4)
 
@@ -21,16 +21,16 @@ ANTLR project lead and supreme dictator for life
 
 ## Useful information
 
-* [Release notes](https://github.com/tunnelvisionlabs/antlr4/releases)
-* [Getting started with v4](https://github.com/tunnelvisionlabs/antlr4/blob/master/doc/getting-started.md)
+* [Release notes](https://github.com/daniellansun/antlr4/releases)
+* [Getting started with v4](https://github.com/daniellansun/antlr4/blob/master/doc/getting-started.md)
 * [Official site](http://www.antlr.org/)
 * [Reference (non-optimized) release](https://github.com/antlr/antlr4)
-* [Documentation](https://github.com/tunnelvisionlabs/antlr4/blob/master/doc/index.md)
-* [FAQ](https://github.com/tunnelvisionlabs/antlr4/blob/master/doc/faq/index.md)
-* [ANTLR optimized code generation targets](https://github.com/tunnelvisionlabs/antlr4/blob/master/doc/targets.md)
+* [Documentation](https://github.com/daniellansun/antlr4/blob/master/doc/index.md)
+* [FAQ](https://github.com/daniellansun/antlr4/blob/master/doc/faq/index.md)
+* [ANTLR optimized code generation targets](https://github.com/daniellansun/antlr4/blob/master/doc/targets.md)
 * [Java API](http://www.antlr.org/api/Java/index.html)
 * [ANTLR v3](http://www.antlr3.org/)
-* [v3 to v4 Migration, differences](https://github.com/tunnelvisionlabs/antlr4/blob/master/doc/faq/general.md)
+* [v3 to v4 Migration, differences](https://github.com/daniellansun/antlr4/blob/master/doc/faq/general.md)
 
 ## The Definitive ANTLR 4 Reference
 
