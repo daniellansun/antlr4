@@ -18,8 +18,6 @@ import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
 
-import java.util.Locale;
-
 /** "dup" of ParserInterpreter */
 public class LexerATNSimulator extends ATNSimulator {
 
@@ -133,9 +131,9 @@ public class LexerATNSimulator extends ATNSimulator {
 	protected int matchATN(@NotNull CharStream input) {
 		ATNState startState = atn.modeToStartState.get(mode);
 
-		if ( debug ) {
+		/*if ( debug ) {
 			System.out.format(Locale.getDefault(), "matchATN mode %d start: %s\n", mode, startState);
-		}
+		}*/
 
 		int old_mode = mode;
 
@@ -154,18 +152,18 @@ public class LexerATNSimulator extends ATNSimulator {
 
 		int predict = execATN(input, next);
 
-		if ( debug ) {
+		/*if ( debug ) {
 			System.out.format(Locale.getDefault(), "DFA after matchATN: %s\n", atn.modeToDFA[old_mode].toLexerString());
-		}
+		}*/
 
 		return predict;
 	}
 
 	protected int execATN(@NotNull CharStream input, @NotNull DFAState ds0) {
 		//System.out.println("enter exec index "+input.index()+" from "+ds0.configs);
-		if ( debug ) {
+		/*if ( debug ) {
 			System.out.format(Locale.getDefault(), "start state closure=%s\n", ds0.configs);
-		}
+		}*/
 
 		if (ds0.isAcceptState()) {
 			// allow zero-length tokens
@@ -177,9 +175,9 @@ public class LexerATNSimulator extends ATNSimulator {
 		DFAState s = ds0; // s is current/from DFA state
 
 		while ( true ) { // while more work
-			if ( debug ) {
+			/*if ( debug ) {
 				System.out.format(Locale.getDefault(), "execATN loop starting closure: %s\n", s.configs);
-			}
+			}*/
 
 			// As we move src->trg, src->trg, we keep track of the previous trg to
 			// avoid looking up the DFA state again, which is expensive.
@@ -319,9 +317,9 @@ public class LexerATNSimulator extends ATNSimulator {
 				continue;
 			}
 
-			if ( debug ) {
+			/*if ( debug ) {
 				System.out.format(Locale.getDefault(), "testing %s at %s\n", getTokenName(t), c.toString(recog, true));
-			}
+			}*/
 
 			final ATNState state = c.getState();
 			for (int ti = 0, n = state.getNumberOfOptimizedTransitions(); ti < n; ti++) {               // for each optimized transition
@@ -348,9 +346,9 @@ public class LexerATNSimulator extends ATNSimulator {
 	protected void accept(@NotNull CharStream input, LexerActionExecutor lexerActionExecutor,
 						  int startIndex, int index, int line, int charPos)
 	{
-		if ( debug ) {
+		/*if ( debug ) {
 			System.out.format(Locale.getDefault(), "ACTION %s\n", lexerActionExecutor);
-		}
+		}*/
 
 		// seek to after last char in token
 		input.seek(index);
@@ -396,20 +394,20 @@ public class LexerATNSimulator extends ATNSimulator {
 	 * {@code false}.
 	 */
 	protected boolean closure(@NotNull CharStream input, @NotNull ATNConfig config, @NotNull ATNConfigSet configs, boolean currentAltReachedAcceptState, boolean speculative, boolean treatEofAsEpsilon) {
-		if ( debug ) {
+		/*if ( debug ) {
 			System.out.println("closure("+config.toString(recog, true)+")");
-		}
+		}*/
 
 		final ATNState configState = config.getState();
 		if ( configState instanceof RuleStopState ) {
-			if ( debug ) {
+			/*if ( debug ) {
 				if ( recog!=null ) {
 					System.out.format(Locale.getDefault(), "closure at %s rule stop %s\n", recog.getRuleNames()[configState.ruleIndex], config);
 				}
 				else {
 					System.out.format(Locale.getDefault(), "closure at rule stop %s\n", config);
 				}
-			}
+			}*/
 
 			PredictionContext context = config.getContext();
 			if ( context.isEmpty() ) {
@@ -501,9 +499,9 @@ public class LexerATNSimulator extends ATNSimulator {
 				test them, we cannot cash the DFA state target of ID.
 			*/
 			PredicateTransition pt = (PredicateTransition)t;
-			if ( debug ) {
+			/*if ( debug ) {
 				System.out.println("EVAL rule "+pt.ruleIndex+":"+pt.predIndex);
-			}
+			}*/
 			configs.markExplicitSemanticContext();
 			if (evaluatePredicate(input, pt.ruleIndex, pt.predIndex, speculative)) {
 				c = config.transform(t.target, true);
@@ -653,9 +651,9 @@ public class LexerATNSimulator extends ATNSimulator {
 	}
 
 	protected void addDFAEdge(@NotNull DFAState p, int t, @NotNull DFAState q) {
-		if ( debug ) {
+		/*if ( debug ) {
 			System.out.println("EDGE "+p+" -> "+q+" upon "+((char)t));
-		}
+		}*/
 
 		if ( p!=null ) {
 			p.setTarget(t, q);

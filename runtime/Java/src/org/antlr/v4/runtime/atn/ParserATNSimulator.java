@@ -28,7 +28,6 @@ import org.antlr.v4.runtime.misc.Tuple;
 import org.antlr.v4.runtime.misc.Tuple2;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Collection;
 import java.util.Comparator;
@@ -395,9 +394,9 @@ public class ParserATNSimulator extends ATNSimulator {
 
 		if ( state==null ) {
 			if ( outerContext==null ) outerContext = ParserRuleContext.emptyContext();
-			if ( debug ) System.out.println("ATN decision "+dfa.decision+
+			/*if ( debug ) System.out.println("ATN decision "+dfa.decision+
 											" exec LA(1)=="+ getLookaheadName(input) +
-											", outerContext="+outerContext.toString(parser));
+											", outerContext="+outerContext.toString(parser));*/
 
 			state = computeStartState(dfa, outerContext, useContext);
 		}
@@ -406,7 +405,7 @@ public class ParserATNSimulator extends ATNSimulator {
 		int index = input.index();
 		try {
 			int alt = execDFA(dfa, input, index, state);
-			if ( debug ) System.out.println("DFA after predictATN: "+dfa.toString(parser.getVocabulary(), parser.getRuleNames()));
+			/*if ( debug ) System.out.println("DFA after predictATN: "+dfa.toString(parser.getVocabulary(), parser.getRuleNames()));*/
 			return alt;
 		}
 		finally {
@@ -735,7 +734,7 @@ public class ParserATNSimulator extends ATNSimulator {
 					   @NotNull TokenStream input, int startIndex,
 					   @NotNull SimulatorState initialState)
 	{
-		if ( debug ) System.out.println("execATN decision "+dfa.decision+" exec LA(1)=="+ getLookaheadName(input));
+		/*if ( debug ) System.out.println("execATN decision "+dfa.decision+" exec LA(1)=="+ getLookaheadName(input));*/
 
 		final ParserRuleContext outerContext = initialState.outerContext;
 		final boolean useContext = initialState.useContext;
@@ -837,7 +836,7 @@ public class ParserATNSimulator extends ATNSimulator {
 					assert !useContext;
 					assert isAcceptState(D, false);
 
-					if ( debug ) System.out.println("RETRY with outerContext="+outerContext);
+					/*if ( debug ) System.out.println("RETRY with outerContext="+outerContext);*/
 					SimulatorState fullContextState = computeStartState(dfa, outerContext, true);
 					if (reportAmbiguities) {
 						reportAttemptingFullContext(dfa, conflictingAlts, nextState, startIndex, input.index());
@@ -1087,7 +1086,7 @@ public class ParserATNSimulator extends ATNSimulator {
 			List<ATNConfig> skippedStopStates = null;
 
 			for (ATNConfig c : closureConfigs) {
-				if ( debug ) System.out.println("testing "+getTokenName(t)+" at "+c.toString());
+				/*if ( debug ) System.out.println("testing "+getTokenName(t)+" at "+c.toString());*/
 
 				if (c.getState() instanceof RuleStopState) {
 					assert c.getContext().isEmpty();
@@ -1503,7 +1502,7 @@ public class ParserATNSimulator extends ATNSimulator {
 													   int nalts)
 	{
 		BitSet conflictingAlts = getConflictingAltsFromConfigSet(configs);
-		if ( debug ) System.out.println("predicateDFAState "+D);
+		/*if ( debug ) System.out.println("predicateDFAState "+D);*/
 		SemanticContext[] altToPred = getPredsForAmbigAlts(conflictingAlts, configs, nalts);
 		// altToPred[uniqueAlt] is now our validating predicate (if any)
 		DFAState.PredPrediction[] predPredictions = null;
@@ -1553,7 +1552,7 @@ public class ParserATNSimulator extends ATNSimulator {
 
 		// nonambig alts are null in altToPred
 		if ( nPredAlts==0 ) altToPred = null;
-		if ( debug ) System.out.println("getPredsForAmbigAlts result "+Arrays.toString(altToPred));
+		/*if ( debug ) System.out.println("getPredsForAmbigAlts result "+Arrays.toString(altToPred));*/
 		return altToPred;
 	}
 
@@ -1695,7 +1694,7 @@ public class ParserATNSimulator extends ATNSimulator {
 						   int depth,
 						   boolean treatEofAsEpsilon)
 	{
-		if ( debug ) System.out.println("closure("+config.toString(parser,true)+")");
+		/*if ( debug ) System.out.println("closure("+config.toString(parser,true)+")");*/
 
 		final PredictionContext predictionContext = config.getContext();
 		if ( config.getState() instanceof RuleStopState ) {
@@ -1728,8 +1727,8 @@ public class ParserATNSimulator extends ATNSimulator {
 			}
 			else {
 				// else if we have no context info, just chase follow links (if greedy)
-				if ( debug ) System.out.println("FALLING off rule "+
-												getRuleName(config.getState().ruleIndex));
+				/*if ( debug ) System.out.println("FALLING off rule "+
+												getRuleName(config.getState().ruleIndex));*/
 
 				if (predictionContext == PredictionContext.EMPTY_FULL) {
 					// no need to keep full context overhead when we step out
@@ -1748,7 +1747,7 @@ public class ParserATNSimulator extends ATNSimulator {
             configs.add(config, contextCache);
 			// make sure to not return here, because EOF transitions can act as
 			// both epsilon transitions and non-epsilon transitions.
-            if ( debug ) System.out.println("added config "+configs);
+            /*if ( debug ) System.out.println("added config "+configs);*/
         }
 
 		for (int i = 0, n = p.getNumberOfOptimizedTransitions(); i < n; i++) {
@@ -1815,7 +1814,7 @@ public class ParserATNSimulator extends ATNSimulator {
 
 					assert newDepth > Integer.MIN_VALUE;
 					newDepth--;
-					if ( debug ) System.out.println("dips into outer ctx: "+c);
+					/*if ( debug ) System.out.println("dips into outer ctx: "+c);*/
 				}
 				else if (t instanceof RuleTransition) {
 					if (optimize_tail_calls && ((RuleTransition)t).optimizedTailCall && (!tail_call_preserves_sll || !PredictionContext.isEmptyLocal(predictionContext))) {
@@ -1893,7 +1892,7 @@ public class ParserATNSimulator extends ATNSimulator {
 
 	@NotNull
 	protected ATNConfig actionTransition(@NotNull ATNConfig config, @NotNull ActionTransition t) {
-		if ( debug ) System.out.println("ACTION edge "+t.ruleIndex+":"+t.actionIndex);
+		/*if ( debug ) System.out.println("ACTION edge "+t.ruleIndex+":"+t.actionIndex);*/
 		return config.transform(t.target, false);
 	}
 
@@ -1903,7 +1902,7 @@ public class ParserATNSimulator extends ATNSimulator {
 									boolean collectPredicates,
 									boolean inContext)
 	{
-		if ( debug ) {
+		/*if ( debug ) {
 			System.out.println("PRED (collectPredicates="+collectPredicates+") "+
                     pt.precedence+">=_p"+
 					", ctx dependent=true");
@@ -1911,7 +1910,7 @@ public class ParserATNSimulator extends ATNSimulator {
                 System.out.println("context surrounding pred is "+
                                    parser.getRuleInvocationStack());
             }
-		}
+		}*/
 
         ATNConfig c;
         if (collectPredicates && inContext) {
@@ -1922,7 +1921,7 @@ public class ParserATNSimulator extends ATNSimulator {
 			c = config.transform(pt.target, false);
 		}
 
-		if ( debug ) System.out.println("config from pred transition="+c);
+		/*if ( debug ) System.out.println("config from pred transition="+c);*/
         return c;
 	}
 
@@ -1932,7 +1931,7 @@ public class ParserATNSimulator extends ATNSimulator {
 									boolean collectPredicates,
 									boolean inContext)
 	{
-		if ( debug ) {
+		/*if ( debug ) {
 			System.out.println("PRED (collectPredicates="+collectPredicates+") "+
                     pt.ruleIndex+":"+pt.predIndex+
 					", ctx dependent="+pt.isCtxDependent);
@@ -1940,7 +1939,7 @@ public class ParserATNSimulator extends ATNSimulator {
                 System.out.println("context surrounding pred is "+
                                    parser.getRuleInvocationStack());
             }
-		}
+		}*/
 
         ATNConfig c;
         if ( collectPredicates &&
@@ -1953,16 +1952,16 @@ public class ParserATNSimulator extends ATNSimulator {
 			c = config.transform(pt.target, false);
 		}
 
-		if ( debug ) System.out.println("config from pred transition="+c);
+		/*if ( debug ) System.out.println("config from pred transition="+c);*/
         return c;
 	}
 
 	@NotNull
 	protected ATNConfig ruleTransition(@NotNull ATNConfig config, @NotNull RuleTransition t, @Nullable PredictionContextCache contextCache) {
-		if ( debug ) {
+		/*if ( debug ) {
 			System.out.println("CALL rule "+getRuleName(t.target.ruleIndex)+
 							   ", ctx="+config.getContext());
-		}
+		}*/
 
 		ATNState returnState = t.followState;
 		PredictionContext newContext;
@@ -2275,9 +2274,9 @@ public class ParserATNSimulator extends ATNSimulator {
 			}
 		}
 
-        if ( debug ) System.out.println("EDGE "+from+" -> "+to+" upon "+getTokenName(t));
+        /*if ( debug ) System.out.println("EDGE "+from+" -> "+to+" upon "+getTokenName(t));*/
 		addDFAEdge(from, t, to);
-		if ( debug ) System.out.println("DFA=\n"+dfa.toString(parser!=null?parser.getVocabulary():VocabularyImpl.EMPTY_VOCABULARY, parser!=null?parser.getRuleNames():null));
+		/*if ( debug ) System.out.println("DFA=\n"+dfa.toString(parser!=null?parser.getVocabulary():VocabularyImpl.EMPTY_VOCABULARY, parser!=null?parser.getRuleNames():null));*/
 		return to;
 	}
 
