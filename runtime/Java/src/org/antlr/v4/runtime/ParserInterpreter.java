@@ -245,75 +245,81 @@ public class ParserInterpreter extends Parser {
 
 		Transition transition = p.transition(predictedAlt - 1);
 		switch (transition.getSerializationType()) {
-		case Transition.EPSILON:
-			if ( pushRecursionContextStates.get(p.stateNumber) &&
-				 !(transition.target instanceof LoopEndState))
-			{
-				// We are at the start of a left recursive rule's (...)* loop
-				// and we're not taking the exit branch of loop.
-				InterpreterRuleContext localctx =
-					createInterpreterRuleContext(_parentContextStack.peek().getItem1(),
-												 _parentContextStack.peek().getItem2(),
-												 _ctx.getRuleIndex());
-				pushNewRecursionContext(localctx,
-										atn.ruleToStartState[p.ruleIndex].stateNumber,
-										_ctx.getRuleIndex());
-			}
-			break;
+			case Transition.EPSILON:
+				if (pushRecursionContextStates.get(p.stateNumber) && !(transition.target instanceof LoopEndState)) {
+					pushLeftRecursionContext(p);
+				}
+				break;
 
-		case Transition.ATOM:
-			match(((AtomTransition)transition).label);
-			break;
+			case Transition.ATOM:
+				match(((AtomTransition) transition).label);
+				break;
 
-		case Transition.RANGE:
-		case Transition.SET:
-		case Transition.NOT_SET:
-			if (!transition.matches(_input.LA(1), Token.MIN_USER_TOKEN_TYPE, 65535)) {
-				recoverInline();
-			}
-			matchWildcard();
-			break;
+			case Transition.RANGE:
+			case Transition.SET:
+			case Transition.NOT_SET:
+				if (!transition.matches(_input.LA(1), Token.MIN_USER_TOKEN_TYPE, 65535)) {
+					recoverInline();
+				}
+				matchWildcard();
+				break;
 
-		case Transition.WILDCARD:
-			matchWildcard();
-			break;
+			case Transition.WILDCARD:
+				matchWildcard();
+				break;
 
-		case Transition.RULE:
-			RuleStartState ruleStartState = (RuleStartState)transition.target;
-			int ruleIndex = ruleStartState.ruleIndex;
-			InterpreterRuleContext newctx = createInterpreterRuleContext(_ctx, p.stateNumber, ruleIndex);
-			if (ruleStartState.isPrecedenceRule) {
-				enterRecursionRule(newctx, ruleStartState.stateNumber, ruleIndex, ((RuleTransition)transition).precedence);
-			}
-			else {
-				enterRule(newctx, transition.target.stateNumber, ruleIndex);
-			}
-			break;
+			case Transition.RULE:
+				visitRuleTransition(p, transition);
+				break;
 
-		case Transition.PREDICATE:
-			PredicateTransition predicateTransition = (PredicateTransition)transition;
-			if (!sempred(_ctx, predicateTransition.ruleIndex, predicateTransition.predIndex)) {
-				throw new FailedPredicateException(this);
-			}
+			case Transition.PREDICATE:
+				PredicateTransition predicateTransition = (PredicateTransition) transition;
+				if (!sempred(_ctx, predicateTransition.ruleIndex, predicateTransition.predIndex)) {
+					throw new FailedPredicateException(this);
+				}
 
-			break;
+				break;
 
-		case Transition.ACTION:
-			ActionTransition actionTransition = (ActionTransition)transition;
-			action(_ctx, actionTransition.ruleIndex, actionTransition.actionIndex);
-			break;
+			case Transition.ACTION:
+				ActionTransition actionTransition = (ActionTransition) transition;
+				action(_ctx, actionTransition.ruleIndex, actionTransition.actionIndex);
+				break;
 
-		case Transition.PRECEDENCE:
-			if (!precpred(_ctx, ((PrecedencePredicateTransition)transition).precedence)) {
-				throw new FailedPredicateException(this, String.format("precpred(_ctx, %d)", ((PrecedencePredicateTransition)transition).precedence));
-			}
-			break;
+			case Transition.PRECEDENCE:
+				if (!precpred(_ctx, ((PrecedencePredicateTransition) transition).precedence)) {
+					throw new FailedPredicateException(this, String.format("precpred(_ctx, %d)", ((PrecedencePredicateTransition) transition).precedence));
+				}
+				break;
 
-		default:
-			throw new UnsupportedOperationException("Unrecognized ATN transition type.");
+			default:
+				throw new UnsupportedOperationException("Unrecognized ATN transition type.");
 		}
 
 		setState(transition.target.stateNumber);
+	}
+
+	private void visitRuleTransition(ATNState p, Transition transition) {
+		RuleStartState ruleStartState = (RuleStartState) transition.target;
+		int ruleIndex = ruleStartState.ruleIndex;
+		InterpreterRuleContext newctx = createInterpreterRuleContext(_ctx, p.stateNumber, ruleIndex);
+		if (ruleStartState.isPrecedenceRule) {
+			enterRecursionRule(newctx, ruleStartState.stateNumber, ruleIndex, ((RuleTransition) transition).precedence);
+		}
+		else {
+			enterRule(newctx, transition.target.stateNumber, ruleIndex);
+		}
+	}
+
+	private void pushLeftRecursionContext(ATNState p) {
+		// We are at the start of a left recursive rule's (...)* loop
+		// and we're not taking the exit branch of loop.
+		InterpreterRuleContext localctx =
+			createInterpreterRuleContext(_parentContextStack.peek().getItem1(),
+										 _parentContextStack.peek().getItem2(),
+										 _ctx.getRuleIndex());
+		pushNewRecursionContext(localctx,
+								atn.ruleToStartState[p.ruleIndex].stateNumber,
+								_ctx.getRuleIndex());
 	}
 
 	/** Method visitDecisionState() is called when the interpreter reaches
