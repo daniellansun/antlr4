@@ -1678,7 +1678,7 @@ public class ParserATNSimulator extends ATNSimulator {
 
 		ATNConfigSet currentConfigs = sourceConfigs;
 		Set<ATNConfig> closureBusy = new HashSet<ATNConfig>();
-		while (currentConfigs.size() > 0) {
+		while (!currentConfigs.isEmpty()) {
 			ATNConfigSet intermediate = new ATNConfigSet();
 			for (ATNConfig config : currentConfigs) {
 				closure(config, configs, intermediate, closureBusy, collectPredicates, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
