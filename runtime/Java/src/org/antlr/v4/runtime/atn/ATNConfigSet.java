@@ -241,47 +241,21 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			contextCache = PredictionContextCache.UNCACHED;
 		}
 
-		boolean addKey;
-		long key = getKey(e);
+		final long key = getKey(e);
 		ATNConfig mergedConfig = mergedConfigs.get(key);
-		addKey = (mergedConfig == null);
+		boolean addKey = (mergedConfig == null);
 		if (mergedConfig != null && canMerge(e, key, mergedConfig)) {
-			mergedConfig.setOuterContextDepth(Math.max(mergedConfig.getOuterContextDepth(), e.getOuterContextDepth()));
-			if (e.isPrecedenceFilterSuppressed()) {
-				mergedConfig.setPrecedenceFilterSuppressed(true);
-			}
-
-			PredictionContext joined = PredictionContext.join(mergedConfig.getContext(), e.getContext(), contextCache);
-			updatePropertiesForMergedConfig(e);
-			if (mergedConfig.getContext() == joined) {
-				return false;
-			}
-
-			mergedConfig.setContext(joined);
-			return true;
+			return !mergeConfigContext(e, contextCache, mergedConfig);
 		}
 
 		for (int i = 0, n = unmerged.size(); i < n; i++) {
 			ATNConfig unmergedConfig = unmerged.get(i);
 			if (canMerge(e, key, unmergedConfig)) {
-				unmergedConfig.setOuterContextDepth(Math.max(unmergedConfig.getOuterContextDepth(), e.getOuterContextDepth()));
-				if (e.isPrecedenceFilterSuppressed()) {
-					unmergedConfig.setPrecedenceFilterSuppressed(true);
-				}
-
-				PredictionContext joined = PredictionContext.join(unmergedConfig.getContext(), e.getContext(), contextCache);
-				updatePropertiesForMergedConfig(e);
-				if (unmergedConfig.getContext() == joined) {
-					return false;
-				}
-
-				unmergedConfig.setContext(joined);
-
+				if (mergeConfigContext(e, contextCache, unmergedConfig)) return false;
 				if (addKey) {
 					mergedConfigs.put(key, unmergedConfig);
 					unmerged.remove(i);
 				}
-
 				return true;
 			}
 		}
@@ -295,6 +269,22 @@ public class ATNConfigSet implements Set<ATNConfig> {
 
 		updatePropertiesForAddedConfig(e);
 		return true;
+	}
+
+	private boolean mergeConfigContext(ATNConfig e, @Nullable PredictionContextCache contextCache, ATNConfig unmergedConfig) {
+		unmergedConfig.setOuterContextDepth(Math.max(unmergedConfig.getOuterContextDepth(), e.getOuterContextDepth()));
+		if (e.isPrecedenceFilterSuppressed()) {
+			unmergedConfig.setPrecedenceFilterSuppressed(true);
+		}
+
+		PredictionContext joined = PredictionContext.join(unmergedConfig.getContext(), e.getContext(), contextCache);
+		updatePropertiesForMergedConfig(e);
+		if (unmergedConfig.getContext() == joined) {
+			return true;
+		}
+
+		unmergedConfig.setContext(joined);
+		return false;
 	}
 
 	private void updatePropertiesForMergedConfig(ATNConfig config) {
