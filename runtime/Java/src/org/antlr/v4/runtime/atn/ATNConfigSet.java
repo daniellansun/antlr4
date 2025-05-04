@@ -337,7 +337,7 @@ public class ATNConfigSet implements Set<ATNConfig> {
 				return false;
 			}
 
-			if (!contains((ATNConfig)o)) {
+			if (!contains(o)) {
 				return false;
 			}
 		}
