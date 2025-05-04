@@ -363,14 +363,8 @@ public class ParserATNSimulator extends ATNSimulator {
 		DFA dfa = atn.decisionToDFA[decision];
 		assert dfa != null;
 		if (optimize_ll1 && !dfa.isPrecedenceDfa() && !dfa.isEmpty()) {
-			int ll_1 = input.LA(1);
-			if (ll_1 >= 0 && ll_1 <= Short.MAX_VALUE) {
-				int key = (decision << 16) + ll_1;
-				Integer alt = atn.LL1Table.get(key);
-				if (alt != null) {
-					return alt;
-				}
-			}
+			Integer alt = tryLL1Prediction(input, decision);
+			if (alt != null) return alt;
 		}
 
 		this.dfa = dfa;
@@ -392,8 +386,8 @@ public class ParserATNSimulator extends ATNSimulator {
 			state = getStartState(dfa, input, outerContext, useContext);
 		}
 
-		if ( state==null ) {
-			if ( outerContext==null ) outerContext = ParserRuleContext.emptyContext();
+		if (state == null) {
+//			if (outerContext == null) outerContext = ParserRuleContext.emptyContext();
 			/*if ( debug ) System.out.println("ATN decision "+dfa.decision+
 											" exec LA(1)=="+ getLookaheadName(input) +
 											", outerContext="+outerContext.toString(parser));*/
@@ -401,8 +395,7 @@ public class ParserATNSimulator extends ATNSimulator {
 			state = computeStartState(dfa, outerContext, useContext);
 		}
 
-		int m = input.mark();
-		int index = input.index();
+		final int m = input.mark(), index = input.index();
 		try {
 			int alt = execDFA(dfa, input, index, state);
 			/*if ( debug ) System.out.println("DFA after predictATN: "+dfa.toString(parser.getVocabulary(), parser.getRuleNames()));*/
@@ -413,6 +406,17 @@ public class ParserATNSimulator extends ATNSimulator {
 			input.seek(index);
 			input.release(m);
 		}
+	}
+
+	private Integer tryLL1Prediction(TokenStream input, int decision) {
+		int ll_1 = input.LA(1);
+		if (ll_1 >= 0 && ll_1 <= Short.MAX_VALUE) {
+			Integer alt = atn.LL1Table.get((decision << 16) + ll_1);
+			if (alt != null) {
+				return alt;
+			}
+		}
+		return null;
 	}
 
 	protected SimulatorState getStartState(@NotNull DFA dfa,
