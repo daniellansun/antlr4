@@ -930,61 +930,66 @@ public class ParserATNSimulator extends ATNSimulator {
 			}
 
 			switch (alts.cardinality()) {
-			case 0:
-				break;
+				case 0:
+					break;
 
-			case 1:
-				return alts.nextSetBit(0);
-
-			default:
-				if (!previous.s0.configs.hasSemanticContext()) {
-					// configs doesn't contain any predicates, so the predicate
-					// filtering code below would be pointless
+				case 1:
 					return alts.nextSetBit(0);
-				}
 
-				/*
-				 * Try to find a configuration set that not only dipped into the outer
-				 * context, but also isn't eliminated by a predicate.
-				 */
-				ATNConfigSet filteredConfigs = new ATNConfigSet();
-				for (ATNConfig config : previous.s0.configs) {
-					if (config.getReachesIntoOuterContext() || config.getState() instanceof RuleStopState) {
-						filteredConfigs.add(config);
+				default:
+					if (!previous.s0.configs.hasSemanticContext()) {
+						// configs doesn't contain any predicates, so the predicate
+						// filtering code below would be pointless
+						return alts.nextSetBit(0);
 					}
-				}
 
-				/* The following code blocks are adapted from predicateDFAState with
-				 * the following key changes.
-				 *
-				 *  1. The code operates on an ATNConfigSet rather than a DFAState.
-				 *  2. Predicates are collected for all alternatives represented in
-				 *     filteredConfigs, rather than restricting the evaluation to
-				 *     conflicting and/or unique configurations.
-				 */
-				SemanticContext[] altToPred = getPredsForAmbigAlts(alts, filteredConfigs, maxAlt);
-				if (altToPred != null) {
-					DFAState.PredPrediction[] predicates = getPredicatePredictions(alts, altToPred);
-					if (predicates != null) {
-						int stopIndex = input.index();
-						try {
-							input.seek(startIndex);
-							BitSet filteredAlts = evalSemanticContext(predicates, previous.outerContext, false);
-							if (!filteredAlts.isEmpty()) {
-								return filteredAlts.nextSetBit(0);
-							}
-						}
-						finally {
-							input.seek(stopIndex);
+					/*
+					 * Try to find a configuration set that not only dipped into the outer
+					 * context, but also isn't eliminated by a predicate.
+					 */
+					ATNConfigSet filteredConfigs = new ATNConfigSet();
+					for (ATNConfig config : previous.s0.configs) {
+						if (config.getReachesIntoOuterContext() || config.getState() instanceof RuleStopState) {
+							filteredConfigs.add(config);
 						}
 					}
-				}
 
-				return alts.nextSetBit(0);
+					/* The following code blocks are adapted from predicateDFAState with
+					 * the following key changes.
+					 *
+					 *  1. The code operates on an ATNConfigSet rather than a DFAState.
+					 *  2. Predicates are collected for all alternatives represented in
+					 *     filteredConfigs, rather than restricting the evaluation to
+					 *     conflicting and/or unique configurations.
+					 */
+					SemanticContext[] altToPred = getPredsForAmbigAlts(alts, filteredConfigs, maxAlt);
+					if (altToPred != null) {
+						Integer filteredAlts = findFirstValidAltUsingPredicates(input, startIndex, previous, alts, altToPred);
+						if (filteredAlts != null) return filteredAlts;
+					}
+
+					return alts.nextSetBit(0);
 			}
 		}
 
 		throw noViableAlt(input, previous.outerContext, previous.s0.configs, startIndex);
+	}
+
+	private Integer findFirstValidAltUsingPredicates(TokenStream input, int startIndex, SimulatorState previous, BitSet alts, SemanticContext[] altToPred) {
+		DFAState.PredPrediction[] predicates = getPredicatePredictions(alts, altToPred);
+		if (predicates != null) {
+			int stopIndex = input.index();
+			try {
+				input.seek(startIndex);
+				BitSet filteredAlts = evalSemanticContext(predicates, previous.outerContext, false);
+				if (!filteredAlts.isEmpty()) {
+					return filteredAlts.nextSetBit(0);
+				}
+			} finally {
+				input.seek(stopIndex);
+			}
+		}
+		return null;
 	}
 
 	protected SimulatorState computeReachSet(DFA dfa, SimulatorState previous, int t, PredictionContextCache contextCache) {
