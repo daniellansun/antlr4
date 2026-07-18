@@ -97,7 +97,12 @@
         <bootclasspath.testCompile>${bootclasspath.java6}</bootclasspath.testCompile>
         <antlr.testinprocess>true</antlr.testinprocess>
 
-        <nexus.url>https://oss.sonatype.org</nexus.url>
+        <!--
+          OSSRH (https://oss.sonatype.org) was shut down 2025-06-30 and now returns 404.
+          Use the Central Publisher Portal OSSRH Staging API compatibility endpoint.
+          See: https://central.sonatype.org/publish/publish-portal-ossrh-staging-api/
+        -->
+        <nexus.url>https://ossrh-staging-api.central.sonatype.com</nexus.url>
         <project.repository>daniellansun/antlr4</project.repository>
         <repository.url>git@github.com:${project.repository}.git</repository.url>
     </properties>
@@ -120,6 +125,24 @@
         <developerConnection>scm:git:${repository.url}</developerConnection>
       <tag>HEAD</tag>
   </scm>
+
+    <!--
+      Override oss-parent distributionManagement: legacy OSSRH hosts are offline.
+      nexus-staging-maven-plugin primarily uses ${nexus.url}; these URLs cover
+      fallback deploy paths and snapshots.
+    -->
+    <distributionManagement>
+        <snapshotRepository>
+            <id>sonatype-nexus-snapshots</id>
+            <name>Central Portal Snapshots</name>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        </snapshotRepository>
+        <repository>
+            <id>sonatype-nexus-staging</id>
+            <name>Central Portal OSSRH Staging API</name>
+            <url>https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/</url>
+        </repository>
+    </distributionManagement>
 
     <profiles>
         <profile>
