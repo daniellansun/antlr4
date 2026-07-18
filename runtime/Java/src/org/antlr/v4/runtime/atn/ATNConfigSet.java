@@ -84,11 +84,58 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	private int cachedHashCode = -1;
 
 	public ATNConfigSet() {
-		this.mergedConfigs = new HashMap<Long, ATNConfig>();
-		this.unmerged = new ArrayList<ATNConfig>();
-		this.configs = new ArrayList<ATNConfig>();
+		this(0);
+	}
+
+	/**
+	 * Constructs an empty, writable config set with the given capacity hint for
+	 * the primary configuration storage. Larger hints reduce rehashing when the
+	 * approximate number of configurations is known in advance (for example
+	 * when seeding a set from another configuration set during closure or
+	 * reach operations).
+	 *
+	 * <p>
+	 * The hint is treated as an <em>expected element count</em>, not a raw
+	 * {@link HashMap} bucket count. Map capacity is computed for the default
+	 * load factor ({@code 0.75}) and floored at the platform default ({@code 16})
+	 * so that small expected sizes which later expand during closure do not
+	 * rehash more aggressively than an unhinted set.</p>
+	 *
+	 * @param expectedSize expected number of configurations, or {@code <= 0}
+	 * for the default map/list capacities
+	 */
+	public ATNConfigSet(int expectedSize) {
+		if (expectedSize > 0) {
+			this.mergedConfigs = new HashMap<Long, ATNConfig>(hashMapCapacity(expectedSize));
+			this.unmerged = new ArrayList<ATNConfig>();
+			this.configs = new ArrayList<ATNConfig>(expectedSize);
+		}
+		else {
+			this.mergedConfigs = new HashMap<Long, ATNConfig>();
+			this.unmerged = new ArrayList<ATNConfig>();
+			this.configs = new ArrayList<ATNConfig>();
+		}
 
 		this.uniqueAlt = ATN.INVALID_ALT_NUMBER;
+	}
+
+	/**
+	 * Converts an expected element count into a {@link HashMap} initial capacity
+	 * that can hold that many entries without rehashing under the default load
+	 * factor of {@code 0.75}. The result is never smaller than {@code 16} (the
+	 * default map capacity) so undersized hints cannot regress expansion cost
+	 * relative to an unhinted map when the set grows beyond the estimate.
+	 */
+	private static int hashMapCapacity(int expectedSize) {
+		// expectedSize / 0.75 + 1, floored at the default HashMap capacity of 16.
+		long capacity = (long) ((double) expectedSize / 0.75d) + 1L;
+		if (capacity < 16L) {
+			return 16;
+		}
+		if (capacity > Integer.MAX_VALUE) {
+			return Integer.MAX_VALUE;
+		}
+		return (int) capacity;
 	}
 
 	@SuppressWarnings("unchecked")
