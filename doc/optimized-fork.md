@@ -121,6 +121,28 @@ The optimized fork uses several different map implementations based on the numbe
 
 The optimized fork uses several `ATNConfig` classes to reduce the size of the DFA. For configurations returning default values from most properties, a small `ATNConfig` instance is used. The larger types are only used for configurations that need to represent non-default values from one or more methods. As a simple example, configurations appearing in the lexer DFA need to store a few more fields than configurations appearing in the parser DFA. By removing these fields from `ATNConfig` instances used in the parser DFA, some applications observe marked reductions in the memory overhead for the parser DFA (we've seen 20MiB or more for large applications).
 
+### Primitive collections on prediction hot paths (HPPC)
+
+**Reason for exclusion:** Additional dependency (mitigated by shading)
+
+Writable `ATNConfigSet` instances index merged configurations by a packed
+`(state, alt)` `long` key. The optimized fork stores that index in HPPC's
+`LongObjectHashMap` so add/merge during ATN closure and reach avoids
+`Long` boxing on every lookup. Precedence filtering uses `IntObjectHashMap`
+for state-number keys. Cold paths (for example ATN deserialization) keep
+standard JDK maps so the dependency stays justified by hot-path wins only.
+
+Epsilon closure orchestration (busy-set sizing, predicate vs BFS control,
+double-buffered intermediate layers) lives in package-private
+`EpsilonClosure` so `ParserATNSimulator` does not keep absorbing allocation
+policy.
+
+HPPC is relocated at package time into
+`org.antlr.v4.runtime.shaded.com.carrotsearch.hppc` (minimize + shade) so the
+published runtime artifact remains self-contained and does not clash with a
+consumer's own HPPC dependency. The runtime targets Java 8; the last HPPC
+release that ships Java 8 bytecode is used for that reason.
+
 ### Prediction context optimization
 
 **Reason for exclusion:** Implementation complexity

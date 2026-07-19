@@ -643,8 +643,11 @@ public class ATNDeserializer {
 	 * @param atn The ATN.
 	 */
 	protected void markPrecedenceDecisions(@NotNull ATN atn) {
-		// Map rule index -> precedence decision for that rule
-		Map<Integer, StarLoopEntryState> rulePrecedenceDecisions = new HashMap<Integer, StarLoopEntryState>();
+		// Map rule index -> precedence decision for that rule (cold path: ATN
+		// deserialization). Keep JDK collections here; primitive maps are
+		// reserved for prediction hot paths.
+		Map<Integer, StarLoopEntryState> rulePrecedenceDecisions =
+			new HashMap<Integer, StarLoopEntryState>();
 
 		for (ATNState state : atn.states) {
 			if (!(state instanceof StarLoopEntryState)) {

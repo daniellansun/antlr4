@@ -6,6 +6,8 @@
 
 package org.antlr.v4.runtime.atn;
 
+import com.carrotsearch.hppc.LongObjectHashMap;
+
 import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
 import org.antlr.v4.runtime.misc.Utils;
@@ -13,7 +15,6 @@ import org.antlr.v4.runtime.misc.Utils;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -34,9 +35,21 @@ import java.util.Set;
  * predicates and non-greedy operators in a form to support ANTLR's prediction
  * algorithm.</p>
  *
+ * <p>Writable sets use a primitive {@code long}-keyed map for the
+ * {@code (state, alt)} merge index so hot add/merge paths avoid
+ * {@link Long} boxing on every lookup.</p>
+ *
  * @author Sam Harwell
  */
 public class ATNConfigSet implements Set<ATNConfig> {
+
+	/**
+	 * Minimum expected-element hint passed to {@link LongObjectHashMap} when a
+	 * positive capacity is requested. Matches the previous {@code HashMap}
+	 * default capacity floor so small hints still expand reasonably during
+	 * closure fan-out.
+	 */
+	private static final int MIN_MERGED_CONFIG_CAPACITY = 16;
 
 	/**
 	 * This maps (state, alt) -> merged {@link ATNConfig}. The key does not account for
@@ -47,8 +60,12 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	 * <p>
 	 * This map is only used for optimizing the process of adding configs to the set,
 	 * and is {@code null} for read-only sets stored in the DFA.
+	 * <p>
+	 * Implemented as a primitive {@link LongObjectHashMap} so {@link #getKey}
+	 * values are stored and looked up without {@link Long} boxing on the
+	 * prediction hot path.
 	 */
-	private final HashMap<Long, ATNConfig> mergedConfigs;
+	private final LongObjectHashMap<ATNConfig> mergedConfigs;
 	/**
 	 * This is an "overflow" list holding configs which cannot be merged with one
 	 * of the configs in {@link #mergedConfigs} but have a colliding key. This
@@ -95,9 +112,9 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	 * reach operations).
 	 *
 	 * <p>
-	 * The hint is treated as an <em>expected element count</em>, not a raw
-	 * {@link HashMap} bucket count. Map capacity is computed for the default
-	 * load factor ({@code 0.75}) and floored at the platform default ({@code 16})
+	 * The hint is treated as an <em>expected element count</em> for both the
+	 * configuration list and the primitive {@code (state, alt)} merge map. The
+	 * merge-map expected size is floored at {@link #MIN_MERGED_CONFIG_CAPACITY}
 	 * so that small expected sizes which later expand during closure do not
 	 * rehash more aggressively than an unhinted set.</p>
 	 *
@@ -106,12 +123,12 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	 */
 	public ATNConfigSet(int expectedSize) {
 		if (expectedSize > 0) {
-			this.mergedConfigs = new HashMap<Long, ATNConfig>(hashMapCapacity(expectedSize));
+			this.mergedConfigs = new LongObjectHashMap<ATNConfig>(mergedMapExpectedElements(expectedSize));
 			this.unmerged = new ArrayList<ATNConfig>();
 			this.configs = new ArrayList<ATNConfig>(expectedSize);
 		}
 		else {
-			this.mergedConfigs = new HashMap<Long, ATNConfig>();
+			this.mergedConfigs = new LongObjectHashMap<ATNConfig>();
 			this.unmerged = new ArrayList<ATNConfig>();
 			this.configs = new ArrayList<ATNConfig>();
 		}
@@ -120,22 +137,17 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	}
 
 	/**
-	 * Converts an expected element count into a {@link HashMap} initial capacity
-	 * that can hold that many entries without rehashing under the default load
-	 * factor of {@code 0.75}. The result is never smaller than {@code 16} (the
-	 * default map capacity) so undersized hints cannot regress expansion cost
-	 * relative to an unhinted map when the set grows beyond the estimate.
+	 * Converts an expected configuration count into an expected-element hint for
+	 * {@link LongObjectHashMap}. The result is never smaller than
+	 * {@link #MIN_MERGED_CONFIG_CAPACITY} so undersized hints cannot regress
+	 * expansion cost relative to an unhinted map when the set grows beyond the
+	 * estimate.
 	 */
-	private static int hashMapCapacity(int expectedSize) {
-		// expectedSize / 0.75 + 1, floored at the default HashMap capacity of 16.
-		long capacity = (long) ((double) expectedSize / 0.75d) + 1L;
-		if (capacity < 16L) {
-			return 16;
+	private static int mergedMapExpectedElements(int expectedSize) {
+		if (expectedSize < MIN_MERGED_CONFIG_CAPACITY) {
+			return MIN_MERGED_CONFIG_CAPACITY;
 		}
-		if (capacity > Integer.MAX_VALUE) {
-			return Integer.MAX_VALUE;
-		}
-		return (int) capacity;
+		return expectedSize;
 	}
 
 	@SuppressWarnings("unchecked")
@@ -144,10 +156,10 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			this.mergedConfigs = null;
 			this.unmerged = null;
 		} else if (!set.isReadOnly()) {
-			this.mergedConfigs = (HashMap<Long, ATNConfig>)set.mergedConfigs.clone();
+			this.mergedConfigs = set.mergedConfigs.clone();
 			this.unmerged = (ArrayList<ATNConfig>)set.unmerged.clone();
 		} else {
-			this.mergedConfigs = new HashMap<Long, ATNConfig>(set.configs.size());
+			this.mergedConfigs = new LongObjectHashMap<ATNConfig>(mergedMapExpectedElements(set.configs.size()));
 			this.unmerged = new ArrayList<ATNConfig>();
 		}
 

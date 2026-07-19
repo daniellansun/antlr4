@@ -1,5 +1,6 @@
 # Maven build folders
 target/
+dependency-reduced-pom.xml
 # ... but not code generation targets
 !tool/src/org/antlr/v4/codegen/target/
 

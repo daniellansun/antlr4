@@ -23,6 +23,14 @@
     <properties>
         <!-- Assumes dot is in the system path, or specified for the build. -->
         <dot.path>dot</dot.path>
+        <!--
+          0.11.1+ is compiled for Java 21 (class file 65). This runtime targets
+          Java 8, so use the last HPPC release that ships Java 8 bytecode.
+        -->
+        <hppc.version>0.9.1</hppc.version>
+        <!-- Single source of truth for shade relocation (main + complete). -->
+        <hppc.package>com.carrotsearch.hppc</hppc.package>
+        <hppc.shaded.package>org.antlr.v4.runtime.shaded.com.carrotsearch.hppc</hppc.shaded.package>
     </properties>
 
     <dependencies>
@@ -32,6 +40,18 @@
             <version>${project.version}</version>
             <scope>compile</scope>
             <optional>true</optional>
+        </dependency>
+
+        <!--
+          High Performance Primitive Collections used on ATN prediction hot
+          paths only (e.g. long-keyed merge maps). Relocated into
+          org.antlr.v4.runtime.shaded at package time so consumers do not need
+          a transitive HPPC dependency and cannot clash with their own HPPC.
+        -->
+        <dependency>
+            <groupId>com.carrotsearch</groupId>
+            <artifactId>hppc</artifactId>
+            <version>${hppc.version}</version>
         </dependency>
 
         <dependency>
@@ -76,6 +96,12 @@
                         </configuration>
                     </plugin>
 
+                    <!--
+                      Complete classifier: main artifact is already HPPC-shaded
+                      by shade-hppc. Only embed annotations; do not re-include
+                      raw HPPC (avoids duplicated relocation config and a full
+                      unminimized HPPC copy).
+                    -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-shade-plugin</artifactId>
@@ -83,6 +109,7 @@
                         <inherited>false</inherited>
                         <executions>
                             <execution>
+                                <id>shade-complete</id>
                                 <phase>package</phase>
                                 <goals>
                                     <goal>shade</goal>
@@ -93,6 +120,11 @@
                                     <shadedArtifactAttached>true</shadedArtifactAttached>
                                     <createSourcesJar>true</createSourcesJar>
                                     <shadedClassifierName>complete</shadedClassifierName>
+                                    <artifactSet>
+                                        <includes>
+                                            <include>me.sunlan:antlr4-annotations</include>
+                                        </includes>
+                                    </artifactSet>
                                 </configuration>
                             </execution>
                         </executions>
@@ -144,6 +176,100 @@
                         </goals>
                     </execution>
                 </executions>
+            </plugin>
+
+            <!--
+              Relocate HPPC under ${hppc.shaded.package} and embed only the
+              classes actually referenced by the runtime so the primary artifact
+              stays self-contained (no transitive HPPC for consumers).
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.4.1</version>
+                <executions>
+                    <execution>
+                        <id>shade-hppc</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <promoteTransitiveDependencies>true</promoteTransitiveDependencies>
+                            <shadedArtifactAttached>false</shadedArtifactAttached>
+                            <minimizeJar>true</minimizeJar>
+                            <artifactSet>
+                                <includes>
+                                    <include>com.carrotsearch:hppc</include>
+                                </includes>
+                            </artifactSet>
+                            <relocations>
+                                <relocation>
+                                    <pattern>${hppc.package}</pattern>
+                                    <shadedPattern>${hppc.shaded.package}</shadedPattern>
+                                </relocation>
+                            </relocations>
+                            <filters>
+                                <filter>
+                                    <artifact>com.carrotsearch:hppc</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/MANIFEST.MF</exclude>
+                                        <exclude>module-info.class</exclude>
+                                        <exclude>META-INF/versions/**</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Fail the build if the shaded primary jar still contains raw HPPC. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>verify-shaded-hppc</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <property name="runtime.jar" value="${project.build.directory}/${project.build.finalName}.jar"/>
+                                <fail message="Shaded runtime jar missing: ${runtime.jar}">
+                                    <condition>
+                                        <not>
+                                            <available file="${runtime.jar}"/>
+                                        </not>
+                                    </condition>
+                                </fail>
+                                <exec executable="bash" failonerror="true" outputproperty="shade.verify.out">
+                                    <arg value="-c"/>
+                                    <arg value="set -euo pipefail; JAR='${runtime.jar}'; UNSHADED=$(jar tf &quot;$JAR&quot; | grep -E '^com/carrotsearch/' || true); if [ -n &quot;$UNSHADED&quot; ]; then echo &quot;FAIL: unshaded com.carrotsearch entries:&quot;; echo &quot;$UNSHADED&quot;; exit 1; fi; SHADED=$(jar tf &quot;$JAR&quot; | grep -c 'org/antlr/v4/runtime/shaded/com/carrotsearch/hppc/' || true); if [ &quot;$SHADED&quot; -lt 10 ]; then echo &quot;FAIL: expected shaded HPPC entries, found $SHADED&quot;; exit 1; fi; jar tf &quot;$JAR&quot; | grep -q 'org/antlr/v4/runtime/shaded/com/carrotsearch/hppc/LongObjectHashMap.class'; jar tf &quot;$JAR&quot; | grep -q 'org/antlr/v4/runtime/shaded/com/carrotsearch/hppc/IntObjectHashMap.class'; echo &quot;PASS: shaded HPPC ok ($SHADED entries)&quot;"/>
+                                </exec>
+                                <echo message="${shade.verify.out}"/>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.felix</groupId>
+                <artifactId>maven-bundle-plugin</artifactId>
+                <configuration>
+                    <instructions>
+                        <!-- HPPC is shaded into the jar; do not wire it externally. -->
+                        <Import-Package>
+                            !com.carrotsearch.hppc*,
+                            *
+                        </Import-Package>
+                    </instructions>
+                </configuration>
             </plugin>
         </plugins>
     </build>

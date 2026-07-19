@@ -24,8 +24,14 @@ import java.util.Objects;
  * <p>
  * PERF: {@link #getChild} and {@link #join} use mutable probe keys for map
  * lookups so a cache hit does not allocate a key object. Permanent keys are
- * allocated only on a cache miss when the entry is stored. Probe fields are
- * cleared after each lookup so they do not pin otherwise-unreachable contexts.
+ * allocated only on a cache miss when the entry is stored. Probe types are
+ * distinct from permanent key types so a probe can never be inserted into the
+ * map: the maps are typed as {@code Map<PredictionContextAndInt, …>} and
+ * {@code Map<IdentityCommutativePredictionContextOperands, …>}, while
+ * {@link Map#get(Object)} still accepts probes because equality is defined on
+ * the shared {@code ChildKey}/{@code JoinKey} bases.</p>
+ *
+ * <p>
  * {@link #join} may re-enter itself recursively via
  * {@link PredictionContext#join}; the probe key is only used for the duration
  * of each individual map lookup, and map insertions always use freshly
@@ -36,23 +42,19 @@ import java.util.Objects;
 public class PredictionContextCache {
 	public static final PredictionContextCache UNCACHED = new PredictionContextCache(false);
 
-	private final Map<PredictionContext, PredictionContext> contexts;
 	private final Map<PredictionContextAndInt, PredictionContext> childContexts;
 	private final Map<IdentityCommutativePredictionContextOperands, PredictionContext> joinContexts;
+	private final Map<PredictionContext, PredictionContext> contexts;
 
 	/**
-	 * Reusable probe key for {@link #getChild} lookups. Never inserted into
-	 * {@link #childContexts}; only permanent keys are stored on a miss.
-	 * {@code null} when caching is disabled.
+	 * Reusable probe for {@link #getChild}. Never passed to {@link Map#put}.
 	 */
-	private final PredictionContextAndInt childLookupKey;
+	private final ChildKeyProbe childProbe;
 
 	/**
-	 * Reusable probe key for {@link #join} lookups. Never inserted into
-	 * {@link #joinContexts}; only permanent keys are stored on a miss.
-	 * {@code null} when caching is disabled.
+	 * Reusable probe for {@link #join}. Never passed to {@link Map#put}.
 	 */
-	private final IdentityCommutativePredictionContextOperands joinLookupKey;
+	private final JoinKeyProbe joinProbe;
 
 	private final boolean enableCache;
 
@@ -66,23 +68,28 @@ public class PredictionContextCache {
 			this.contexts = new HashMap<PredictionContext, PredictionContext>();
 			this.childContexts = new HashMap<PredictionContextAndInt, PredictionContext>();
 			this.joinContexts = new HashMap<IdentityCommutativePredictionContextOperands, PredictionContext>();
-			this.childLookupKey = new PredictionContextAndInt();
-			this.joinLookupKey = new IdentityCommutativePredictionContextOperands();
-		} else {
-			// UNCACHED: no maps or probe keys — methods return before touching them.
+			this.childProbe = new ChildKeyProbe();
+			this.joinProbe = new JoinKeyProbe();
+		}
+		else {
+			// UNCACHED: no maps or probes — methods return before touching them.
 			this.contexts = null;
 			this.childContexts = null;
 			this.joinContexts = null;
-			this.childLookupKey = null;
-			this.joinLookupKey = null;
+			this.childProbe = null;
+			this.joinProbe = null;
 		}
 	}
 
 	/**
 	 * Returns whether this cache stores contexts. The shared {@link #UNCACHED}
 	 * instance always returns {@code false}.
+	 *
+	 * <p>Package-private: production code branches on {@link #UNCACHED}
+	 * identity or simply calls the cache methods; tests may inspect this
+	 * flag.</p>
 	 */
-	public final boolean isEnableCache() {
+	final boolean isEnableCache() {
 		return enableCache;
 	}
 
@@ -105,15 +112,16 @@ public class PredictionContextCache {
 			return context.getChild(invokingState);
 		}
 
-		childLookupKey.set(context, invokingState);
-		PredictionContext result = childContexts.get(childLookupKey);
-		// Drop the strong reference held by the probe key as soon as the lookup
+		childProbe.set(context, invokingState);
+		PredictionContext result = childContexts.get(childProbe);
+		// Drop the strong reference held by the probe as soon as the lookup
 		// completes so short-lived contexts remain eligible for GC.
-		childLookupKey.clear();
+		childProbe.clear();
 		if (result == null) {
 			result = context.getChild(invokingState);
 			result = getAsCached(result);
-			// Store a permanent key; do not insert the reusable probe key.
+			// Permanent immutable key only — probes are a different type and
+			// cannot be passed here without a compile error.
 			childContexts.put(new PredictionContextAndInt(context, invokingState), result);
 		}
 
@@ -133,38 +141,89 @@ public class PredictionContextCache {
 		// Probe-key lookup is not re-entrant: PredictionContext.join may call
 		// back into this method for parent contexts. Only the get() uses the
 		// probe; the recursive work below uses permanent keys exclusively.
-		joinLookupKey.set(x, y);
-		PredictionContext result = joinContexts.get(joinLookupKey);
-		joinLookupKey.clear();
+		joinProbe.set(x, y);
+		PredictionContext result = joinContexts.get(joinProbe);
+		joinProbe.clear();
 		if (result != null) {
 			return result;
 		}
 
 		result = PredictionContext.join(x, y, this);
 		result = getAsCached(result);
-		// Store a permanent key; do not insert the reusable probe key.
 		joinContexts.put(new IdentityCommutativePredictionContextOperands(x, y), result);
 		return result;
 	}
 
-	/**
-	 * Composite key for ({@link PredictionContext}, {@code int}) used by
-	 * {@link #getChild}. Supports mutation for probe-only lookups via
-	 * {@link #set}; map entries always use keys constructed with the
-	 * two-argument constructor so their fields never change after insertion.
-	 */
-	protected static final class PredictionContextAndInt {
-		private PredictionContext obj;
-		private int value;
+	// -------------------------------------------------------------------------
+	// Child keys: immutable permanent entry vs mutable probe (distinct types).
+	// -------------------------------------------------------------------------
 
-		/** Creates an uninitialized probe key; use {@link #set} before lookup. */
-		PredictionContextAndInt() {
+	/**
+	 * Shared equality/hash contract for ({@link PredictionContext}, {@code int})
+	 * keys used by {@link #getChild}. Permanent entries use
+	 * {@link PredictionContextAndInt}; lookups use {@link ChildKeyProbe}.
+	 */
+	abstract static class ChildKey {
+		abstract PredictionContext context();
+		abstract int invokingState();
+
+		@Override
+		public final boolean equals(Object o) {
+			if (o == this) {
+				return true;
+			}
+			if (!(o instanceof ChildKey)) {
+				return false;
+			}
+			ChildKey other = (ChildKey)o;
+			return invokingState() == other.invokingState()
+				&& Objects.equals(context(), other.context());
 		}
+
+		@Override
+		public final int hashCode() {
+			int hashCode = 5;
+			PredictionContext ctx = context();
+			hashCode = 7 * hashCode + (ctx != null ? ctx.hashCode() : 0);
+			hashCode = 7 * hashCode + invokingState();
+			return hashCode;
+		}
+	}
+
+	/**
+	 * Immutable map key for ({@link PredictionContext}, {@code int}) stored in
+	 * {@link #childContexts}. Fields are final so entries cannot be mutated
+	 * after insertion.
+	 */
+	protected static final class PredictionContextAndInt extends ChildKey {
+		private final PredictionContext obj;
+		private final int value;
 
 		public PredictionContextAndInt(PredictionContext obj, int value) {
 			this.obj = obj;
 			this.value = value;
 		}
+
+		@Override
+		PredictionContext context() {
+			return obj;
+		}
+
+		@Override
+		int invokingState() {
+			return value;
+		}
+	}
+
+	/**
+	 * Mutable probe for {@link #getChild} lookups. Package-private and not a
+	 * {@link PredictionContextAndInt}, so it cannot be passed to
+	 * {@link Map#put} on {@code Map<ChildKey, …>} only through an erroneous
+	 * cast — and the cache never exposes the map.
+	 */
+	private static final class ChildKeyProbe extends ChildKey {
+		private PredictionContext obj;
+		private int value;
 
 		void set(PredictionContext obj, int value) {
 			this.obj = obj;
@@ -177,56 +236,68 @@ public class PredictionContextCache {
 		}
 
 		@Override
-		public boolean equals(Object obj) {
-			if (!(obj instanceof PredictionContextAndInt)) {
-				return false;
-			} else if (obj == this) {
-				return true;
-			}
-
-			PredictionContextAndInt other = (PredictionContextAndInt)obj;
-			return this.value == other.value
-				&& (Objects.equals(this.obj, other.obj));
+		PredictionContext context() {
+			return obj;
 		}
 
 		@Override
-		public int hashCode() {
-			int hashCode = 5;
-			hashCode = 7 * hashCode + (this.obj != null ? this.obj.hashCode() : 0);
-			hashCode = 7 * hashCode + value;
-			return hashCode;
+		int invokingState() {
+			return value;
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Join keys: immutable permanent entry vs mutable probe (distinct types).
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Shared equality/hash contract for identity-based commutative pairs of
+	 * {@link PredictionContext} used by {@link #join} and by
+	 * {@link ArrayPredictionContext} equality.
+	 */
+	abstract static class JoinKey {
+		abstract PredictionContext left();
+		abstract PredictionContext right();
+
+		@Override
+		public final boolean equals(Object o) {
+			if (o == this) {
+				return true;
+			}
+			if (!(o instanceof JoinKey)) {
+				return false;
+			}
+			JoinKey other = (JoinKey)o;
+			PredictionContext x = left();
+			PredictionContext y = right();
+			PredictionContext ox = other.left();
+			PredictionContext oy = other.right();
+			return (x == ox && y == oy) || (x == oy && y == ox);
+		}
+
+		@Override
+		public final int hashCode() {
+			PredictionContext x = left();
+			PredictionContext y = right();
+			int hx = x != null ? x.hashCode() : 0;
+			int hy = y != null ? y.hashCode() : 0;
+			return hx ^ hy;
 		}
 	}
 
 	/**
-	 * Identity-based commutative key for a pair of {@link PredictionContext}
-	 * instances used by {@link #join} and by
-	 * {@link ArrayPredictionContext} equality. Supports mutation for probe-only
-	 * lookups via {@link #set}; map entries always use keys constructed with the
-	 * two-argument constructor so their fields never change after insertion.
+	 * Immutable identity-based commutative key for a pair of
+	 * {@link PredictionContext} instances. Used as map entries in
+	 * {@link #joinContexts} and as visited-set elements in
+	 * {@link ArrayPredictionContext}.
 	 */
-	protected static final class IdentityCommutativePredictionContextOperands {
-
-		private PredictionContext x;
-		private PredictionContext y;
-
-		/** Creates an uninitialized probe key; use {@link #set} before lookup. */
-		IdentityCommutativePredictionContextOperands() {
-		}
+	protected static final class IdentityCommutativePredictionContextOperands extends JoinKey {
+		private final PredictionContext x;
+		private final PredictionContext y;
 
 		public IdentityCommutativePredictionContextOperands(PredictionContext x, PredictionContext y) {
 			this.x = x;
 			this.y = y;
-		}
-
-		void set(PredictionContext x, PredictionContext y) {
-			this.x = x;
-			this.y = y;
-		}
-
-		void clear() {
-			this.x = null;
-			this.y = null;
 		}
 
 		public PredictionContext getX() {
@@ -238,25 +309,43 @@ public class PredictionContextCache {
 		}
 
 		@Override
-		public boolean equals(Object obj) {
-			if (!(obj instanceof IdentityCommutativePredictionContextOperands)) {
-				return false;
-			}
-			else if (this == obj) {
-				return true;
-			}
-
-			IdentityCommutativePredictionContextOperands other = (IdentityCommutativePredictionContextOperands)obj;
-			return (this.x == other.x && this.y == other.y) || (this.x == other.y && this.y == other.x);
+		PredictionContext left() {
+			return x;
 		}
 
 		@Override
-		public int hashCode() {
-			// Null-safe so an uninitialized probe key never throws from HashMap.
-			int hx = x != null ? x.hashCode() : 0;
-			int hy = y != null ? y.hashCode() : 0;
-			return hx ^ hy;
+		PredictionContext right() {
+			return y;
 		}
 	}
 
+	/**
+	 * Mutable probe for {@link #join} lookups. Distinct from
+	 * {@link IdentityCommutativePredictionContextOperands} so it cannot be
+	 * stored as a permanent map key through the cache API.
+	 */
+	private static final class JoinKeyProbe extends JoinKey {
+		private PredictionContext x;
+		private PredictionContext y;
+
+		void set(PredictionContext x, PredictionContext y) {
+			this.x = x;
+			this.y = y;
+		}
+
+		void clear() {
+			this.x = null;
+			this.y = null;
+		}
+
+		@Override
+		PredictionContext left() {
+			return x;
+		}
+
+		@Override
+		PredictionContext right() {
+			return y;
+		}
+	}
 }

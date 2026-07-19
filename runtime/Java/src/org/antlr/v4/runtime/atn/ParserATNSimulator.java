@@ -17,6 +17,8 @@ import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.TokenStream;
 import org.antlr.v4.runtime.Vocabulary;
 import org.antlr.v4.runtime.VocabularyImpl;
+import com.carrotsearch.hppc.IntObjectHashMap;
+
 import org.antlr.v4.runtime.dfa.AcceptStateInfo;
 import org.antlr.v4.runtime.dfa.DFA;
 import org.antlr.v4.runtime.dfa.DFAState;
@@ -31,10 +33,7 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -326,6 +325,12 @@ public class ParserATNSimulator extends ATNSimulator {
 
 	private DFA dfa;
 
+	/**
+	 * Epsilon-closure engine for this simulator. Package-private access for
+	 * {@link EpsilonClosure}; not part of the public API.
+	 */
+	private final EpsilonClosure epsilonClosure = new EpsilonClosure(this);
+
 	/** Testing only! */
 	public ParserATNSimulator(@NotNull ATN atn) {
 		this(null, atn);
@@ -334,6 +339,15 @@ public class ParserATNSimulator extends ATNSimulator {
 	public ParserATNSimulator(@Nullable Parser parser, @NotNull ATN atn) {
 		super(atn);
 		this.parser = parser;
+	}
+
+	/**
+	 * Current DFA under construction during prediction, if any. Package-private
+	 * for {@link EpsilonClosure} precedence-filter suppression.
+	 */
+	@Nullable
+	final DFA getDfaForClosure() {
+		return dfa;
 	}
 
 	@NotNull
@@ -1073,10 +1087,12 @@ public class ParserATNSimulator extends ATNSimulator {
 		final int sourceConfigCount = s.configs.size();
 		List<ATNConfig> closureConfigs = new ArrayList<ATNConfig>(s.configs);
 		IntegerList contextElements = null;
+		// `reach` is the sole result owner after each iteration. `intermediate`
+		// is a scratch buffer and is never aliased as the result (unique-closure
+		// copies outermost flags then transfers ownership by assignment of a
+		// fresh reference — see below).
 		ATNConfigSet reach = new ATNConfigSet(sourceConfigCount);
-		// Reused across stepIntoGlobal iterations; reallocated only when unique
-		// closure promotes it to the returned reach set (see below).
-		ATNConfigSet reachIntermediate = new ATNConfigSet(sourceConfigCount);
+		ATNConfigSet intermediate = new ATNConfigSet(sourceConfigCount);
 		boolean stepIntoGlobal;
 		do {
 			boolean hasMoreContext = !useContext || remainingGlobalContext != null;
@@ -1084,7 +1100,7 @@ public class ParserATNSimulator extends ATNSimulator {
 				reach.setOutermostConfigSet(true);
 			}
 
-			reachIntermediate.clear();
+			intermediate.clear();
 
 			/* Configurations already in a rule stop state indicate reaching the end
 			 * of the decision rule (local context) or end of the start rule (full
@@ -1121,7 +1137,7 @@ public class ParserATNSimulator extends ATNSimulator {
 					Transition trans = cState.getOptimizedTransition(ti);
 					ATNState target = getReachableTarget(c, trans, t);
 					if ( target!=null ) {
-						reachIntermediate.add(c.transform(target, false), contextCache);
+						intermediate.add(c.transform(target, false), contextCache);
 					}
 				}
 			}
@@ -1136,10 +1152,14 @@ public class ParserATNSimulator extends ATNSimulator {
 			 * condition is not true when one or more configurations have been
 			 * withheld in skippedStopStates, or when the current symbol is EOF.
 			 */
-			if (optimize_unique_closure && skippedStopStates == null && t != Token.EOF && reachIntermediate.getUniqueAlt() != ATN.INVALID_ALT_NUMBER) {
-				reachIntermediate.setOutermostConfigSet(reach.isOutermostConfigSet());
-				reach = reachIntermediate;
-				// Do not clear reachIntermediate after promoting it to reach.
+			if (optimize_unique_closure && skippedStopStates == null && t != Token.EOF && intermediate.getUniqueAlt() != ATN.INVALID_ALT_NUMBER) {
+				// Transfer ownership: intermediate becomes the sole result.
+				// Replace the scratch slot with a fresh set so later code (or a
+				// future loop iteration) can clear `intermediate` safely without
+				// emptying `reach`.
+				intermediate.setOutermostConfigSet(reach.isOutermostConfigSet());
+				reach = intermediate;
+				intermediate = new ATNConfigSet(sourceConfigCount);
 				break;
 			}
 
@@ -1148,7 +1168,7 @@ public class ParserATNSimulator extends ATNSimulator {
 			 */
 			final boolean collectPredicates = false;
 			boolean treatEofAsEpsilon = t == Token.EOF;
-			closure(reachIntermediate, reach, collectPredicates, hasMoreContext, contextCache, treatEofAsEpsilon);
+			closure(intermediate, reach, collectPredicates, hasMoreContext, contextCache, treatEofAsEpsilon);
 			stepIntoGlobal = reach.getDipsIntoOuterContext();
 
 			if (t == IntStream.EOF) {
@@ -1448,6 +1468,10 @@ public class ParserATNSimulator extends ATNSimulator {
 	 * from being eliminated by the filter.
 	 * </p>
 	 *
+	 * <p>Alt-1 prediction contexts are indexed by ATN state number in a primitive
+	 * {@link IntObjectHashMap} so filtering of higher alternatives avoids
+	 * {@link Integer} boxing on each state-number lookup.</p>
+	 *
 	 * @param configs The configuration set computed by
 	 * {@link #computeStartState} as the start state for the DFA.
 	 * @return The transformed configuration set representing the start state
@@ -1456,8 +1480,9 @@ public class ParserATNSimulator extends ATNSimulator {
 	 */
 	@NotNull
 	protected ATNConfigSet applyPrecedenceFilter(@NotNull ATNConfigSet configs, ParserRuleContext globalContext, PredictionContextCache contextCache) {
-		Map<Integer, PredictionContext> statesFromAlt1 = new HashMap<Integer, PredictionContext>();
-		ATNConfigSet configSet = new ATNConfigSet();
+		// Primitive map: stateNumber -> prediction context from alt 1 configs.
+		IntObjectHashMap<PredictionContext> statesFromAlt1 = new IntObjectHashMap<PredictionContext>(configs.size());
+		ATNConfigSet configSet = new ATNConfigSet(configs.size());
 		for (ATNConfig config : configs) {
 			// handle alt 1 first
 			if (config.getAlt() != 1) {
@@ -1683,14 +1708,11 @@ public class ParserATNSimulator extends ATNSimulator {
 	 * configurations to {@code configs}.
 	 *
 	 * <p>
-	 * PERF: When {@code collectPredicates} is {@code false} (the common path in
-	 * {@link #computeTargetState}), rule transitions are deferred into an
-	 * intermediate config set and processed breadth-first. That allows configs
-	 * that enter the same rule via different edges to merge before the rule body
-	 * is expanded. Intermediate sets are double-buffered and reused across layers
-	 * so a deep rule-call chain does not allocate a new {@link ATNConfigSet} per
-	 * layer. When {@code collectPredicates} is {@code true}, rule transitions are
-	 * followed immediately and no intermediate set is allocated.</p>
+	 * Delegates to {@link EpsilonClosure} for busy-set sizing, predicate vs
+	 * BFS control split, and double-buffered intermediate layers. Subclasses
+	 * may override this method or the recursive
+	 * {@link #closure(ATNConfig, ATNConfigSet, ATNConfigSet, Set, boolean, boolean, PredictionContextCache, int, boolean)}
+	 * entry point.</p>
 	 *
 	 * @param sourceConfigs configurations from which to start the closure
 	 * @param configs destination set that receives closed configurations
@@ -1714,60 +1736,7 @@ public class ParserATNSimulator extends ATNSimulator {
 		if (contextCache == null) {
 			contextCache = PredictionContextCache.UNCACHED;
 		}
-
-		final int sourceSize = sourceConfigs.size();
-		if (sourceSize == 0) {
-			return;
-		}
-
-		// HashSet(int) treats the argument as map capacity (buckets), not element
-		// count; size*2 is a safe upper estimate for right-recursion / EOF* busy
-		// traffic without overflow for realistic config-set sizes.
-		int busyCapacity = sourceSize < (Integer.MAX_VALUE >> 1)
-			? Math.max(16, sourceSize << 1)
-			: Integer.MAX_VALUE;
-		Set<ATNConfig> closureBusy = new HashSet<ATNConfig>(busyCapacity);
-
-		// Predicate collection follows rule transitions immediately; the
-		// intermediate BFS layer is only useful when rule entries can be merged
-		// without carrying distinct predicate contexts.
-		if (collectPredicates) {
-			for (ATNConfig config : sourceConfigs) {
-				closure(config, configs, null, closureBusy, true, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
-			}
-			return;
-		}
-
-		// Estimate intermediate growth above the source size: rule deferral often
-		// fans out before configs merge back into the destination set.
-		final int intermediateHint = sourceSize < (Integer.MAX_VALUE >> 1)
-			? Math.max(16, sourceSize << 1)
-			: Integer.MAX_VALUE;
-
-		ATNConfigSet currentConfigs = sourceConfigs;
-		ATNConfigSet intermediate = new ATNConfigSet(intermediateHint);
-		while (true) {
-			for (ATNConfig config : currentConfigs) {
-				closure(config, configs, intermediate, closureBusy, false, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
-			}
-
-			if (intermediate.isEmpty()) {
-				break;
-			}
-
-			// Double-buffer intermediate layers: reuse the previous current set
-			// as the next intermediate buffer instead of allocating every layer.
-			if (currentConfigs == sourceConfigs) {
-				currentConfigs = intermediate;
-				intermediate = new ATNConfigSet(Math.max(16, currentConfigs.size()));
-			}
-			else {
-				ATNConfigSet nextCurrent = intermediate;
-				currentConfigs.clear();
-				intermediate = currentConfigs;
-				currentConfigs = nextCurrent;
-			}
-		}
+		epsilonClosure.close(sourceConfigs, configs, collectPredicates, hasMoreContext, contextCache, treatEofAsEpsilon);
 	}
 
 	/**
@@ -1776,10 +1745,8 @@ public class ParserATNSimulator extends ATNSimulator {
 	 * {@code configs} and optionally deferring rule transitions to
 	 * {@code intermediate} for breadth-first processing.
 	 *
-	 * <p>
-	 * PERF: Locals are used for repeatedly accessed state/context fields, and
-	 * transition discrimination uses {@link Transition#getSerializationType()}
-	 * rather than a chain of {@code instanceof} checks.</p>
+	 * <p>Default implementation delegates to {@link EpsilonClosure}. Subclasses
+	 * may override to customize edge walking.</p>
 	 */
 	protected void closure(@NotNull ATNConfig config,
 						   @NotNull ATNConfigSet configs,
@@ -1791,176 +1758,7 @@ public class ParserATNSimulator extends ATNSimulator {
 						   int depth,
 						   boolean treatEofAsEpsilon)
 	{
-		/*if ( debug ) System.out.println("closure("+config.toString(parser,true)+")");*/
-
-		// Capture context once. After a RuleStopState transform, config may
-		// reference EMPTY_LOCAL while this still holds the original context used
-		// for precedence suppression and tail-call decisions (existing semantics).
-		final PredictionContext predictionContext = config.getContext();
-		ATNState configState = config.getState();
-		if ( configState instanceof RuleStopState ) {
-			// We hit rule end. If we have context info, use it
-			if ( !predictionContext.isEmpty() ) {
-				boolean hasEmpty = predictionContext.hasEmpty();
-				int nonEmptySize = predictionContext.size() - (hasEmpty ? 1 : 0);
-				final int alt = config.getAlt();
-				final SemanticContext semanticContext = config.getSemanticContext();
-				final int outerContextDepth = config.getOuterContextDepth();
-				final boolean precedenceFilterSuppressed = config.isPrecedenceFilterSuppressed();
-				for (int i = 0; i < nonEmptySize; i++) {
-					PredictionContext newContext = predictionContext.getParent(i); // "pop" return state
-					ATNState returnState = atn.states.get(predictionContext.getReturnState(i));
-					ATNConfig c = ATNConfig.create(returnState, alt, newContext, semanticContext);
-					// While we have context to pop back from, we may have
-					// gotten that context AFTER having fallen off a rule.
-					// Make sure we track that we are now out of context.
-					c.setOuterContextDepth(outerContextDepth);
-					c.setPrecedenceFilterSuppressed(precedenceFilterSuppressed);
-					assert depth > Integer.MIN_VALUE;
-					closure(c, configs, intermediate, closureBusy, collectPredicates, hasMoreContexts, contextCache, depth - 1, treatEofAsEpsilon);
-				}
-
-				if (!hasEmpty || !hasMoreContexts) {
-					return;
-				}
-
-				config = config.transform(configState, PredictionContext.EMPTY_LOCAL, false);
-				configState = config.getState();
-			}
-			else if (!hasMoreContexts) {
-				configs.add(config, contextCache);
-				return;
-			}
-			else {
-				// else if we have no context info, just chase follow links (if greedy)
-				/*if ( debug ) System.out.println("FALLING off rule "+
-												getRuleName(configState.ruleIndex));*/
-
-				if (predictionContext == PredictionContext.EMPTY_FULL) {
-					// no need to keep full context overhead when we step out
-					config = config.transform(configState, PredictionContext.EMPTY_LOCAL, false);
-					configState = config.getState();
-				}
-				else if (!config.getReachesIntoOuterContext() && PredictionContext.isEmptyLocal(predictionContext)) {
-					// add stop state when leaving decision rule for the first time
-					configs.add(config, contextCache);
-				}
-			}
-		}
-
-		final ATNState p = configState;
-		// optimization
-		if ( !p.onlyHasEpsilonTransitions() ) {
-			configs.add(config, contextCache);
-			// make sure to not return here, because EOF transitions can act as
-			// both epsilon transitions and non-epsilon transitions.
-			/*if ( debug ) System.out.println("added config "+configs);*/
-		}
-
-		final int n = p.getNumberOfOptimizedTransitions();
-		final boolean inContext = depth == 0;
-		final boolean configAtRuleStop = p instanceof RuleStopState;
-		// Hoist precedence-DFA suppress check operands; the suppress block only
-		// applies to the first outgoing edge of a precedence star-loop entry.
-		final boolean maybeSuppressPrecedenceEdge = n > 0
-			&& p.getStateType() == ATNState.STAR_LOOP_ENTRY
-			&& ((StarLoopEntryState)p).precedenceRuleDecision
-			&& !predictionContext.hasEmpty();
-
-		for (int i = 0; i < n; i++) {
-			// This block implements first-edge elimination of ambiguous LR
-			// alternatives as part of dynamic disambiguation during prediction.
-			// See antlr/antlr4#1398.
-			if (i == 0 && maybeSuppressPrecedenceEdge) {
-				StarLoopEntryState precedenceDecision = (StarLoopEntryState)p;
-
-				// When suppress is true, it means the outgoing edge i==0 is
-				// ambiguous with the outgoing edge i==1, and thus the closure
-				// operation can dynamically disambiguate by suppressing this
-				// edge during the closure operation.
-				boolean suppress = true;
-				for (int j = 0, predictionContextSize = predictionContext.size(); j < predictionContextSize; j++) {
-					if (!precedenceDecision.precedenceLoopbackStates.get(predictionContext.getReturnState(j))) {
-						suppress = false;
-						break;
-					}
-				}
-
-				if (suppress) {
-					continue;
-				}
-			}
-
-			Transition t = p.getOptimizedTransition(i);
-			final int transitionType = t.getSerializationType();
-			boolean continueCollecting =
-				transitionType != Transition.ACTION && collectPredicates;
-			ATNConfig c = getEpsilonTarget(config, t, continueCollecting, inContext, contextCache, treatEofAsEpsilon);
-			if ( c!=null ) {
-				if (transitionType == Transition.RULE) {
-					if (intermediate != null && !collectPredicates) {
-						intermediate.add(c, contextCache);
-						continue;
-					}
-				}
-
-				int newDepth = depth;
-				if ( configAtRuleStop ) {
-					// target fell off end of rule; mark resulting c as having dipped into outer context
-					// We can't get here if incoming config was rule stop and we had context
-					// track how far we dip into outer context.  Might
-					// come in handy and we avoid evaluating context dependent
-					// preds if this is > 0.
-
-					if (dfa != null && dfa.isPrecedenceDfa()) {
-						int outermostPrecedenceReturn = ((EpsilonTransition)t).outermostPrecedenceReturn();
-						if (outermostPrecedenceReturn == dfa.atnStartState.ruleIndex) {
-							c.setPrecedenceFilterSuppressed(true);
-						}
-					}
-
-					c.setOuterContextDepth(c.getOuterContextDepth() + 1);
-
-					if (!closureBusy.add(c)) {
-						// avoid infinite recursion for right-recursive rules
-						continue;
-					}
-
-					assert newDepth > Integer.MIN_VALUE;
-					newDepth--;
-					/*if ( debug ) System.out.println("dips into outer ctx: "+c);*/
-				}
-				else if (transitionType == Transition.RULE) {
-					RuleTransition ruleTransition = (RuleTransition)t;
-					if (optimize_tail_calls && ruleTransition.optimizedTailCall && (!tail_call_preserves_sll || !PredictionContext.isEmptyLocal(predictionContext))) {
-						assert c.getContext() == predictionContext;
-						if (newDepth == 0) {
-							// the pop/push of a tail call would keep the depth
-							// constant, except we latch if it goes negative
-							newDepth--;
-							if (!tail_call_preserves_sll && PredictionContext.isEmptyLocal(predictionContext)) {
-								// make sure the SLL config "dips into the outer context" or prediction may not fall back to LL on conflict
-								c.setOuterContextDepth(c.getOuterContextDepth() + 1);
-							}
-						}
-					}
-					else {
-						// latch when newDepth goes negative - once we step out of the entry context we can't return
-						if (newDepth >= 0) {
-							newDepth++;
-						}
-					}
-				}
-				else {
-					if (!t.isEpsilon() && !closureBusy.add(c)) {
-						// avoid infinite recursion for EOF* and EOF+
-						continue;
-					}
-				}
-
-				closure(c, configs, intermediate, closureBusy, continueCollecting, hasMoreContexts, contextCache, newDepth, treatEofAsEpsilon);
-			}
-		}
+		epsilonClosure.closeOne(config, configs, intermediate, closureBusy, collectPredicates, hasMoreContexts, contextCache, depth, treatEofAsEpsilon);
 	}
 
 	@NotNull

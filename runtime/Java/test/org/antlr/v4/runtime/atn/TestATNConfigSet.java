@@ -49,7 +49,8 @@ public class TestATNConfigSet {
 	@Test
 	public void smallCapacityHintStillSupportsGrowth() {
 		// Small expected-size hints must not prevent expansion during closure-like
-		// fan-out; HashMap capacity is floored so rehash cost stays reasonable.
+		// fan-out; the primitive merge-map expected size is floored so rehash cost
+		// stays reasonable.
 		ATNConfigSet set = new ATNConfigSet(1);
 		PredictionContextCache cache = new PredictionContextCache();
 		for (int i = 0; i < 64; i++) {
@@ -58,6 +59,66 @@ public class TestATNConfigSet {
 			assertTrue(set.add(ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL), cache));
 		}
 		assertEquals(64, set.size());
+	}
+
+	@Test
+	public void primitiveMergeMapHandlesZeroStateAndAltKey() {
+		// HPPC treats primitive key 0 specially; ensure (state=0, alt=0) still
+		// merges and looks up correctly through getKey packing.
+		ATNConfigSet set = new ATNConfigSet(4);
+		PredictionContextCache cache = new PredictionContextCache();
+
+		BasicState state = new BasicState();
+		state.stateNumber = 0;
+
+		PredictionContext ctx1 = cache.getChild(PredictionContext.EMPTY_LOCAL, 1);
+		PredictionContext ctx2 = cache.getChild(PredictionContext.EMPTY_LOCAL, 2);
+
+		ATNConfig c1 = ATNConfig.create(state, 0, ctx1);
+		ATNConfig c2 = ATNConfig.create(state, 0, ctx2);
+
+		assertTrue(set.add(c1, cache));
+		assertTrue(set.add(c2, cache));
+		assertEquals(1, set.size());
+		assertTrue(set.contains(c1));
+		assertTrue(set.contains(c2));
+	}
+
+	@Test
+	public void removeUpdatesPrimitiveMergeMap() {
+		ATNConfigSet set = new ATNConfigSet(4);
+		BasicState s0 = new BasicState();
+		s0.stateNumber = 0;
+		BasicState s1 = new BasicState();
+		s1.stateNumber = 1;
+
+		ATNConfig c0 = ATNConfig.create(s0, 1, PredictionContext.EMPTY_LOCAL);
+		ATNConfig c1 = ATNConfig.create(s1, 2, PredictionContext.EMPTY_LOCAL);
+		set.add(c0);
+		set.add(c1);
+		assertEquals(2, set.size());
+
+		set.remove(0);
+		assertEquals(1, set.size());
+		assertFalse(set.contains(c0));
+		assertTrue(set.contains(c1));
+
+		// Re-adding after remove must succeed (merge index entry was cleared).
+		assertTrue(set.add(c0));
+		assertEquals(2, set.size());
+	}
+
+	@Test
+	public void distinctStateAltPairsDoNotCollideInMergeMap() {
+		ATNConfigSet set = new ATNConfigSet(8);
+		for (int stateNumber = 0; stateNumber < 8; stateNumber++) {
+			for (int alt = 1; alt <= 4; alt++) {
+				BasicState state = new BasicState();
+				state.stateNumber = stateNumber;
+				assertTrue(set.add(ATNConfig.create(state, alt, PredictionContext.EMPTY_LOCAL)));
+			}
+		}
+		assertEquals(32, set.size());
 	}
 
 	@Test
