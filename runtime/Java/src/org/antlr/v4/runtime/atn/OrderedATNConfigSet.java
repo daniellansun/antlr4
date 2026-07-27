@@ -7,12 +7,30 @@
 package org.antlr.v4.runtime.atn;
 
 /**
+ * Lexer configuration set that merges configs only when they are fully equal
+ * (including prediction context and lexer actions), preserving first-match
+ * preference order among alternatives.
+ *
+ * <p>PERF: The merge index keys configs by {@link ATNConfig#hashCode()}, which
+ * is cached on {@link ATNConfig} after the first computation. Capacity-aware
+ * construction reduces rehashing during lexer reach/closure fan-out.</p>
  *
  * @author Sam Harwell
  */
 public class OrderedATNConfigSet extends ATNConfigSet {
 
 	public OrderedATNConfigSet() {
+	}
+
+	/**
+	 * Constructs an empty, writable ordered config set with the given capacity
+	 * hint for primary storage. See {@link ATNConfigSet#ATNConfigSet(int)}.
+	 *
+	 * @param expectedSize expected number of configurations, or {@code <= 0}
+	 * for the default map/list capacities
+	 */
+	public OrderedATNConfigSet(int expectedSize) {
+		super(expectedSize);
 	}
 
 	public OrderedATNConfigSet(ATNConfigSet set, boolean readonly) {

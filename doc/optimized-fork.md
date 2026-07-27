@@ -125,23 +125,103 @@ The optimized fork uses several `ATNConfig` classes to reduce the size of the DF
 
 **Reason for exclusion:** Additional dependency (mitigated by shading)
 
-Writable `ATNConfigSet` instances index merged configurations by a packed
-`(state, alt)` `long` key. The optimized fork stores that index in HPPC's
-`LongObjectHashMap` so add/merge during ATN closure and reach avoids
-`Long` boxing on every lookup. Precedence filtering uses `IntObjectHashMap`
-for state-number keys. Cold paths (for example ATN deserialization) keep
-standard JDK maps so the dependency stays justified by hot-path wins only.
+Hot prediction paths store primitive keys in HPPC maps/sets instead of boxed
+JDK collections:
 
-Epsilon closure orchestration (busy-set sizing, predicate vs BFS control,
-double-buffered intermediate layers) lives in package-private
-`EpsilonClosure` so `ParserATNSimulator` does not keep absorbing allocation
-policy.
+| Structure | Type | Role |
+| --- | --- | --- |
+| `ATNConfigSet` merge index | `LongObjectHashMap` | packed `(state, alt)` → config; no `Long` boxing |
+| Precedence filter | `IntObjectHashMap` | state number → alt-1 context |
+| Epsilon-closure busy set | `ObjectHashSet` | right-recursion / EOF* guards; no `HashMap.Node` |
 
-HPPC is relocated at package time into
-`org.antlr.v4.runtime.shaded.com.carrotsearch.hppc` (minimize + shade) so the
-published runtime artifact remains self-contained and does not clash with a
-consumer's own HPPC dependency. The runtime targets Java 8; the last HPPC
-release that ships Java 8 bytecode is used for that reason.
+`ATNConfigSet.add` / `contains` use `indexOf` / `indexGet` / `indexInsert` so
+each long key is hashed once per operation (not a separate `get` then `put`).
+Busy sets still key by `ATNConfig.hashCode()` / `equals` (see hash cache below).
+Cold paths (for example ATN deserialization) keep JDK maps.
+
+Epsilon-closure orchestration (busy set, predicate vs BFS control, double-
+buffered intermediate layers) lives in package-private `EpsilonClosure` so
+`ParserATNSimulator` stays orchestration-focused.
+
+HPPC is shaded into `org.antlr.v4.runtime.shaded.com.carrotsearch.hppc` at
+package time (Java 8–compatible HPPC release). The published runtime is
+self-contained and does not clash with a consumer's own HPPC.
+
+### ATN hot-path package (parser + lexer simulation)
+
+**Reason for exclusion:** Implementation complexity
+
+When a DFA edge is missing, the simulator runs ATN *reach* + *epsilon closure*
+to build the next DFA state. That path used to allocate many short-lived
+config sets, recompute MurmurHash repeatedly, and pay virtual dispatch on
+edges that cannot contribute to closure. The optimized fork packages several
+related fixes so prediction and lexing do less work per symbol.
+
+All retained buffers assume **one thread owns one simulator** for the duration
+of `adaptivePredict` / `match` (the existing ANTLR threading model). Do not
+share a single simulator across concurrent predictions.
+
+#### Retained scratch buffers (`RetainedConfigSet`)
+
+| Owner | What is retained |
+| --- | --- |
+| `ParserATNSimulator` | reach + intermediate config sets for `computeTargetState` |
+| `LexerATNSimulator` | ordered reach set for lexer `computeTargetState` |
+| `EpsilonClosure` | busy set + BFS intermediate buffers |
+
+Contract: `obtain(n)` always returns an **empty** writable set; `release()` in
+`finally` drops config-graph references but keeps list/map capacity. DFA
+states always store a readonly `clone`, never the reusable buffer. Capacity
+hints go through `ATNConfigSet.scratchCapacity`.
+
+`ATNConfigSet.clear()` also resets `outermostConfigSet`, so a retained set
+cannot leave a sticky outermost flag that would break later edges.
+
+#### `ATNConfig.hashCode` cache
+
+`hashCode()` is computed once (MurmurHash) and cached. Cache is invalidated
+when hash-participating fields change (`context`, or the
+reaches-into-outer-context flag). Zero is reserved as "uncomputed"; a raw
+hash of zero is stored as `1`.
+
+Why it matters:
+
+* lexer `OrderedATNConfigSet` keys configs by `hashCode()`
+* closure busy sets hash configs on right-recursion / EOF* guards
+* DFA state lookup hashes entire config sets
+
+#### Lazy full-context config view (`ReachConfigSource`)
+
+`computeTargetState` walks source configs via a retained `ReachConfigSource`:
+
+1. **SLL / common case:** zero-copy view over `s.configs` (`size` / `get` only).
+2. **Full-context step-out:** first `appendContext` materializes a mutable
+   list once; later appends reuse that list; capacity is kept across edges
+   via `reset` / `release`.
+
+SLL never allocates the rewrite list. Unique-closure and normal reach both
+finish through `finishTargetEdge` (no nullable edge-result sentinel).
+
+#### Early non-epsilon skip in closure
+
+When EOF is not treated as epsilon, both parser (`EpsilonClosure`) and lexer
+(`LexerATNSimulator.closure`) skip non-epsilon optimized transitions before
+`getEpsilonTarget`. Pure consume edges cannot contribute to epsilon closure.
+
+#### Index-based config walks
+
+Hot loops walk `ATNConfigSet` by index (`get(i)`) instead of enhanced-for
+iterators, avoiding `Iterator` allocation on reach, closure BFS layers, and
+related paths.
+
+#### API note (subclasses)
+
+The recursive protected
+`ParserATNSimulator.closure(ATNConfig, ..., ObjectHashSet<ATNConfig>, ...)`
+entry point takes HPPC `ObjectHashSet` for the busy set (not `java.util.Set`).
+In the published jar the type is shaded under
+`org.antlr.v4.runtime.shaded.com.carrotsearch.hppc`. Treat this as an
+optimized-fork SPI, not a stable cross-release contract.
 
 ### Prediction context optimization
 

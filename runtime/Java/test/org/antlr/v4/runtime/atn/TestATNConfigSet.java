@@ -109,6 +109,35 @@ public class TestATNConfigSet {
 	}
 
 	@Test
+	public void removeUnmergedOverflowEntryKeepsMergedSibling() {
+		// Two configs share (state, alt) but differ in semantic context: first
+		// occupies the merge map, second lives in unmerged. Removing the
+		// unmerged entry must not drop the merged map entry (indexRemove path).
+		ATNConfigSet set = new ATNConfigSet(4);
+		BasicState state = new BasicState();
+		state.stateNumber = 0;
+
+		SemanticContext.Predicate pred0 = new SemanticContext.Predicate(0, 0, false);
+		SemanticContext.Predicate pred1 = new SemanticContext.Predicate(0, 1, false);
+		ATNConfig merged = ATNConfig.create(state, 0, PredictionContext.EMPTY_LOCAL, pred0);
+		ATNConfig overflow = ATNConfig.create(state, 0, PredictionContext.EMPTY_LOCAL, pred1);
+
+		assertTrue(set.add(merged));
+		assertTrue(set.add(overflow));
+		assertEquals(2, set.size());
+
+		// overflow is at index 1
+		set.remove(1);
+		assertEquals(1, set.size());
+		assertTrue(set.contains(merged));
+		assertFalse(set.contains(overflow));
+
+		// Re-add overflow after remove.
+		assertTrue(set.add(overflow));
+		assertEquals(2, set.size());
+	}
+
+	@Test
 	public void distinctStateAltPairsDoNotCollideInMergeMap() {
 		ATNConfigSet set = new ATNConfigSet(8);
 		for (int stateNumber = 0; stateNumber < 8; stateNumber++) {
@@ -140,6 +169,49 @@ public class TestATNConfigSet {
 		assertEquals(2, buffer.getUniqueAlt());
 	}
 
+	/**
+	 * Retained scratch reuses config sets across predictions. clear() must
+	 * drop outermostConfigSet so a later edge can add outer-context configs
+	 * without tripping add/setOutermost asserts (CI regression).
+	 */
+	@Test
+	public void clearResetsOutermostConfigSetForScratchReuse() {
+		ATNConfigSet set = new ATNConfigSet(4);
+		BasicState state = new BasicState();
+		state.stateNumber = 0;
+		ATNConfig local = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL);
+		set.add(local);
+		set.setOutermostConfigSet(true);
+		assertTrue(set.isOutermostConfigSet());
+
+		set.clear();
+		assertFalse(set.isOutermostConfigSet());
+
+		// Config that reaches into outer context must be addable after clear.
+		ATNConfig outer = ATNConfig.create(state, 2, PredictionContext.EMPTY_FULL);
+		outer.setOuterContextDepth(1);
+		assertTrue(set.add(outer));
+		assertTrue(set.getDipsIntoOuterContext());
+	}
+
+	@Test
+	public void retainedConfigSetObtainClearsOutermostBetweenEdges() {
+		RetainedConfigSet retained = new RetainedConfigSet(false);
+		ATNConfigSet first = retained.obtain(4);
+		BasicState state = new BasicState();
+		state.stateNumber = 1;
+		first.add(ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL));
+		first.setOutermostConfigSet(true);
+		retained.release();
+
+		ATNConfigSet second = retained.obtain(4);
+		assertSame(first, second);
+		assertFalse(second.isOutermostConfigSet());
+		ATNConfig outer = ATNConfig.create(state, 1, PredictionContext.EMPTY_FULL);
+		outer.setOuterContextDepth(2);
+		assertTrue(second.add(outer));
+	}
+
 	@Test
 	public void addMergesSameStateAndAlt() {
 		ATNConfigSet set = new ATNConfigSet(4);
@@ -161,6 +233,47 @@ public class TestATNConfigSet {
 
 		PredictionContext joined = set.get(0).getContext();
 		assertEquals(2, joined.size());
+	}
+
+	@Test
+	public void unmergedPathForSameStateAltDifferentSemanticContext() {
+		// Same (state, alt) key with different semantic contexts must not merge
+		// into one entry; the overflow (unmerged) list holds the second config.
+		// Exercises indexOf hit + canMerge miss + unmerged insert.
+		ATNConfigSet set = new ATNConfigSet(4);
+		BasicState state = new BasicState();
+		state.stateNumber = 8;
+
+		SemanticContext.Predicate pred0 = new SemanticContext.Predicate(0, 0, false);
+		SemanticContext.Predicate pred1 = new SemanticContext.Predicate(0, 1, false);
+
+		ATNConfig c0 = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL, pred0);
+		ATNConfig c1 = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL, pred1);
+
+		assertTrue(set.add(c0));
+		assertTrue(set.add(c1));
+		assertEquals(2, set.size());
+		assertTrue(set.contains(c0));
+		assertTrue(set.contains(c1));
+	}
+
+	@Test
+	public void containsOnReadonlySetScansConfigs() {
+		ATNConfigSet set = new ATNConfigSet(4);
+		BasicState state = new BasicState();
+		state.stateNumber = 2;
+		ATNConfig config = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL);
+		set.add(config);
+
+		ATNConfigSet readonly = set.clone(true);
+		assertTrue(readonly.isReadOnly());
+		assertTrue(readonly.contains(config));
+		assertTrue(readonly.contains(ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL)));
+
+		BasicState other = new BasicState();
+		other.stateNumber = 99;
+		assertFalse(readonly.contains(ATNConfig.create(other, 1, PredictionContext.EMPTY_LOCAL)));
+		assertFalse(readonly.contains("not-a-config"));
 	}
 
 	@Test

@@ -91,6 +91,20 @@ public class ATNConfig {
 	@NotNull
 	private PredictionContext context;
 
+	/**
+	 * Lazily cached {@link #hashCode} result. Zero means "not yet computed"
+	 * (or invalidated after a mutable field change). The hash algorithm is
+	 * biased away from zero when the raw MurmurHash finishes at zero so a
+	 * legitimate hash of zero cannot thrash the cache sentinel.
+	 *
+	 * <p>PERF: Lexer {@link OrderedATNConfigSet} keys configs by
+	 * {@code hashCode()}, parser epsilon-closure busy sets hash configs on
+	 * every right-recursion / EOF* guard, and DFA state lookup hashes entire
+	 * config sets. Caching avoids repeating MurmurHash over the same
+	 * immutable-after-first-use field set on these hot paths.</p>
+	 */
+	private int cachedHashCode;
+
 	protected ATNConfig(@NotNull ATNState state,
 						int alt,
 						@NotNull PredictionContext context)
@@ -106,6 +120,7 @@ public class ATNConfig {
 		this.state = state;
 		this.altAndOuterContextDepth = c.altAndOuterContextDepth;
 		this.context = context;
+		// state/context usually differ from {@code c}; do not copy its hash.
 	}
 
 	public static ATNConfig create(@NotNull ATNState state, int alt, @Nullable PredictionContext context) {
@@ -150,7 +165,11 @@ public class ATNConfig {
 	}
 
 	public void setContext(@NotNull PredictionContext context) {
-		this.context = context;
+		if (this.context != context) {
+			this.context = context;
+			// Context is part of {@link #hashCode}; drop the cache.
+			cachedHashCode = 0;
+		}
 	}
 
 	public final boolean getReachesIntoOuterContext() {
@@ -177,7 +196,12 @@ public class ATNConfig {
 		assert outerContextDepth >= 0;
 		// saturate at 0x7F - everything but zero/positive is only used for debug information anyway
 		outerContextDepth = Math.min(outerContextDepth, 0x7F);
+		// hashCode only samples reaches-into-outer (depth != 0), not the full depth.
+		boolean wasReaching = getReachesIntoOuterContext();
 		this.altAndOuterContextDepth = (outerContextDepth << 24) | (altAndOuterContextDepth & ~0x7F000000);
+		if (wasReaching != getReachesIntoOuterContext()) {
+			cachedHashCode = 0;
+		}
 	}
 
 	@Nullable
@@ -377,17 +401,25 @@ public class ATNConfig {
 
 	@Override
 	public int hashCode() {
-		int hashCode = MurmurHash.initialize(7);
-		hashCode = MurmurHash.update(hashCode, getState().stateNumber);
-		hashCode = MurmurHash.update(hashCode, getAlt());
-		hashCode = MurmurHash.update(hashCode, getReachesIntoOuterContext() ? 1 : 0);
-		hashCode = MurmurHash.update(hashCode, getContext());
-		hashCode = MurmurHash.update(hashCode, getSemanticContext());
-		hashCode = MurmurHash.update(hashCode, hasPassedThroughNonGreedyDecision() ? 1 : 0);
-		hashCode = MurmurHash.update(hashCode, getLexerActionExecutor());
-		hashCode = MurmurHash.finish(hashCode, 7);
-        return hashCode;
-    }
+		int h = cachedHashCode;
+		if (h == 0) {
+			h = MurmurHash.initialize(7);
+			h = MurmurHash.update(h, getState().stateNumber);
+			h = MurmurHash.update(h, getAlt());
+			h = MurmurHash.update(h, getReachesIntoOuterContext() ? 1 : 0);
+			h = MurmurHash.update(h, getContext());
+			h = MurmurHash.update(h, getSemanticContext());
+			h = MurmurHash.update(h, hasPassedThroughNonGreedyDecision() ? 1 : 0);
+			h = MurmurHash.update(h, getLexerActionExecutor());
+			h = MurmurHash.finish(h, 7);
+			// Preserve zero as the "uncomputed" sentinel: map a raw zero hash to 1.
+			if (h == 0) {
+				h = 1;
+			}
+			cachedHashCode = h;
+		}
+		return h;
+	}
 
 	/**
 	 * Returns a graphical representation of the current {@link ATNConfig} in
