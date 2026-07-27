@@ -41,4 +41,8 @@ jobs:
         run: mvn test -Dantlr.testinprocess=true -DJDK_SOURCE_ROOT=../runtime/Java/src -Dperformance.package=
         timeout-minutes: 60
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          verbose: true
+
