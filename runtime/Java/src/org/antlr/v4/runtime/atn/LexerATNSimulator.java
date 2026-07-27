@@ -18,7 +18,17 @@ import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
 
-/** "dup" of ParserInterpreter */
+/**
+ * ATN interpreter for lexers. Builds and consults a per-mode DFA cache while
+ * falling back to ATN simulation for unseen edges.
+ *
+ * <p>PERF: Reach config sets are retained on the simulator and cleared between
+ * edge computations so the common DFA-fill path avoids per-character
+ * {@link OrderedATNConfigSet} allocation. A single lexer (and its simulator)
+ * is not used concurrently for matching, so reuse is safe. Stored DFA states
+ * always receive a readonly {@link ATNConfigSet#clone(boolean)} of the reach
+ * set, never the reusable buffer itself.</p>
+ */
 public class LexerATNSimulator extends ATNSimulator {
 
 	public static final boolean debug = false;
@@ -79,6 +89,13 @@ public class LexerATNSimulator extends ATNSimulator {
 	/** Used during DFA/ATN exec to record the most recent accept configuration info */
 	@NotNull
 	protected final SimState prevAccept = new SimState();
+
+	/**
+	 * Retained reach set for {@link #computeTargetState}.
+	 * {@link RetainedConfigSet#obtain(int)} always returns empty;
+	 * {@link RetainedConfigSet#release()} runs in {@code finally} after each edge.
+	 */
+	private final RetainedConfigSet retainedReach = new RetainedConfigSet(true);
 
 	/** @deprecated This field is no longer used. */
 	@Deprecated
@@ -263,25 +280,39 @@ public class LexerATNSimulator extends ATNSimulator {
 	 */
 	@NotNull
 	protected DFAState computeTargetState(@NotNull CharStream input, @NotNull DFAState s, int t) {
-		ATNConfigSet reach = new OrderedATNConfigSet();
+		// obtain() always empty; release() after addDFAState clones into the DFA.
+		ATNConfigSet reach = retainedReach.obtain(s.configs.size());
+		try {
+			// if we don't find an existing DFA state
+			// Fill reach starting from closure, following t transitions
+			getReachableConfigSet(input, s.configs, reach, t);
 
-		// if we don't find an existing DFA state
-		// Fill reach starting from closure, following t transitions
-		getReachableConfigSet(input, s.configs, reach, t);
+			if ( reach.isEmpty() ) { // we got nowhere on t from s
+				if (!reach.hasSemanticContext()) {
+					// we got nowhere on t, don't throw out this knowledge; it'd
+					// cause a failover from DFA later.
+					addDFAEdge(s, t, ERROR);
+				}
 
-		if ( reach.isEmpty() ) { // we got nowhere on t from s
-			if (!reach.hasSemanticContext()) {
-				// we got nowhere on t, don't throw out this knowledge; it'd
-				// cause a failover from DFA later.
-				addDFAEdge(s, t, ERROR);
+				// stop when we can't match any more char
+				return ERROR;
 			}
 
-			// stop when we can't match any more char
-			return ERROR;
+			// Add an edge from s to target DFA found/created for reach
+			return addDFAEdge(s, t, reach);
 		}
+		finally {
+			retainedReach.release();
+		}
+	}
 
-		// Add an edge from s to target DFA found/created for reach
-		return addDFAEdge(s, t, reach);
+	/**
+	 * Underlying retained reach buffer after first {@link #computeTargetState},
+	 * else {@code null}. Same-package tests may observe identity and emptiness.
+	 */
+	@Nullable
+	final ATNConfigSet retainedReachBuffer() {
+		return retainedReach.buffer();
 	}
 
 	protected int failOrAccept(SimState prevAccept, CharStream input,
@@ -311,7 +342,9 @@ public class LexerATNSimulator extends ATNSimulator {
 		// this is used to skip processing for configs which have a lower priority
 		// than a config that already reached an accept state for the same rule
 		int skipAlt = ATN.INVALID_ALT_NUMBER;
-		for (ATNConfig c : closure) {
+		// Index walk avoids Iterator allocation on the (often retained) closure set.
+		for (int ci = 0, cn = closure.size(); ci < cn; ci++) {
+			ATNConfig c = closure.get(ci);
 			boolean currentAltReachedAcceptState = c.getAlt() == skipAlt;
 			if (currentAltReachedAcceptState && c.hasPassedThroughNonGreedyDecision()) {
 				continue;
@@ -374,8 +407,10 @@ public class LexerATNSimulator extends ATNSimulator {
 											 @NotNull ATNState p)
 	{
 		PredictionContext initialContext = PredictionContext.EMPTY_FULL;
-		ATNConfigSet configs = new OrderedATNConfigSet();
-		for (int i=0; i<p.getNumberOfTransitions(); i++) {
+		// Capacity hint from the mode start state's fan-out (shared scratch policy).
+		int transitionCount = p.getNumberOfTransitions();
+		ATNConfigSet configs = new OrderedATNConfigSet(ATNConfigSet.scratchCapacity(transitionCount));
+		for (int i=0; i<transitionCount; i++) {
 			ATNState target = p.transition(i).target;
 			ATNConfig c = ATNConfig.create(target, i+1, initialContext);
 			closure(input, c, configs, false, false, false);
@@ -441,8 +476,13 @@ public class LexerATNSimulator extends ATNSimulator {
 			}
 		}
 
-        for (int i = 0, n = configState.getNumberOfOptimizedTransitions(); i < n; i++) {
+		for (int i = 0, n = configState.getNumberOfOptimizedTransitions(); i < n; i++) {
 			Transition t = configState.getOptimizedTransition(i);
+			// PERF: Non-epsilon edges never produce a closure target unless EOF
+			// is being treated as epsilon (atom/range/set that matches EOF).
+			if (!treatEofAsEpsilon && !t.isEpsilon()) {
+				continue;
+			}
 			ATNConfig c = getEpsilonTarget(input, config, t, configs, speculative, treatEofAsEpsilon);
 			if ( c!=null ) {
 				currentAltReachedAcceptState = closure(input, c, configs, currentAltReachedAcceptState, speculative, treatEofAsEpsilon);
@@ -461,23 +501,39 @@ public class LexerATNSimulator extends ATNSimulator {
 									  boolean speculative,
 									  boolean treatEofAsEpsilon)
 	{
-		ATNConfig c;
-
+		// PERF: Ordered with the most common epsilon edge types first
+		// (EPSILON, RULE, ACTION) so the interpreter/JIT keeps those paths hot.
 		switch (t.getSerializationType()) {
+		case Transition.EPSILON:
+			return config.transform(t.target, true);
+
 		case Transition.RULE:
 			RuleTransition ruleTransition = (RuleTransition)t;
 			if (optimize_tail_calls && ruleTransition.optimizedTailCall && !config.getContext().hasEmpty()) {
-				c = config.transform(t.target, true);
+				return config.transform(t.target, true);
 			}
-			else {
-				PredictionContext newContext = config.getContext().getChild(ruleTransition.followState.stateNumber);
-				c = config.transform(t.target, newContext, true);
+			PredictionContext newContext = config.getContext().getChild(ruleTransition.followState.stateNumber);
+			return config.transform(t.target, newContext, true);
+
+		case Transition.ACTION:
+			if (config.getContext().hasEmpty()) {
+				// execute actions anywhere in the start rule for a token.
+				//
+				// TODO: if the entry rule is invoked recursively, some
+				// actions may be executed during the recursive call. The
+				// problem can appear when hasEmpty() is true but
+				// isEmpty() is false. In this case, the config needs to be
+				// split into two contexts - one with just the empty path
+				// and another with everything but the empty path.
+				// Unfortunately, the current algorithm does not allow
+				// getEpsilonTarget to return two configurations, so
+				// additional modifications are needed before we can support
+				// the split operation.
+				LexerActionExecutor lexerActionExecutor = LexerActionExecutor.append(config.getLexerActionExecutor(), atn.lexerActions[((ActionTransition)t).actionIndex]);
+				return config.transform(t.target, lexerActionExecutor, true);
 			}
-
-			break;
-
-		case Transition.PRECEDENCE:
-			throw new UnsupportedOperationException("Precedence predicates are not supported in lexers.");
+			// ignore actions in referenced rules
+			return config.transform(t.target, true);
 
 		case Transition.PREDICATE:
 			/*  Track traversing semantic predicates. If we traverse,
@@ -504,61 +560,26 @@ public class LexerATNSimulator extends ATNSimulator {
 			}*/
 			configs.markExplicitSemanticContext();
 			if (evaluatePredicate(input, pt.ruleIndex, pt.predIndex, speculative)) {
-				c = config.transform(t.target, true);
+				return config.transform(t.target, true);
 			}
-			else {
-				c = null;
-			}
-
-			break;
-
-		case Transition.ACTION:
-			if (config.getContext().hasEmpty()) {
-				// execute actions anywhere in the start rule for a token.
-				//
-				// TODO: if the entry rule is invoked recursively, some
-				// actions may be executed during the recursive call. The
-				// problem can appear when hasEmpty() is true but
-				// isEmpty() is false. In this case, the config needs to be
-				// split into two contexts - one with just the empty path
-				// and another with everything but the empty path.
-				// Unfortunately, the current algorithm does not allow
-				// getEpsilonTarget to return two configurations, so
-				// additional modifications are needed before we can support
-				// the split operation.
-				LexerActionExecutor lexerActionExecutor = LexerActionExecutor.append(config.getLexerActionExecutor(), atn.lexerActions[((ActionTransition)t).actionIndex]);
-				c = config.transform(t.target, lexerActionExecutor, true);
-				break;
-			}
-			else {
-				// ignore actions in referenced rules
-				c = config.transform(t.target, true);
-				break;
-			}
-
-		case Transition.EPSILON:
-			c = config.transform(t.target, true);
-			break;
+			return null;
 
 		case Transition.ATOM:
 		case Transition.RANGE:
 		case Transition.SET:
 			if (treatEofAsEpsilon) {
 				if (t.matches(CharStream.EOF, Lexer.MIN_CHAR_VALUE, Lexer.MAX_CHAR_VALUE)) {
-					c = config.transform(t.target, false);
-					break;
+					return config.transform(t.target, false);
 				}
 			}
+			return null;
 
-			c = null;
-			break;
+		case Transition.PRECEDENCE:
+			throw new UnsupportedOperationException("Precedence predicates are not supported in lexers.");
 
 		default:
-			c = null;
-			break;
+			return null;
 		}
-
-		return c;
 	}
 
 	/**

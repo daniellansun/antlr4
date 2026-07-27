@@ -52,6 +52,31 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	private static final int MIN_MERGED_CONFIG_CAPACITY = 16;
 
 	/**
+	 * Capacity floor shared by hot-path scratch sets (lexer reach, parser
+	 * reach/intermediate, epsilon-closure BFS buffers).
+	 */
+	static final int SCRATCH_CAPACITY_FLOOR = 16;
+
+	/**
+	 * Converts a source config count into a scratch-buffer capacity hint used
+	 * when allocating or sizing retained {@link ATNConfigSet} instances on
+	 * prediction / lexing hot paths. Doubles the source size (with overflow
+	 * guard) and floors at {@link #SCRATCH_CAPACITY_FLOOR}.
+	 *
+	 * @param sourceSize number of configs in the source set, or {@code 0}
+	 * @return positive expected-element capacity for a writable config set
+	 */
+	static int scratchCapacity(int sourceSize) {
+		if (sourceSize <= 0) {
+			return SCRATCH_CAPACITY_FLOOR;
+		}
+		if (sourceSize < (Integer.MAX_VALUE >> 1)) {
+			return Math.max(SCRATCH_CAPACITY_FLOOR, sourceSize << 1);
+		}
+		return Integer.MAX_VALUE;
+	}
+
+	/**
 	 * This maps (state, alt) -> merged {@link ATNConfig}. The key does not account for
 	 * the {@link ATNConfig#getSemanticContext} of the value, which is only a problem if a single
 	 * {@code ATNConfigSet} contains two configs with the same state and alternative
@@ -63,7 +88,9 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	 * <p>
 	 * Implemented as a primitive {@link LongObjectHashMap} so {@link #getKey}
 	 * values are stored and looked up without {@link Long} boxing on the
-	 * prediction hot path.
+	 * prediction hot path. Hot {@link #add} / {@link #contains} use
+	 * {@code indexOf}/{@code indexGet}/{@code indexInsert} so a key is hashed
+	 * once per operation.
 	 */
 	private final LongObjectHashMap<ATNConfig> mergedConfigs;
 	/**
@@ -256,15 +283,28 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			return false;
 		}
 
-		ATNConfig config = (ATNConfig)o;
-		long configKey = getKey(config);
-		ATNConfig mergedConfig = mergedConfigs.get(configKey);
-		if (mergedConfig != null && canMerge(config, configKey, mergedConfig)) {
-			return mergedConfig.contains(config);
+		// Read-only DFA sets drop the merge index; fall back to linear scan.
+		if (mergedConfigs == null) {
+			for (int i = 0, n = configs.size(); i < n; i++) {
+				if (configs.get(i).contains((ATNConfig)o)) {
+					return true;
+				}
+			}
+			return false;
 		}
 
-		for (ATNConfig c : unmerged) {
-			if (c.contains(config)) {
+		ATNConfig config = (ATNConfig)o;
+		long configKey = getKey(config);
+		int mapIndex = mergedConfigs.indexOf(configKey);
+		if (mapIndex >= 0) {
+			ATNConfig mergedConfig = mergedConfigs.indexGet(mapIndex);
+			if (canMerge(config, configKey, mergedConfig)) {
+				return mergedConfig.contains(config);
+			}
+		}
+
+		for (int i = 0, n = unmerged.size(); i < n; i++) {
+			if (unmerged.get(i).contains(config)) {
 				return true;
 			}
 		}
@@ -300,11 +340,17 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			contextCache = PredictionContextCache.UNCACHED;
 		}
 
+		// PERF: Single probe via indexOf — avoids hashing the packed (state, alt)
+		// key twice on the common get-then-put path. indexInsert reuses the slot
+		// computed when the key was absent.
 		final long key = getKey(e);
-		ATNConfig mergedConfig = mergedConfigs.get(key);
-		boolean addKey = (mergedConfig == null);
-		if (mergedConfig != null && canMerge(e, key, mergedConfig)) {
-			return !mergeConfigContext(e, contextCache, mergedConfig);
+		final int mapIndex = mergedConfigs.indexOf(key);
+		final boolean addKey = mapIndex < 0;
+		if (!addKey) {
+			ATNConfig mergedConfig = mergedConfigs.indexGet(mapIndex);
+			if (canMerge(e, key, mergedConfig)) {
+				return !mergeConfigContext(e, contextCache, mergedConfig);
+			}
 		}
 
 		for (int i = 0, n = unmerged.size(); i < n; i++) {
@@ -312,7 +358,7 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			if (canMerge(e, key, unmergedConfig)) {
 				if (mergeConfigContext(e, contextCache, unmergedConfig)) return false;
 				if (addKey) {
-					mergedConfigs.put(key, unmergedConfig);
+					mergedConfigs.indexInsert(mapIndex, key, unmergedConfig);
 					unmerged.remove(i);
 				}
 				return true;
@@ -321,7 +367,7 @@ public class ATNConfigSet implements Set<ATNConfig> {
 
 		configs.add(e);
 		if (addKey) {
-			mergedConfigs.put(key, e);
+			mergedConfigs.indexInsert(mapIndex, key, e);
 		} else {
 			unmerged.add(e);
 		}
@@ -432,6 +478,14 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		throw new UnsupportedOperationException("Not supported yet.");
 	}
 
+	/**
+	 * Removes all configurations and resets working-set flags so the instance
+	 * can be reused as hot-path scratch (see {@link RetainedConfigSet}).
+	 *
+	 * <p>In particular {@link #outermostConfigSet} is cleared: retention across
+	 * predictions would otherwise leave a sticky outermost flag and trip
+	 * {@link #add} / {@link #setOutermostConfigSet} asserts on later edges.</p>
+	 */
 	@Override
 	public void clear() {
 		ensureWritable();
@@ -442,8 +496,11 @@ public class ATNConfigSet implements Set<ATNConfig> {
 
 		dipsIntoOuterContext = false;
 		hasSemanticContext = false;
+		outermostConfigSet = false;
 		uniqueAlt = ATN.INVALID_ALT_NUMBER;
 		conflictInfo = null;
+		// Writable sets do not cache hashCode; leave cachedHashCode alone for
+		// any future readonly path that might share logic.
 	}
 
 	@Override
@@ -574,12 +631,13 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		final ATNConfig config = configs.get(index);
 		configs.remove(config);
 		long key = getKey(config);
-		if (mergedConfigs.get(key) == config) {
-			mergedConfigs.remove(key);
+		int mapIndex = mergedConfigs.indexOf(key);
+		if (mapIndex >= 0 && mergedConfigs.indexGet(mapIndex) == config) {
+			mergedConfigs.indexRemove(mapIndex);
 		} else {
-			for (Iterator<ATNConfig> iterator = unmerged.iterator(); iterator.hasNext(); ) {
-				if (iterator.next() == config) {
-					iterator.remove();
+			for (int i = 0, n = unmerged.size(); i < n; i++) {
+				if (unmerged.get(i) == config) {
+					unmerged.remove(i);
 					return;
 				}
 			}

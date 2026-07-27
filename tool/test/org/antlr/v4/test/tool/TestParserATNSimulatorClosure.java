@@ -205,6 +205,101 @@ public class TestParserATNSimulatorClosure extends BaseTest {
 		assertEquals(2, interp.adaptivePredict(input, 0, ParserRuleContext.emptyContext()));
 	}
 
+	/**
+	 * Full-context adaptivePredict exercises {@code computeTargetState}'s
+	 * lazy {@code closureConfigs} materialization (useContext reach loop,
+	 * including EMPTY_FULL_STATE_KEY-only steps that never allocate the list).
+	 */
+	@Test
+	public void testFullContextPredictionLazyConfigList() throws Exception {
+		// Classic context-sensitive decision: e is nullable; outer call site
+		// determines whether INT continues in alt of a vs b.
+		LexerGrammar lg = new LexerGrammar(
+			"lexer grammar L;\n" +
+			"ID : 'a'..'z'+ ;\n" +
+			"INT : '0'..'9'+ ;\n" +
+			"DOLLAR : '$' ;\n" +
+			"AT : '@' ;\n");
+		Grammar g = new Grammar(
+			"parser grammar T;\n" +
+			"tokens { ID, INT, DOLLAR, AT }\n" +
+			"s : DOLLAR a | AT b ;\n" +
+			"a : e ID ;\n" +
+			"b : e INT ID ;\n" +
+			"e : INT | ;");
+
+		ATN lexatn = createATN(lg, true);
+		LexerATNSimulator lexInterp = new LexerATNSimulator(lexatn);
+		semanticProcess(lg);
+		g.importVocab(lg);
+		semanticProcess(g);
+
+		ParserATNFactory f = new ParserATNFactory(g);
+		ATN atn = f.createATN();
+		atn.clearDFA();
+
+		int eDecision = -1;
+		for (int d = 0; d < atn.getNumberOfDecisions(); d++) {
+			if (atn.getDecisionState(d).ruleIndex == g.getRule("e").index) {
+				eDecision = d;
+				break;
+			}
+		}
+		assertTrue("expected a decision for rule e", eDecision >= 0);
+
+		// Invoking ATN state for rule e from rule a (must be a RuleTransition).
+		int invokeEFromA = findRuleInvokeState(atn, g.getRule("e").index);
+		assertTrue(invokeEFromA >= 0);
+
+		IntegerList types = getTokenTypesViaATN("$34abc", lexInterp);
+		// Position at INT (skip DOLLAR).
+		TokenStream input = new IntTokenStream(types);
+		input.seek(1);
+
+		ParserInterpreterForTesting interp = new ParserInterpreterForTesting(g, input);
+		ParserATNSimulator sim = interp.getATNSimulator();
+		sim.setPredictionMode(PredictionMode.LL);
+
+		// (a) Empty outer context + useContext=true: when/if reach steps into
+		// the outer context, nextContextElement is EMPTY_FULL_STATE_KEY and
+		// closureConfigs stays null (no ArrayList materialization).
+		int alt = sim.adaptivePredict(input, eDecision, ParserRuleContext.emptyContext(), true);
+		assertEquals(1, alt);
+
+		// (b) Non-empty outer stack via a real RuleTransition invoking state —
+		// may materialize closureConfigs when appending return states.
+		ParserRuleContext outer = new ParserRuleContext();
+		outer.invokingState = invokeEFromA;
+		input.seek(1);
+		sim.force_global_context = true;
+		alt = sim.adaptivePredict(input, eDecision, outer, true);
+		assertEquals(1, alt);
+
+		// Second call reuses any built DFA edges for the full-context path.
+		input.seek(1);
+		alt = sim.adaptivePredict(input, eDecision, outer, true);
+		assertEquals(1, alt);
+	}
+
+	/** First ATN state that has a {@link org.antlr.v4.runtime.atn.RuleTransition} into {@code ruleIndex}. */
+	private static int findRuleInvokeState(ATN atn, int ruleIndex) {
+		for (ATNState state : atn.states) {
+			if (state == null) {
+				continue;
+			}
+			for (int i = 0; i < state.getNumberOfTransitions(); i++) {
+				org.antlr.v4.runtime.atn.Transition t = state.transition(i);
+				if (t instanceof org.antlr.v4.runtime.atn.RuleTransition) {
+					org.antlr.v4.runtime.atn.RuleTransition rt = (org.antlr.v4.runtime.atn.RuleTransition) t;
+					if (rt.target.ruleIndex == ruleIndex) {
+						return state.stateNumber;
+					}
+				}
+			}
+		}
+		return -1;
+	}
+
 	@Test
 	public void testDirectClosureEmptySourceIsNoOp() throws Exception {
 		LexerGrammar lg = new LexerGrammar(

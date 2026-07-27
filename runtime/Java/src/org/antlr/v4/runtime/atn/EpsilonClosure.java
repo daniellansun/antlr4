@@ -6,34 +6,67 @@
 
 package org.antlr.v4.runtime.atn;
 
+import com.carrotsearch.hppc.ObjectHashSet;
+
 import org.antlr.v4.runtime.dfa.DFA;
 import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
-
-import java.util.HashSet;
-import java.util.Set;
 
 /**
  * Epsilon-closure engine for adaptive LL(*) prediction.
  *
  * <p>
- * Owns busy-set sizing, the predicate vs non-predicate control split, and
+ * Owns the busy set, the predicate vs non-predicate control split, and
  * double-buffered intermediate config sets for breadth-first rule-transition
  * merging. Recursive edge walking stays here so {@link ParserATNSimulator}
  * remains orchestration-focused rather than absorbing more allocation
  * policy.</p>
  *
  * <p>
+ * PERF: Intermediate config-set buffers and the closure busy set are retained
+ * on this instance. A single {@link ParserATNSimulator} (and therefore one
+ * {@code EpsilonClosure}) is used by one parser thread at a time during
+ * {@code adaptivePredict}, so reuse is safe. Ownership of cleanup is a single
+ * {@code try}/{@code finally} around each {@link #close}: drop config-graph
+ * references after the call while retaining set capacity for the next
+ * prediction.</p>
+ *
+ * <p>
+ * PERF: The busy set is an HPPC {@link ObjectHashSet} so right-recursion and
+ * EOF* guards avoid {@link java.util.HashMap.Node} allocation on every
+ * insert; open addressing reuses a flat key array across predictions. Config
+ * iteration on the BFS layers is index-based ({@link ATNConfigSet#get(int)})
+ * to avoid {@link java.util.Iterator} objects on the hot path.</p>
+ *
+ * <p>
  * Package-private: only {@link ParserATNSimulator} constructs and uses this
  * type. Transition target computation is delegated back to the simulator
  * ({@link ParserATNSimulator#getEpsilonTarget}) so semantic-predicate and
  * rule-transition policy remain in one place.</p>
- *
  */
 final class EpsilonClosure {
 
 	@NotNull
 	private final ParserATNSimulator simulator;
+
+	/**
+	 * Retained busy set for right-recursion / EOF* guards. Cleared in
+	 * {@link #close}'s {@code finally}; capacity is preserved across predictions.
+	 * Same-package tests may observe identity via {@link #retainedBusy()}.
+	 *
+	 * <p>HPPC open-addressed set: no per-element entry objects; uses
+	 * {@link ATNConfig#hashCode()} (cached) and {@link ATNConfig#equals}.</p>
+	 */
+	private final ObjectHashSet<ATNConfig> closureBusy =
+		new ObjectHashSet<ATNConfig>(ATNConfigSet.SCRATCH_CAPACITY_FLOOR);
+
+	/**
+	 * Double-buffer scratch sets for BFS rule-transition layering when
+	 * {@code collectPredicates} is {@code false}. Allocated lazily on first
+	 * non-predicate closure and reused thereafter.
+	 */
+	private ATNConfigSet bufferA;
+	private ATNConfigSet bufferB;
 
 	EpsilonClosure(@NotNull ParserATNSimulator simulator) {
 		this.simulator = simulator;
@@ -49,11 +82,11 @@ final class EpsilonClosure {
 	 * {@link ParserATNSimulator#computeTargetState}), rule transitions are
 	 * deferred into an intermediate config set and processed breadth-first so
 	 * configs that enter the same rule via different edges can merge before the
-	 * rule body is expanded. Intermediate sets use two dedicated buffers that
+	 * rule body is expanded. Intermediate sets use two retained buffers that
 	 * swap roles each layer — {@code sourceConfigs} is never treated as a
 	 * reusable buffer. When {@code collectPredicates} is {@code true}, rule
 	 * transitions are followed immediately and no intermediate set is
-	 * allocated.</p>
+	 * written.</p>
 	 */
 	void close(@NotNull ATNConfigSet sourceConfigs,
 			   @NotNull ATNConfigSet configs,
@@ -67,61 +100,103 @@ final class EpsilonClosure {
 			return;
 		}
 
-		// HashSet(int) treats the argument as map capacity (buckets), not element
-		// count; size*2 is a safe upper estimate for right-recursion / EOF* busy
-		// traffic without overflow for realistic config-set sizes.
-		int busyCapacity = sourceSize < (Integer.MAX_VALUE >> 1)
-			? Math.max(16, sourceSize << 1)
-			: Integer.MAX_VALUE;
-		Set<ATNConfig> closureBusy = new HashSet<ATNConfig>(busyCapacity);
-
-		// Predicate collection follows rule transitions immediately; the
-		// intermediate BFS layer is only useful when rule entries can be merged
-		// without carrying distinct predicate contexts.
-		// Dispatch through simulator.closure(ATNConfig, …) so subclasses that
-		// override the recursive entry point still participate in every step.
-		if (collectPredicates) {
-			for (ATNConfig config : sourceConfigs) {
-				simulator.closure(config, configs, null, closureBusy, true, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
+		// Single ownership of cleanup: drop config-graph refs after work while
+		// keeping ObjectHashSet / ATNConfigSet capacity for the next close.
+		try {
+			if (collectPredicates) {
+				// Predicate path: follow rule transitions immediately (no BFS layer).
+				// Dispatch through simulator.closure so subclasses that override
+				// the recursive entry point still participate in every step.
+				// Index walk avoids Iterator allocation on the source set.
+				for (int i = 0; i < sourceSize; i++) {
+					simulator.closure(sourceConfigs.get(i), configs, null, closureBusy, true, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
+				}
+				return;
 			}
-			return;
+
+			// Non-predicate path: BFS layering for rule-transition merging.
+			ensureIntermediateBuffers(ATNConfigSet.scratchCapacity(sourceSize));
+
+			ATNConfigSet current = sourceConfigs;
+			ATNConfigSet next = bufferA;
+			boolean nextIsBufferA = true;
+			next.clear();
+
+			while (true) {
+				for (int i = 0, n = current.size(); i < n; i++) {
+					simulator.closure(current.get(i), configs, next, closureBusy, false, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
+				}
+
+				if (next.isEmpty()) {
+					break;
+				}
+
+				// Advance: filled `next` becomes the read set; the other buffer is
+				// cleared and becomes the write set for the following layer.
+				current = next;
+				if (nextIsBufferA) {
+					bufferB.clear();
+					next = bufferB;
+					nextIsBufferA = false;
+				}
+				else {
+					bufferA.clear();
+					next = bufferA;
+					nextIsBufferA = true;
+				}
+			}
 		}
-
-		// Two dedicated intermediate buffers. sourceConfigs is read-only input
-		// for the first layer and is never cleared or reused as a write buffer.
-		final int intermediateHint = sourceSize < (Integer.MAX_VALUE >> 1)
-			? Math.max(16, sourceSize << 1)
-			: Integer.MAX_VALUE;
-		ATNConfigSet bufferA = new ATNConfigSet(intermediateHint);
-		ATNConfigSet bufferB = new ATNConfigSet(intermediateHint);
-
-		ATNConfigSet current = sourceConfigs;
-		ATNConfigSet next = bufferA;
-		boolean nextIsBufferA = true;
-
-		while (true) {
-			for (ATNConfig config : current) {
-				simulator.closure(config, configs, next, closureBusy, false, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
-			}
-
-			if (next.isEmpty()) {
-				break;
-			}
-
-			// Advance: filled `next` becomes the read set; the other buffer is
-			// cleared and becomes the write set for the following layer.
-			current = next;
-			if (nextIsBufferA) {
-				bufferB.clear();
-				next = bufferB;
-				nextIsBufferA = false;
-			}
-			else {
+		finally {
+			closureBusy.clear();
+			if (bufferA != null) {
 				bufferA.clear();
-				next = bufferA;
-				nextIsBufferA = true;
+				bufferB.clear();
 			}
 		}
+	}
+
+	/**
+	 * Ensure both intermediate buffers exist. Existing buffers are retained
+	 * (capacity preserved via {@link ATNConfigSet#clear}); the initial
+	 * expected-size hint only applies on first allocation.
+	 */
+	private void ensureIntermediateBuffers(int intermediateHint) {
+		if (bufferA == null) {
+			bufferA = new ATNConfigSet(intermediateHint);
+			bufferB = new ATNConfigSet(intermediateHint);
+		}
+	}
+
+	/**
+	 * Whether intermediate BFS buffers have been allocated.
+	 * Same-package tests may observe retained-scratch identity.
+	 */
+	boolean hasIntermediateBuffers() {
+		return bufferA != null;
+	}
+
+	/**
+	 * Retained busy set (same instance across {@link #close} calls).
+	 */
+	@NotNull
+	ObjectHashSet<ATNConfig> retainedBusy() {
+		return closureBusy;
+	}
+
+	/**
+	 * Intermediate buffer A after first non-predicate closure, else {@code null}.
+	 */
+	@Nullable
+	ATNConfigSet retainedBufferA() {
+		return bufferA;
+	}
+
+	/**
+	 * Intermediate buffer B after first non-predicate closure, else {@code null}.
+	 */
+	@Nullable
+	ATNConfigSet retainedBufferB() {
+		return bufferB;
 	}
 
 	/**
@@ -132,7 +207,7 @@ final class EpsilonClosure {
 	void closeOne(@NotNull ATNConfig config,
 				  @NotNull ATNConfigSet configs,
 				  @Nullable ATNConfigSet intermediate,
-				  @NotNull Set<ATNConfig> closureBusy,
+				  @NotNull ObjectHashSet<ATNConfig> closureBusy,
 				  boolean collectPredicates,
 				  boolean hasMoreContexts,
 				  @NotNull PredictionContextCache contextCache,
@@ -239,6 +314,13 @@ final class EpsilonClosure {
 			}
 
 			Transition t = p.getOptimizedTransition(i);
+			// PERF: When EOF is not treated as epsilon, non-epsilon edges can
+			// never produce a closure target — skip the virtual getEpsilonTarget
+			// dispatch (common on mixed epsilon/consume states).
+			if (!treatEofAsEpsilon && !t.isEpsilon()) {
+				continue;
+			}
+
 			final int transitionType = t.getSerializationType();
 			boolean continueCollecting =
 				transitionType != Transition.ACTION && collectPredicates;
