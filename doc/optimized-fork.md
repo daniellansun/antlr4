@@ -126,13 +126,16 @@ The optimized fork uses several `ATNConfig` classes to reduce the size of the DF
 **Reason for exclusion:** Additional dependency (mitigated by shading)
 
 Hot prediction paths store primitive keys in HPPC maps/sets instead of boxed
-JDK collections:
+JDK collections. **HPPC types are never part of any `public` or `protected`
+API surface** — they appear only as non-exported implementation detail
+(private fields/locals and package-private diagnostics). Callers and
+subclasses see JDK collection interfaces (for example `Set<ATNConfig>`).
 
-| Structure | Type | Role |
-| --- | --- | --- |
-| `ATNConfigSet` merge index | `LongObjectHashMap` | packed `(state, alt)` → config; no `Long` boxing |
-| Precedence filter | `IntObjectHashMap` | state number → alt-1 context |
-| Epsilon-closure busy set | `ObjectHashSet` | right-recursion / EOF* guards; no `HashMap.Node` |
+| Structure | Storage (private) | Exposed API | Role |
+| --- | --- | --- | --- |
+| `ATNConfigSet` merge index | `LongObjectHashMap` | `Set<ATNConfig>` | packed `(state, alt)` → config; no `Long` boxing |
+| Precedence filter | `IntObjectHashMap` | method-local only | state number → alt-1 context |
+| Epsilon-closure busy set | `ObjectHashSet` via package-private `OpenAddressedHashSet` | `Set<ATNConfig>` | right-recursion / EOF* guards; no `HashMap.Node` |
 
 `ATNConfigSet.add` / `contains` use `indexOf` / `indexGet` / `indexInsert` so
 each long key is hashed once per operation (not a separate `get` then `put`).
@@ -141,7 +144,10 @@ Cold paths (for example ATN deserialization) keep JDK maps.
 
 Epsilon-closure orchestration (busy set, predicate vs BFS control, double-
 buffered intermediate layers) lives in package-private `EpsilonClosure` so
-`ParserATNSimulator` stays orchestration-focused.
+`ParserATNSimulator` stays orchestration-focused. The retained busy set is an
+`OpenAddressedHashSet` (thin `java.util.Set` adapter over HPPC
+`ObjectHashSet`) so the protected recursive `closure` SPI stays interface-
+oriented and source-compatible with the pre-HPPC `Set` signature.
 
 HPPC is shaded into `org.antlr.v4.runtime.shaded.com.carrotsearch.hppc` at
 package time (Java 8–compatible HPPC release). The published runtime is
@@ -217,11 +223,11 @@ related paths.
 #### API note (subclasses)
 
 The recursive protected
-`ParserATNSimulator.closure(ATNConfig, ..., ObjectHashSet<ATNConfig>, ...)`
-entry point takes HPPC `ObjectHashSet` for the busy set (not `java.util.Set`).
-In the published jar the type is shaded under
-`org.antlr.v4.runtime.shaded.com.carrotsearch.hppc`. Treat this as an
-optimized-fork SPI, not a stable cross-release contract.
+`ParserATNSimulator.closure(ATNConfig, ..., Set<ATNConfig>, ...)` entry point
+takes a JDK `Set` for the busy set. Production code supplies the retained
+`OpenAddressedHashSet` from `EpsilonClosure` (HPPC open addressing underneath);
+subclasses may pass any `Set` implementation. No HPPC type appears in this or
+any other `public`/`protected` signature of the optimized runtime.
 
 ### Prediction context optimization
 
