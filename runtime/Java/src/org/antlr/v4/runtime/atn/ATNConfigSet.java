@@ -44,10 +44,10 @@ import java.util.Set;
 public class ATNConfigSet implements Set<ATNConfig> {
 
 	/**
-	 * Minimum expected-element hint passed to {@link LongObjectHashMap} when a
-	 * positive capacity is requested. Matches the previous {@code HashMap}
-	 * default capacity floor so small hints still expand reasonably during
-	 * closure fan-out.
+	 * Minimum expected-element hint passed to the primitive {@code long}-keyed
+	 * merge map when a positive capacity is requested. Matches the previous
+	 * {@code HashMap} default capacity floor so small hints still expand
+	 * reasonably during closure fan-out.
 	 */
 	private static final int MIN_MERGED_CONFIG_CAPACITY = 16;
 
@@ -86,11 +86,13 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	 * This map is only used for optimizing the process of adding configs to the set,
 	 * and is {@code null} for read-only sets stored in the DFA.
 	 * <p>
-	 * Implemented as a primitive {@link LongObjectHashMap} so {@link #getKey}
-	 * values are stored and looked up without {@link Long} boxing on the
-	 * prediction hot path. Hot {@link #add} / {@link #contains} use
-	 * {@code indexOf}/{@code indexGet}/{@code indexInsert} so a key is hashed
-	 * once per operation.
+	 * Implemented as a private primitive {@code long}-keyed map (HPPC
+	 * {@code LongObjectHashMap}, not part of any public or protected API) so
+	 * {@link #getKey} values are stored and looked up without {@link Long}
+	 * boxing on the prediction hot path. Hot {@link #add} / {@link #contains}
+	 * use {@code indexOf}/{@code indexGet}/{@code indexInsert} so a key is
+	 * hashed once per operation. External callers interact only with the
+	 * {@link Set}{@code <ATNConfig>} surface of this class.
 	 */
 	private final LongObjectHashMap<ATNConfig> mergedConfigs;
 	/**
@@ -165,7 +167,7 @@ public class ATNConfigSet implements Set<ATNConfig> {
 
 	/**
 	 * Converts an expected configuration count into an expected-element hint for
-	 * {@link LongObjectHashMap}. The result is never smaller than
+	 * the private primitive merge map. The result is never smaller than
 	 * {@link #MIN_MERGED_CONFIG_CAPACITY} so undersized hints cannot regress
 	 * expansion cost relative to an unhinted map when the set grows beyond the
 	 * estimate.

@@ -6,11 +6,11 @@
 
 package org.antlr.v4.runtime.atn;
 
-import com.carrotsearch.hppc.ObjectHashSet;
-
 import org.antlr.v4.runtime.dfa.DFA;
 import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
+
+import java.util.Set;
 
 /**
  * Epsilon-closure engine for adaptive LL(*) prediction.
@@ -32,11 +32,15 @@ import org.antlr.v4.runtime.misc.Nullable;
  * prediction.</p>
  *
  * <p>
- * PERF: The busy set is an HPPC {@link ObjectHashSet} so right-recursion and
- * EOF* guards avoid {@link java.util.HashMap.Node} allocation on every
- * insert; open addressing reuses a flat key array across predictions. Config
- * iteration on the BFS layers is index-based ({@link ATNConfigSet#get(int)})
- * to avoid {@link java.util.Iterator} objects on the hot path.</p>
+ * PERF: The busy set is exposed only as {@link Set}{@code <ATNConfig>} (see
+ * {@link OpenAddressedHashSet}) so the protected
+ * {@link ParserATNSimulator#closure(ATNConfig, ATNConfigSet, ATNConfigSet, Set, boolean, boolean, PredictionContextCache, int, boolean)}
+ * SPI stays free of HPPC types. Storage remains an open-addressed HPPC table
+ * behind the adapter: right-recursion and EOF* guards avoid
+ * {@link java.util.HashMap.Node} allocation on every insert, and the flat key
+ * array is reused across predictions. Config iteration on the BFS layers is
+ * index-based ({@link ATNConfigSet#get(int)}) to avoid
+ * {@link java.util.Iterator} objects on the hot path.</p>
  *
  * <p>
  * Package-private: only {@link ParserATNSimulator} constructs and uses this
@@ -54,11 +58,13 @@ final class EpsilonClosure {
 	 * {@link #close}'s {@code finally}; capacity is preserved across predictions.
 	 * Same-package tests may observe identity via {@link #retainedBusy()}.
 	 *
-	 * <p>HPPC open-addressed set: no per-element entry objects; uses
-	 * {@link ATNConfig#hashCode()} (cached) and {@link ATNConfig#equals}.</p>
+	 * <p>Typed as {@link Set} so callers and the protected simulator SPI never
+	 * see HPPC. The concrete instance is an {@link OpenAddressedHashSet} that
+	 * keys by {@link ATNConfig#hashCode()} (cached) and
+	 * {@link ATNConfig#equals}.</p>
 	 */
-	private final ObjectHashSet<ATNConfig> closureBusy =
-		new ObjectHashSet<ATNConfig>(ATNConfigSet.SCRATCH_CAPACITY_FLOOR);
+	private final Set<ATNConfig> closureBusy =
+		new OpenAddressedHashSet<ATNConfig>(ATNConfigSet.SCRATCH_CAPACITY_FLOOR);
 
 	/**
 	 * Double-buffer scratch sets for BFS rule-transition layering when
@@ -101,7 +107,7 @@ final class EpsilonClosure {
 		}
 
 		// Single ownership of cleanup: drop config-graph refs after work while
-		// keeping ObjectHashSet / ATNConfigSet capacity for the next close.
+		// keeping busy-set / ATNConfigSet capacity for the next close.
 		try {
 			if (collectPredicates) {
 				// Predicate path: follow rule transitions immediately (no BFS layer).
@@ -177,9 +183,11 @@ final class EpsilonClosure {
 
 	/**
 	 * Retained busy set (same instance across {@link #close} calls).
+	 * Typed as {@link Set}; the concrete implementation is
+	 * {@link OpenAddressedHashSet}.
 	 */
 	@NotNull
-	ObjectHashSet<ATNConfig> retainedBusy() {
+	Set<ATNConfig> retainedBusy() {
 		return closureBusy;
 	}
 
@@ -203,11 +211,16 @@ final class EpsilonClosure {
 	 * Recursive helper: walk epsilon edges from {@code config}, adding leaf
 	 * configurations to {@code configs} and optionally deferring rule
 	 * transitions to {@code intermediate} for breadth-first processing.
+	 *
+	 * @param closureBusy busy set for right-recursion / EOF* guards; production
+	 * callers pass the retained {@link OpenAddressedHashSet}, but any
+	 * {@link Set} is accepted so the protected simulator override SPI stays
+	 * interface-oriented
 	 */
 	void closeOne(@NotNull ATNConfig config,
 				  @NotNull ATNConfigSet configs,
 				  @Nullable ATNConfigSet intermediate,
-				  @NotNull ObjectHashSet<ATNConfig> closureBusy,
+				  @NotNull Set<ATNConfig> closureBusy,
 				  boolean collectPredicates,
 				  boolean hasMoreContexts,
 				  @NotNull PredictionContextCache contextCache,

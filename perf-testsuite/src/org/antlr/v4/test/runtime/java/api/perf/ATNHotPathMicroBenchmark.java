@@ -155,7 +155,9 @@ public final class ATNHotPathMicroBenchmark {
 		}
 		long allocNs = System.nanoTime() - t0;
 
-		// Busy-set: production uses HPPC ObjectHashSet; keep HashSet as baseline.
+		// Busy-set: production retains OpenAddressedHashSet (java.util.Set facade
+		// over HPPC ObjectHashSet). Measure the underlying open-addressed table
+		// against HashSet; the thin adapter add/clear cost is negligible vs table ops.
 		java.util.HashSet<ATNConfig> jdkBusy = new java.util.HashSet<ATNConfig>(configsPerReach * 2);
 		com.carrotsearch.hppc.ObjectHashSet<ATNConfig> hppcBusy =
 			new com.carrotsearch.hppc.ObjectHashSet<ATNConfig>(configsPerReach * 2);
@@ -194,9 +196,9 @@ public final class ATNHotPathMicroBenchmark {
 			(double) allocNs / reuseNs);
 		System.out.printf("  HashSet busy : %8.2f ns/op  (clear+add %d, cached hash)%n",
 			(double) jdkBusyNs / rounds, configsPerReach);
-		System.out.printf("  ObjectHashSet: %8.2f ns/op  (clear+add %d, production busy set)%n",
+		System.out.printf("  ObjectHashSet: %8.2f ns/op  (clear+add %d, production storage under Set facade)%n",
 			(double) hppcBusyNs / rounds, configsPerReach);
-		System.out.printf("  busy speedup : %8.2fx (ObjectHashSet vs HashSet)%n",
+		System.out.printf("  busy speedup : %8.2fx (ObjectHashSet storage vs HashSet)%n",
 			(double) jdkBusyNs / hppcBusyNs);
 	}
 

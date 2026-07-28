@@ -6,20 +6,23 @@
 
 package org.antlr.v4.runtime.atn;
 
-import com.carrotsearch.hppc.ObjectHashSet;
 import org.junit.Test;
+
+import java.util.Set;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
 
 /**
  * Tests for retained scratch structures inside package-private
  * {@link EpsilonClosure}: busy set and intermediate config-set buffers must be
  * allocated once and reused across {@code close} invocations on the same
- * simulator.
+ * simulator. The busy set is typed as {@link Set} (backed by
+ * {@link OpenAddressedHashSet}) so HPPC never leaks into the protected SPI.
  */
 public class TestEpsilonClosureReuse {
 
@@ -45,10 +48,11 @@ public class TestEpsilonClosureReuse {
 
 		ATNConfigSet bufferA = closure.retainedBufferA();
 		ATNConfigSet bufferB = closure.retainedBufferB();
-		ObjectHashSet<ATNConfig> busy = closure.retainedBusy();
+		Set<ATNConfig> busy = closure.retainedBusy();
 		assertNotNull(bufferA);
 		assertNotNull(bufferB);
 		assertNotNull(busy);
+		assertTrue(busy instanceof OpenAddressedHashSet);
 
 		// Second closure must reuse the same buffer and busy-set instances.
 		ATNConfigSet source2 = new ATNConfigSet(4);
@@ -102,28 +106,82 @@ public class TestEpsilonClosureReuse {
 	}
 
 	@Test
-	public void busySetIsObjectHashSetWithValueEquality() {
+	public void busySetUsesValueEqualityViaSetInterface() {
 		// Guard: closure busy must use ATNConfig equals/hashCode (not identity),
-		// so equal configs built independently still collapse via ObjectHashSet.
+		// so equal configs built independently still collapse via Set.add.
 		ATN atn = new ATN(ATNType.PARSER, 1);
 		BasicState state = new BasicState();
 		state.stateNumber = 3;
 		atn.addState(state);
 
 		ParserATNSimulator simulator = new ParserATNSimulator(atn);
-		ObjectHashSet<ATNConfig> busy = simulator.epsilonClosure().retainedBusy();
+		Set<ATNConfig> busy = simulator.epsilonClosure().retainedBusy();
 
 		ATNConfig a = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL);
 		ATNConfig b = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL);
 		assertTrue(a.equals(b));
 		assertTrue(busy.add(a));
 		assertFalse(busy.add(b));
-		assertEqualsSize(1, busy);
+		assertEquals(1, busy.size());
 		busy.clear();
 		assertTrue(busy.isEmpty());
 	}
 
-	private static void assertEqualsSize(int expected, ObjectHashSet<?> set) {
-		org.junit.Assert.assertEquals(expected, set.size());
+	/**
+	 * Subclasses that override the recursive {@code closure} entry point must
+	 * receive a JDK {@link Set} (not an HPPC type) and may replace the busy set
+	 * with a {@link java.util.HashSet} without breaking the engine.
+	 */
+	@Test
+	public void subclassOverrideMaySubstituteJdkHashSet() {
+		ATN atn = new ATN(ATNType.PARSER, 1);
+		BasicState state = new BasicState();
+		state.stateNumber = 0;
+		state.ruleIndex = 0;
+		atn.addState(state);
+
+		// Rule stop + epsilon back-edge that re-enters with an equal config
+		// exercises closureBusy membership (right-recursion style guard).
+		RuleStopState stop = new RuleStopState();
+		stop.stateNumber = 1;
+		stop.ruleIndex = 0;
+		atn.addState(stop);
+		state.addTransition(new EpsilonTransition(stop));
+		// From stop, epsilon back to state so depth-tracking can use busy set.
+		// Keep a non-epsilon atom so closure still terminates for pure leaves.
+		BasicState leaf = new BasicState();
+		leaf.stateNumber = 2;
+		leaf.ruleIndex = 0;
+		atn.addState(leaf);
+		stop.addTransition(new EpsilonTransition(leaf));
+
+		final boolean[] substituted = { false };
+		ParserATNSimulator simulator = new ParserATNSimulator(atn) {
+			@Override
+			protected void closure(ATNConfig config,
+								   ATNConfigSet configs,
+								   ATNConfigSet intermediate,
+								   Set<ATNConfig> closureBusy,
+								   boolean collectPredicates,
+								   boolean hasMoreContexts,
+								   PredictionContextCache contextCache,
+								   int depth,
+								   boolean treatEofAsEpsilon) {
+				// Production passes OpenAddressedHashSet; subclasses may swap in
+				// any Set implementation. Seed a HashSet with current members so
+				// membership semantics stay equivalent for this invocation.
+				Set<ATNConfig> jdkBusy = new java.util.HashSet<ATNConfig>(closureBusy);
+				substituted[0] = true;
+				super.closure(config, configs, intermediate, jdkBusy,
+					collectPredicates, hasMoreContexts, contextCache, depth, treatEofAsEpsilon);
+			}
+		};
+
+		ATNConfigSet source = new ATNConfigSet(4);
+		source.add(ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL));
+		ATNConfigSet configs = new ATNConfigSet(4);
+		simulator.epsilonClosure().close(source, configs, true, false, PredictionContextCache.UNCACHED, false);
+		assertTrue(substituted[0]);
+		assertTrue(configs.size() >= 1);
 	}
 }

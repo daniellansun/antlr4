@@ -18,7 +18,6 @@ import org.antlr.v4.runtime.TokenStream;
 import org.antlr.v4.runtime.Vocabulary;
 import org.antlr.v4.runtime.VocabularyImpl;
 import com.carrotsearch.hppc.IntObjectHashMap;
-import com.carrotsearch.hppc.ObjectHashSet;
 
 import org.antlr.v4.runtime.dfa.AcceptStateInfo;
 import org.antlr.v4.runtime.dfa.DFA;
@@ -35,6 +34,7 @@ import java.util.BitSet;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -1528,9 +1528,11 @@ public class ParserATNSimulator extends ATNSimulator {
 	 * from being eliminated by the filter.
 	 * </p>
 	 *
-	 * <p>Alt-1 prediction contexts are indexed by ATN state number in a primitive
-	 * {@link IntObjectHashMap} so filtering of higher alternatives avoids
-	 * {@link Integer} boxing on each state-number lookup.</p>
+	 * <p>Alt-1 prediction contexts are indexed by ATN state number in a
+	 * primitive {@code int}-keyed map (HPPC, retained as an implementation
+	 * detail of this method only) so filtering of higher alternatives avoids
+	 * {@link Integer} boxing on each state-number lookup. No HPPC type appears
+	 * in this method's signature.</p>
 	 *
 	 * @param configs The configuration set computed by
 	 * {@link #computeStartState} as the start state for the DFA.
@@ -1810,22 +1812,22 @@ public class ParserATNSimulator extends ATNSimulator {
 	 * <p>Default implementation delegates to {@link EpsilonClosure}. Subclasses
 	 * may override to customize edge walking.</p>
 	 *
-	 * <p>PERF: {@code closureBusy} is an HPPC {@link ObjectHashSet} retained by
-	 * {@link EpsilonClosure} so right-recursion / EOF* guards avoid per-insert
-	 * {@link java.util.HashMap.Node} allocation. Callers outside the closure
-	 * engine should not allocate a fresh set per config.</p>
+	 * <p>PERF: Production callers pass the retained busy {@link Set} owned by
+	 * {@link EpsilonClosure} (an {@link OpenAddressedHashSet} wrapping an
+	 * open-addressed HPPC table) so right-recursion / EOF* guards avoid
+	 * per-insert {@link java.util.HashMap.Node} allocation. The parameter is
+	 * typed as {@link Set} so this protected SPI never exposes HPPC types;
+	 * subclasses may supply any {@link Set} implementation. Callers outside
+	 * the closure engine should not allocate a fresh set per config.</p>
 	 *
-	 * <p><strong>API note (optimized fork):</strong> the busy-set parameter is
-	 * intentionally {@link ObjectHashSet} rather than {@link java.util.Set}.
-	 * Subclasses that override this method must accept the HPPC type (shaded to
-	 * {@code org.antlr.v4.runtime.shaded.com.carrotsearch.hppc.ObjectHashSet}
-	 * in the published runtime jar). Do not treat this signature as a stable
-	 * cross-release SPI.</p>
+	 * @param closureBusy busy set for right-recursion / EOF* cycle guards;
+	 * {@link Set#add} must return {@code false} when an equal config is already
+	 * present
 	 */
 	protected void closure(@NotNull ATNConfig config,
 						   @NotNull ATNConfigSet configs,
 						   @Nullable ATNConfigSet intermediate,
-						   @NotNull ObjectHashSet<ATNConfig> closureBusy,
+						   @NotNull Set<ATNConfig> closureBusy,
 						   boolean collectPredicates,
 						   boolean hasMoreContexts,
 						   @NotNull PredictionContextCache contextCache,
