@@ -24,10 +24,17 @@ import org.antlr.v4.runtime.misc.Nullable;
  *
  * <p>PERF: Reach config sets are retained on the simulator and cleared between
  * edge computations so the common DFA-fill path avoids per-character
- * {@link OrderedATNConfigSet} allocation. A single lexer (and its simulator)
- * is not used concurrently for matching, so reuse is safe. Stored DFA states
- * always receive a readonly {@link ATNConfigSet#clone(boolean)} of the reach
- * set, never the reusable buffer itself.</p>
+ * {@link OrderedATNConfigSet} allocation. Clear of the retained pool is
+ * occupancy-aware (see {@link ATNConfigSet#clear()} /
+ * {@link RetainedConfigSet}): empty clear is O(1) for the merge map (no bulk
+ * {@code Arrays.fill}); non-empty clear nulls only the used list prefix and,
+ * when few configs remain in a grown open-addressed table, removes known merge
+ * keys (O(n)) instead of filling the full table capacity. Obtain/release under
+ * {@link #computeTargetState} therefore does not pay repeated full-capacity
+ * zeroing. A single lexer (and its simulator) is not used concurrently for
+ * matching, so reuse is safe. Stored DFA states always receive a readonly
+ * {@link ATNConfigSet#clone(boolean)} of the reach set, never the reusable
+ * buffer itself.</p>
  */
 public class LexerATNSimulator extends ATNSimulator {
 

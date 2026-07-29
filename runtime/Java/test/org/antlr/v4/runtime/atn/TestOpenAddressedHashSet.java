@@ -198,9 +198,27 @@ public class TestOpenAddressedHashSet {
 		// Same-package diagnostic: storage is HPPC; type is not on the Set API.
 		OpenAddressedHashSet<String> set = new OpenAddressedHashSet<String>(4);
 		assertNotNull(set.delegate());
+		assertTrue(set.delegate() instanceof ClearableObjectHashSet);
 		set.add("z");
 		assertEquals(1, set.delegate().size());
 		assertTrue(set.delegate().contains("z"));
+	}
+
+	@Test
+	public void clearEmptyIsIdempotentOnBusySetPath() {
+		// Models EpsilonClosure finally-block clear when busy set was unused
+		// or already emptied; must remain empty and reusable.
+		OpenAddressedHashSet<String> set = new OpenAddressedHashSet<String>(8);
+		set.clear();
+		set.clear();
+		assertTrue(set.isEmpty());
+		assertTrue(set.add("a"));
+		set.clear();
+		set.clear();
+		assertTrue(set.isEmpty());
+		assertFalse(set.contains("a"));
+		assertTrue(set.add("b"));
+		assertEquals(1, set.size());
 	}
 
 	@Test

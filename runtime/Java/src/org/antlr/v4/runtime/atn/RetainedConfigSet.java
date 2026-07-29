@@ -21,6 +21,17 @@ import org.antlr.v4.runtime.misc.Nullable;
  * retained. DFA storage must {@link ATNConfigSet#clone(boolean) clone} before
  * {@link #release()}.</p>
  *
+ * <p>
+ * <strong>PERF:</strong> Both {@link #obtain(int)} and {@link #release()} may
+ * call {@link ATNConfigSet#clear()}. That clear is intentionally cheap when the
+ * buffer is already empty (no full-table {@code Arrays.fill} on the merge map)
+ * and only nulls the used list prefix when non-empty — see
+ * {@link ATNConfigSet#clear()} and {@link ClearableLongObjectHashMap}. The
+ * obtain/release pair therefore does not pay double bulk-zero of the open-
+ * addressed tables on the common path (release empties; obtain is a free
+ * empty clear). Skipping clear on obtain entirely would leave flags/storage
+ * dirty if a caller reused without release; both sides stay defensive.</p>
+ *
  * <p>Package-private: shared by {@link ParserATNSimulator},
  * {@link LexerATNSimulator}, and tests in this package.</p>
  */
@@ -41,7 +52,8 @@ final class RetainedConfigSet {
 
 	/**
 	 * Returns the retained buffer, allocating on first use. Always empty on
-	 * return (clears when reusing an existing buffer).
+	 * return (clears when reusing an existing buffer). Clear of an already-empty
+	 * buffer is O(1) for the merge map (see {@link ATNConfigSet#clear()}).
 	 *
 	 * @param sourceSize hint for initial capacity ({@link ATNConfigSet#scratchCapacity})
 	 */
@@ -61,7 +73,9 @@ final class RetainedConfigSet {
 
 	/**
 	 * Drops config-graph references held by the buffer; keeps capacity.
-	 * No-op if {@link #obtain(int)} has never been called.
+	 * No-op if {@link #obtain(int)} has never been called. When the buffer is
+	 * already empty, clear is O(1) for the merge map and does not bulk-zero
+	 * backing arrays.
 	 */
 	void release() {
 		if (buffer != null) {

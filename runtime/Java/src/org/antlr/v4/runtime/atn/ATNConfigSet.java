@@ -6,8 +6,6 @@
 
 package org.antlr.v4.runtime.atn;
 
-import com.carrotsearch.hppc.LongObjectHashMap;
-
 import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
 import org.antlr.v4.runtime.misc.Utils;
@@ -58,6 +56,15 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	static final int SCRATCH_CAPACITY_FLOOR = 16;
 
 	/**
+	 * When the number of configs is less than table-length / this factor,
+	 * {@link #clear()} removes known merge keys one-by-one (O(n)) instead of
+	 * bulk-filling the open-addressed table (O(capacity)). Retained scratch
+	 * sets often keep a large table after a wide fan-out edge while later
+	 * edges hold only a handful of configs.
+	 */
+	static final int SPARSE_CLEAR_CAPACITY_FACTOR = 4;
+
+	/**
 	 * Converts a source config count into a scratch-buffer capacity hint used
 	 * when allocating or sizing retained {@link ATNConfigSet} instances on
 	 * prediction / lexing hot paths. Doubles the source size (with overflow
@@ -86,15 +93,19 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	 * This map is only used for optimizing the process of adding configs to the set,
 	 * and is {@code null} for read-only sets stored in the DFA.
 	 * <p>
-	 * Implemented as a private primitive {@code long}-keyed map (HPPC
-	 * {@code LongObjectHashMap}, not part of any public or protected API) so
-	 * {@link #getKey} values are stored and looked up without {@link Long}
-	 * boxing on the prediction hot path. Hot {@link #add} / {@link #contains}
-	 * use {@code indexOf}/{@code indexGet}/{@code indexInsert} so a key is
-	 * hashed once per operation. External callers interact only with the
-	 * {@link Set}{@code <ATNConfig>} surface of this class.
+	 * Implemented as a private primitive {@code long}-keyed map
+	 * ({@link ClearableLongObjectHashMap}, HPPC open addressing underneath,
+	 * not part of any public or protected API) so {@link #getKey} values are
+	 * stored and looked up without {@link Long} boxing on the prediction hot
+	 * path. Hot {@link #add} / {@link #contains} use
+	 * {@code indexOf}/{@code indexGet}/{@code indexInsert} so a key is hashed
+	 * once per operation. {@link #clear()} uses the map's empty-fast-path and
+	 * may sparse-remove known keys when occupancy is low relative to table
+	 * capacity (see {@link #SPARSE_CLEAR_CAPACITY_FACTOR}). External callers
+	 * interact only with the {@link Set}{@code <ATNConfig>} surface of this
+	 * class.
 	 */
-	private final LongObjectHashMap<ATNConfig> mergedConfigs;
+	private final ClearableLongObjectHashMap<ATNConfig> mergedConfigs;
 	/**
 	 * This is an "overflow" list holding configs which cannot be merged with one
 	 * of the configs in {@link #mergedConfigs} but have a colliding key. This
@@ -152,12 +163,12 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	 */
 	public ATNConfigSet(int expectedSize) {
 		if (expectedSize > 0) {
-			this.mergedConfigs = new LongObjectHashMap<ATNConfig>(mergedMapExpectedElements(expectedSize));
+			this.mergedConfigs = new ClearableLongObjectHashMap<ATNConfig>(mergedMapExpectedElements(expectedSize));
 			this.unmerged = new ArrayList<ATNConfig>();
 			this.configs = new ArrayList<ATNConfig>(expectedSize);
 		}
 		else {
-			this.mergedConfigs = new LongObjectHashMap<ATNConfig>();
+			this.mergedConfigs = new ClearableLongObjectHashMap<ATNConfig>();
 			this.unmerged = new ArrayList<ATNConfig>();
 			this.configs = new ArrayList<ATNConfig>();
 		}
@@ -185,10 +196,11 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			this.mergedConfigs = null;
 			this.unmerged = null;
 		} else if (!set.isReadOnly()) {
-			this.mergedConfigs = set.mergedConfigs.clone();
+			// Object.clone preserves ClearableLongObjectHashMap concrete type.
+			this.mergedConfigs = (ClearableLongObjectHashMap<ATNConfig>)set.mergedConfigs.clone();
 			this.unmerged = (ArrayList<ATNConfig>)set.unmerged.clone();
 		} else {
-			this.mergedConfigs = new LongObjectHashMap<ATNConfig>(mergedMapExpectedElements(set.configs.size()));
+			this.mergedConfigs = new ClearableLongObjectHashMap<ATNConfig>(mergedMapExpectedElements(set.configs.size()));
 			this.unmerged = new ArrayList<ATNConfig>();
 		}
 
@@ -487,15 +499,64 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	 * <p>In particular {@link #outermostConfigSet} is cleared: retention across
 	 * predictions would otherwise leave a sticky outermost flag and trip
 	 * {@link #add} / {@link #setOutermostConfigSet} asserts on later edges.</p>
+	 *
+	 * <p><strong>PERF:</strong> Empty clear is O(1) for the merge map (no bulk
+	 * {@code Arrays.fill}) and O(1) for empty {@link ArrayList}s. When the set
+	 * holds few configs relative to the grown open-addressed table
+	 * ({@code size * }{@link #SPARSE_CLEAR_CAPACITY_FACTOR}{@code < tableLength}),
+	 * known merge keys are removed individually (O(n)) instead of filling the
+	 * entire table (O(capacity)). Dense sets still use bulk clear. List clear
+	 * only nulls the used prefix (JDK {@link ArrayList#clear}), never the full
+	 * capacity. Together these policies remove the double full-table zeroing
+	 * that dominated lexer {@code computeTargetState} pool obtain/release on
+	 * many-core workloads.</p>
 	 */
 	@Override
 	public void clear() {
 		ensureWritable();
 
-		mergedConfigs.clear();
+		final int n = configs.size();
+		if (n == 0 && unmerged.isEmpty() && mergedConfigs.isEmpty()) {
+			// Already empty storage: still reset flags (e.g. outermost set on an
+			// empty scratch after setOutermostConfigSet) without touching tables.
+			resetWorkingFlags();
+			return;
+		}
+
+		// Prefer sparse key removal when occupancy is low vs table capacity.
+		// All merge-map keys are exactly getKey(c) for some c in configs (map
+		// holds one representative per key; unmerged siblings share that key).
+		// Removing every configs key therefore empties the map; duplicate keys
+		// among unmerged configs make remove a cheap no-op the second time.
+		// Use long arithmetic so n * factor cannot overflow int for huge sets.
+		if (n > 0
+			&& (long)n * SPARSE_CLEAR_CAPACITY_FACTOR < mergedConfigs.tableLength()) {
+			for (int i = 0; i < n; i++) {
+				mergedConfigs.remove(getKey(configs.get(i)));
+			}
+			// Hardening: if a key ever diverged from getKey(c) after insert
+			// (e.g. OrderedATNConfigSet keyed by hashCode while a future
+			// mutator changed a hash-participating field without re-indexing),
+			// fall back to bulk clear so scratch reuse cannot leak entries.
+			if (!mergedConfigs.isEmpty()) {
+				mergedConfigs.clear();
+			}
+		}
+		else {
+			mergedConfigs.clear();
+		}
+
+		// ArrayList.clear nulls only [0, size) — used prefix, not full capacity.
 		unmerged.clear();
 		configs.clear();
+		resetWorkingFlags();
+	}
 
+	/**
+	 * Resets conflict / context flags used while a writable set is being built.
+	 * Invoked by {@link #clear()} after storage is empty (or was already empty).
+	 */
+	private void resetWorkingFlags() {
 		dipsIntoOuterContext = false;
 		hasSemanticContext = false;
 		outermostConfigSet = false;

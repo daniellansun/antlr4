@@ -133,9 +133,9 @@ subclasses see JDK collection interfaces (for example `Set<ATNConfig>`).
 
 | Structure | Storage (private) | Exposed API | Role |
 | --- | --- | --- | --- |
-| `ATNConfigSet` merge index | `LongObjectHashMap` | `Set<ATNConfig>` | packed `(state, alt)` → config; no `Long` boxing |
-| Precedence filter | `IntObjectHashMap` | method-local only | state number → alt-1 context |
-| Epsilon-closure busy set | `ObjectHashSet` via package-private `OpenAddressedHashSet` | `Set<ATNConfig>` | right-recursion / EOF* guards; no `HashMap.Node` |
+| `ATNConfigSet` merge index | `ClearableLongObjectHashMap` (HPPC `LongObjectHashMap`) | `Set<ATNConfig>` | packed `(state, alt)` → config; no `Long` boxing; empty clear O(1) |
+| Precedence filter | `IntObjectHashMap` | method-local only | state number → alt-1 context (not retained/pooled) |
+| Epsilon-closure busy set | `ClearableObjectHashSet` via package-private `OpenAddressedHashSet` | `Set<ATNConfig>` | right-recursion / EOF* guards; no `HashMap.Node`; empty clear O(1) |
 
 `ATNConfigSet.add` / `contains` use `indexOf` / `indexGet` / `indexInsert` so
 each long key is hashed once per operation (not a separate `get` then `put`).
@@ -182,6 +182,28 @@ hints go through `ATNConfigSet.scratchCapacity`.
 
 `ATNConfigSet.clear()` also resets `outermostConfigSet`, so a retained set
 cannot leave a sticky outermost flag that would break later edges.
+
+#### Retained-pool clear cost (no wholesale `Arrays.fill`)
+
+HPPC's stock `LongObjectHashMap.clear` / `ObjectHashSet.clear` always
+`Arrays.fill` the **entire** open-addressed table (O(capacity)), even when
+the container is already empty. Retained scratch called clear on both
+`obtain` and `release`, so every missing DFA edge paid two full-table zero
+passes — profiled as ~13% of lexer worker CPU on Groovy compile
+(`Arrays.fill(Object[])` under lexer `computeTargetState` pool).
+
+Mitigations (package-private only; HPPC types stay off `public`/`protected`
+API surfaces):
+
+| Mechanism | Effect |
+| --- | --- |
+| `ClearableLongObjectHashMap` / `ClearableObjectHashSet` | empty `clear()` is O(1) (no bulk fill) |
+| `ATNConfigSet.clear` sparse path | when `size * 4 < tableLength`, remove known merge keys (O(n)) instead of filling capacity |
+| `ArrayList.clear` | already nulls only the used prefix `[0, size)` |
+| `RetainedConfigSet` obtain+release | still both clear (defensive); second clear is free when empty |
+
+Net: one non-empty clear per edge (on `release` after work), never a double
+full-capacity zero of the merge map or busy set.
 
 #### `ATNConfig.hashCode` cache
 
