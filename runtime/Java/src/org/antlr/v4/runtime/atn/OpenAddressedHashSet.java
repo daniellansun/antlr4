@@ -14,7 +14,8 @@ import java.util.NoSuchElementException;
 import java.util.Set;
 
 /**
- * Package-private JDK {@link Set} adapter over an HPPC {@link ObjectHashSet}.
+ * Package-private JDK {@link Set} adapter over a {@link ClearableObjectHashSet}
+ * (HPPC open addressing underneath).
  *
  * <p>
  * Used on the epsilon-closure busy-set hot path so production code keeps the
@@ -26,7 +27,9 @@ import java.util.Set;
  *
  * <p>
  * PERF: {@link #add}, {@link #contains}, {@link #remove}, {@link #clear},
- * {@link #size}, and {@link #isEmpty} are thin delegates. The adapter object is
+ * {@link #size}, and {@link #isEmpty} are thin delegates. {@link #clear()} is
+ * O(1) when the set is already empty ({@link ClearableObjectHashSet}); only a
+ * non-empty table pays HPPC's bulk {@code Arrays.fill}. The adapter object is
  * allocated once per {@link EpsilonClosure} and retained across predictions;
  * only the underlying open-addressed table grows.</p>
  *
@@ -39,15 +42,15 @@ import java.util.Set;
  */
 final class OpenAddressedHashSet<E> extends AbstractSet<E> {
 
-	private final ObjectHashSet<E> delegate;
+	private final ClearableObjectHashSet<E> delegate;
 
 	/**
 	 * @param expectedElements expected element count used as a capacity hint
 	 * for the underlying open-addressed table (same contract as
-	 * {@link ObjectHashSet#ObjectHashSet(int)})
+	 * {@link ClearableObjectHashSet#ClearableObjectHashSet(int)})
 	 */
 	OpenAddressedHashSet(int expectedElements) {
-		this.delegate = new ObjectHashSet<E>(expectedElements);
+		this.delegate = new ClearableObjectHashSet<E>(expectedElements);
 	}
 
 	@Override
@@ -104,9 +107,13 @@ final class OpenAddressedHashSet<E> extends AbstractSet<E> {
 	}
 
 	/**
-	 * Package-private identity of the wrapped HPPC set for diagnostics/tests
-	 * that must assert the open-addressed implementation is in use without
-	 * exposing HPPC on the {@link Set} type itself.
+	 * Package-private identity of the wrapped open-addressed set for
+	 * diagnostics/tests that must assert the HPPC-backed implementation is in
+	 * use without exposing HPPC on the {@link Set} type itself.
+	 *
+	 * <p>Return type is the HPPC {@link ObjectHashSet} supertype so existing
+	 * tests that only need {@link ObjectHashSet} methods keep compiling; the
+	 * concrete instance is always a {@link ClearableObjectHashSet}.</p>
 	 */
 	ObjectHashSet<E> delegate() {
 		return delegate;

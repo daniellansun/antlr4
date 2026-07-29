@@ -62,4 +62,27 @@ public class TestRetainedConfigSet {
 		retained.release();
 		assertNull(retained.buffer());
 	}
+
+	@Test
+	public void obtainAfterReleaseDoesNotLeaveStaleConfigs() {
+		// Models LexerATNSimulator.computeTargetState: release empties; next
+		// obtain must return empty without paying a non-empty clear.
+		RetainedConfigSet retained = new RetainedConfigSet(true);
+		ATNConfigSet set = retained.obtain(16);
+		for (int i = 0; i < 20; i++) {
+			BasicState state = new BasicState();
+			state.stateNumber = i;
+			set.add(ATNConfig.create(state, 1, PredictionContext.EMPTY_FULL));
+		}
+		assertEquals(20, set.size());
+		retained.release();
+		assertTrue(set.isEmpty());
+
+		ATNConfigSet again = retained.obtain(16);
+		assertSame(set, again);
+		assertTrue(again.isEmpty());
+		// Empty obtain clear + empty release clear (double empty clear).
+		retained.release();
+		assertTrue(again.isEmpty());
+	}
 }
