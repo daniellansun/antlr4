@@ -107,6 +107,24 @@ public class PredictionContextCache {
 		return result;
 	}
 
+	/**
+	 * Drops every cached entry so this instance can be retained across
+	 * predictions on a single simulator thread. No-op for {@link #UNCACHED}.
+	 *
+	 * <p>Package-private: only the ATN simulators recycle a retained cache.</p>
+	 */
+	final void clear() {
+		if (!enableCache) {
+			return;
+		}
+		contexts.clear();
+		childContexts.clear();
+		joinContexts.clear();
+		// Probes must not pin contexts across predictions.
+		childProbe.clear();
+		joinProbe.clear();
+	}
+
 	public PredictionContext getChild(PredictionContext context, int invokingState) {
 		if (!enableCache) {
 			return context.getChild(invokingState);

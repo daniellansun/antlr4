@@ -31,3 +31,6 @@ nbactions*.xml
 #/tool/playground/
 
 .vscode/
+
+perf-testsuite/results
+*.log

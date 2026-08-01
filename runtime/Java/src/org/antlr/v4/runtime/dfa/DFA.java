@@ -166,6 +166,28 @@ public class DFA {
 	}
 
 	/**
+	 * Clears all learned DFA states while reusing this {@link DFA} instance.
+	 *
+	 * <p>Used by {@link ATN#clearDFA()} so repeated clear/rebuild cycles (for
+	 * example cold-path benchmarks or long-running services that flush
+	 * prediction caches) avoid reallocating one {@link DFA} per decision and
+	 * mode. Precedence DFAs re-seed their synthetic start states; other DFAs
+	 * reset {@link #s0}/{@link #s0full} to {@code null}.</p>
+	 */
+	public final void clear() {
+		states.clear();
+		nextStateNumber.set(0);
+		if (precedenceDfa) {
+			s0.set(new DFAState(EMPTY_PRECEDENCE_EDGES, getEmptyContextEdgeMap(), new ATNConfigSet()));
+			s0full.set(new DFAState(EMPTY_PRECEDENCE_EDGES, getEmptyContextEdgeMap(), new ATNConfigSet()));
+		}
+		else {
+			s0.set(null);
+			s0full.set(null);
+		}
+	}
+
+	/**
 	 * Gets the minimum input symbol value which can be stored in this DFA.
 	 *
 	 * @return The minimum input symbol which can be stored in this DFA.

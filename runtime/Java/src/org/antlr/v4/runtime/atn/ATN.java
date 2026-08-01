@@ -89,7 +89,20 @@ public class ATN {
 	@NotNull
 	public DFA[] modeToDFA = new DFA[0];
 
-	protected final ConcurrentMap<Integer, Integer> LL1Table = new ConcurrentHashMap<Integer, Integer>();
+	/**
+	 * Package-private primitive LL(1) cache for {@link ParserATNSimulator}.
+	 * Copy-on-write, lock-free reads; never appears in public/protected API.
+	 */
+	final ConcurrentIntIntMap ll1Cache = new ConcurrentIntIntMap();
+
+	/**
+	 * LL(1) prediction cache exposed as a JDK {@link ConcurrentMap} so
+	 * subclasses and tests keep a stable {@code protected} surface. Backed by
+	 * {@link #ll1Cache} (single store): external boxed access pays boxing only
+	 * when this map is used; the hot path never touches {@link Integer}.
+	 */
+	protected final ConcurrentMap<Integer, Integer> LL1Table =
+		new ConcurrentIntIntMapView(ll1Cache);
 
 	/** Used for runtime deserialization of ATNs from strings */
 	public ATN(@NotNull ATNType grammarType, int maxTokenType) {
@@ -97,19 +110,57 @@ public class ATN {
 		this.maxTokenType = maxTokenType;
 	}
 
+	/**
+	 * Clears every decision/mode DFA and the LL(1) / context caches.
+	 *
+	 * <p>When the DFA arrays already match the decision/mode counts, existing
+	 * {@link DFA} instances are cleared in place via {@link DFA#clear()} to
+	 * avoid allocating a new DFA object per decision on every flush. Arrays are
+	 * only reallocated when their length is stale (for example after ATN
+	 * structural changes during deserialization).</p>
+	 */
 	public final void clearDFA() {
-		decisionToDFA = new DFA[decisionToState.size()];
-		for (int i = 0; i < decisionToDFA.length; i++) {
-			decisionToDFA[i] = new DFA(decisionToState.get(i), i);
+		final int decisionCount = decisionToState.size();
+		if (decisionToDFA != null && decisionToDFA.length == decisionCount) {
+			for (int i = 0; i < decisionCount; i++) {
+				DFA dfa = decisionToDFA[i];
+				if (dfa != null) {
+					dfa.clear();
+				}
+				else {
+					decisionToDFA[i] = new DFA(decisionToState.get(i), i);
+				}
+			}
+		}
+		else {
+			decisionToDFA = new DFA[decisionCount];
+			for (int i = 0; i < decisionCount; i++) {
+				decisionToDFA[i] = new DFA(decisionToState.get(i), i);
+			}
 		}
 
-		modeToDFA = new DFA[modeToStartState.size()];
-		for (int i = 0; i < modeToDFA.length; i++) {
-			modeToDFA[i] = new DFA(modeToStartState.get(i));
+		final int modeCount = modeToStartState.size();
+		if (modeToDFA != null && modeToDFA.length == modeCount) {
+			for (int i = 0; i < modeCount; i++) {
+				DFA dfa = modeToDFA[i];
+				if (dfa != null) {
+					dfa.clear();
+				}
+				else {
+					modeToDFA[i] = new DFA(modeToStartState.get(i));
+				}
+			}
+		}
+		else {
+			modeToDFA = new DFA[modeCount];
+			for (int i = 0; i < modeCount; i++) {
+				modeToDFA[i] = new DFA(modeToStartState.get(i));
+			}
 		}
 
 		contextCache.clear();
-		LL1Table.clear();
+		// Clears the single primitive store (LL1Table is a view over ll1Cache).
+		ll1Cache.clear();
 	}
 
 	public int getContextCacheSize() {

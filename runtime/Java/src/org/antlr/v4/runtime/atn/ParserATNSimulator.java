@@ -17,7 +17,6 @@ import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.TokenStream;
 import org.antlr.v4.runtime.Vocabulary;
 import org.antlr.v4.runtime.VocabularyImpl;
-import com.carrotsearch.hppc.IntObjectHashMap;
 
 import org.antlr.v4.runtime.dfa.AcceptStateInfo;
 import org.antlr.v4.runtime.dfa.DFA;
@@ -346,6 +345,22 @@ public class ParserATNSimulator extends ATNSimulator {
 	 */
 	private final ReachConfigSource retainedReachConfigs = new ReachConfigSource();
 
+	/**
+	 * Retained prediction-context cache for ATN simulation. Cleared at the start
+	 * of each {@code execATN}/{@code computeStartState} use so one simulator
+	 * thread reuses map capacity without retaining stale contexts across
+	 * predictions. Never shared across threads.
+	 */
+	private final PredictionContextCache retainedContextCache = new PredictionContextCache();
+
+	/**
+	 * Retained alt-1 context index for {@link #applyPrecedenceFilter}. Empty
+	 * clear is O(1); capacity is kept across precedence-DFA starts. HPPC type
+	 * is private — not visible on any public/protected signature.
+	 */
+	private final ClearableIntObjectHashMap<PredictionContext> retainedPrecedenceAlt1 =
+		new ClearableIntObjectHashMap<PredictionContext>();
+
 	/** Testing only! */
 	public ParserATNSimulator(@NotNull ATN atn) {
 		this(null, atn);
@@ -400,8 +415,10 @@ public class ParserATNSimulator extends ATNSimulator {
 		DFA dfa = atn.decisionToDFA[decision];
 		assert dfa != null;
 		if (optimize_ll1 && !dfa.isPrecedenceDfa() && !dfa.isEmpty()) {
-			Integer alt = tryLL1Prediction(input, decision);
-			if (alt != null) return alt;
+			int ll1Alt = tryLL1Prediction(input, decision);
+			if (ll1Alt != ATN.INVALID_ALT_NUMBER) {
+				return ll1Alt;
+			}
 		}
 
 		this.dfa = dfa;
@@ -445,15 +462,19 @@ public class ParserATNSimulator extends ATNSimulator {
 		}
 	}
 
-	private Integer tryLL1Prediction(TokenStream input, int decision) {
+	/**
+	 * Single-token LL(1) cache probe against the package-private primitive
+	 * {@link ATN#ll1Cache} (no {@link Integer} boxing). Subclass writes through
+	 * {@link ATN#LL1Table} update the same store via {@link ConcurrentIntIntMapView}.
+	 *
+	 * @return predicted alternative, or {@link ATN#INVALID_ALT_NUMBER} on miss
+	 */
+	private int tryLL1Prediction(TokenStream input, int decision) {
 		int ll_1 = input.LA(1);
-		if (ll_1 >= 0 && ll_1 <= Short.MAX_VALUE) {
-			Integer alt = atn.LL1Table.get((decision << 16) + ll_1);
-			if (alt != null) {
-				return alt;
-			}
+		if (ll_1 < 0 || ll_1 > Short.MAX_VALUE) {
+			return ATN.INVALID_ALT_NUMBER;
 		}
-		return null;
+		return atn.ll1Cache.get((decision << 16) + ll_1);
 	}
 
 	protected SimulatorState getStartState(@NotNull DFA dfa,
@@ -784,7 +805,7 @@ public class ParserATNSimulator extends ATNSimulator {
 
 		SimulatorState previous = initialState;
 
-		PredictionContextCache contextCache = new PredictionContextCache();
+		PredictionContextCache contextCache = obtainContextCache();
 		while (true) { // while more work
 			SimulatorState nextState = computeReachSet(dfa, previous, t, contextCache);
 			if (nextState == null) {
@@ -812,7 +833,8 @@ public class ParserATNSimulator extends ATNSimulator {
 					{
 						if (t >= 0 && t <= Short.MAX_VALUE) {
 							int key = (dfa.decision << 16) + t;
-							atn.LL1Table.put(key, predictedAlt);
+							// Single primitive store; LL1Table is a boxed view.
+							atn.ll1Cache.put(key, predictedAlt);
 						}
 					}
 
@@ -1349,7 +1371,7 @@ public class ParserATNSimulator extends ATNSimulator {
 		int previousContext = 0;
 		ParserRuleContext remainingGlobalContext = globalContext;
 		PredictionContext initialContext = useContext ? PredictionContext.EMPTY_FULL : PredictionContext.EMPTY_LOCAL; // always at least the implicit call to start rule
-		PredictionContextCache contextCache = new PredictionContextCache();
+		PredictionContextCache contextCache = obtainContextCache();
 		if (useContext) {
 			if (!enable_global_context_dfa) {
 				while (remainingGlobalContext != null) {
@@ -1542,55 +1564,73 @@ public class ParserATNSimulator extends ATNSimulator {
 	 */
 	@NotNull
 	protected ATNConfigSet applyPrecedenceFilter(@NotNull ATNConfigSet configs, ParserRuleContext globalContext, PredictionContextCache contextCache) {
-		// Primitive map: stateNumber -> prediction context from alt 1 configs.
+		// Retained primitive map: stateNumber -> alt-1 prediction context.
+		// No HPPC type in this method's signature; empty clear is O(1).
 		final int configCount = configs.size();
-		IntObjectHashMap<PredictionContext> statesFromAlt1 = new IntObjectHashMap<PredictionContext>(configCount);
+		final ClearableIntObjectHashMap<PredictionContext> statesFromAlt1 = retainedPrecedenceAlt1;
+		statesFromAlt1.clear();
 		ATNConfigSet configSet = new ATNConfigSet(configCount);
-		for (int i = 0; i < configCount; i++) {
-			ATNConfig config = configs.get(i);
-			// handle alt 1 first
-			if (config.getAlt() != 1) {
-				continue;
-			}
-
-			SemanticContext updatedContext = config.getSemanticContext().evalPrecedence(parser, globalContext);
-			if (updatedContext == null) {
-				// the configuration was eliminated
-				continue;
-			}
-
-			statesFromAlt1.put(config.getState().stateNumber, config.getContext());
-			if (updatedContext != config.getSemanticContext()) {
-				configSet.add(config.transform(config.getState(), updatedContext, false), contextCache);
-			}
-			else {
-				configSet.add(config, contextCache);
-			}
-		}
-
-		for (int i = 0; i < configCount; i++) {
-			ATNConfig config = configs.get(i);
-			if (config.getAlt() == 1) {
-				// already handled
-				continue;
-			}
-
-			if (!config.isPrecedenceFilterSuppressed()) {
-				/* In the future, this elimination step could be updated to also
-				 * filter the prediction context for alternatives predicting alt>1
-				 * (basically a graph subtraction algorithm).
-				 */
-				PredictionContext context = statesFromAlt1.get(config.getState().stateNumber);
-				if (context != null && context.equals(config.getContext())) {
-					// eliminated
+		try {
+			for (int i = 0; i < configCount; i++) {
+				ATNConfig config = configs.get(i);
+				// handle alt 1 first
+				if (config.getAlt() != 1) {
 					continue;
+				}
+
+				SemanticContext updatedContext = config.getSemanticContext().evalPrecedence(parser, globalContext);
+				if (updatedContext == null) {
+					// the configuration was eliminated
+					continue;
+				}
+
+				statesFromAlt1.put(config.getState().stateNumber, config.getContext());
+				if (updatedContext != config.getSemanticContext()) {
+					configSet.add(config.transform(config.getState(), updatedContext, false), contextCache);
+				}
+				else {
+					configSet.add(config, contextCache);
 				}
 			}
 
-			configSet.add(config, contextCache);
+			for (int i = 0; i < configCount; i++) {
+				ATNConfig config = configs.get(i);
+				if (config.getAlt() == 1) {
+					// already handled
+					continue;
+				}
+
+				if (!config.isPrecedenceFilterSuppressed()) {
+					/* In the future, this elimination step could be updated to also
+					 * filter the prediction context for alternatives predicting alt>1
+					 * (basically a graph subtraction algorithm).
+					 */
+					PredictionContext context = statesFromAlt1.get(config.getState().stateNumber);
+					if (context != null && context.equals(config.getContext())) {
+						// eliminated
+						continue;
+					}
+				}
+
+				configSet.add(config, contextCache);
+			}
+		}
+		finally {
+			// Drop context references; keep table capacity for the next filter.
+			statesFromAlt1.clear();
 		}
 
 		return configSet;
+	}
+
+	/**
+	 * Returns the retained prediction-context cache after clearing it. One
+	 * simulator owns the cache for the duration of a single ATN simulation.
+	 */
+	@NotNull
+	private PredictionContextCache obtainContextCache() {
+		retainedContextCache.clear();
+		return retainedContextCache;
 	}
 
 	@Nullable

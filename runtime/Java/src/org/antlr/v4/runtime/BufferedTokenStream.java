@@ -483,6 +483,16 @@ public class BufferedTokenStream implements TokenStream {
     /** Get all tokens from lexer until EOF. */
     public void fill() {
         lazyInit();
+		// Pre-size from the character stream when available. Typical source code
+		// is roughly 4–8 characters per token; under-estimating only costs a
+		// later growth, over-estimating is cheap relative to Token objects.
+		CharStream chars = tokenSource.getInputStream();
+		if (chars != null && tokens instanceof ArrayList) {
+			int estimate = chars.size() >> 2; // size/4
+			if (estimate > tokens.size()) {
+				((ArrayList<Token>)tokens).ensureCapacity(estimate);
+			}
+		}
 		final int blockSize = 1000;
 		while (true) {
 			int fetched = fetch(blockSize);

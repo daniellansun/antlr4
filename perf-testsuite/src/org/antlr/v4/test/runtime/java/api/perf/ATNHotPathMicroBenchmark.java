@@ -159,8 +159,9 @@ public final class ATNHotPathMicroBenchmark {
 		// over HPPC ObjectHashSet). Measure the underlying open-addressed table
 		// against HashSet; the thin adapter add/clear cost is negligible vs table ops.
 		java.util.HashSet<ATNConfig> jdkBusy = new java.util.HashSet<ATNConfig>(configsPerReach * 2);
-		com.carrotsearch.hppc.ObjectHashSet<ATNConfig> hppcBusy =
-			new com.carrotsearch.hppc.ObjectHashSet<ATNConfig>(configsPerReach * 2);
+		// HPPC is shaded into the runtime jar; use the relocated package.
+		org.antlr.v4.runtime.shaded.com.carrotsearch.hppc.ObjectHashSet<ATNConfig> hppcBusy =
+			new org.antlr.v4.runtime.shaded.com.carrotsearch.hppc.ObjectHashSet<ATNConfig>(configsPerReach * 2);
 		for (int r = 0; r < 10_000; r++) {
 			jdkBusy.clear();
 			hppcBusy.clear();
