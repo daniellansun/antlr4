@@ -202,17 +202,16 @@ public enum CharStreams {
 	/**
 	 * Creates a {@link CharStream} given a {@link String} and the {@code sourceName}
 	 * from which it came.
+	 *
+	 * <p>The UTF-16 contents are converted directly into the compact
+	 * code-point storage. This avoids materializing a temporary {@link CharBuffer}
+	 * solely to copy the same {@link String} a second time.</p>
 	 */
 	public static CodePointCharStream fromString(String s, String sourceName) {
 		// Initial guess assumes no code points > U+FFFF: one code
 		// point for each code unit in the string
 		CodePointBuffer.Builder codePointBufferBuilder = CodePointBuffer.builder(s.length());
-		// TODO: CharBuffer.wrap(String) rightfully returns a read-only buffer
-		// which doesn't expose its array, so we make a copy.
-		CharBuffer cb = CharBuffer.allocate(s.length());
-		cb.put(s);
-		cb.flip();
-		codePointBufferBuilder.append(cb);
+		codePointBufferBuilder.append(s);
 		return CodePointCharStream.fromBuffer(codePointBufferBuilder.build(), sourceName);
 	}
 

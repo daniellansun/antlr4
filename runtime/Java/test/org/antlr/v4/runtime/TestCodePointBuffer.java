@@ -97,6 +97,32 @@ public class TestCodePointBuffer {
 	}
 
 	@Test
+	public void builderStringAppendMatchesCharBufferAppendForAllStorageTypes() {
+		assertEquivalentStringAndBufferAppend("ascii-only-0123");
+		assertEquivalentStringAndBufferAppend("\u0100\u4E2D\u0101");
+		assertEquivalentStringAndBufferAppend(
+			"\u0100" + new StringBuilder().appendCodePoint(0x1F600).toString());
+		assertEquivalentStringAndBufferAppend(
+			"A" + new StringBuilder().appendCodePoint(0x1F600).append("B").toString());
+		assertEquivalentStringAndBufferAppend(new String(new char[] {'A', '\uD83D', 'B'}));
+		assertEquivalentStringAndBufferAppend(new String(new char[] {'A', '\uD83D', '\uD83D'}));
+	}
+
+	@Test
+	public void builderStringAppendContinuesAcrossCharAndIntStorage() {
+		CodePointBuffer.Builder charBuilder = CodePointBuffer.builder(1);
+		charBuilder.append("\u0100");
+		charBuilder.append("\u0101");
+		assertEquals("\u0100\u0101", CodePointCharStream.fromBuffer(charBuilder.build()).toString());
+
+		CodePointBuffer.Builder intBuilder = CodePointBuffer.builder(1);
+		String emoji = new StringBuilder().appendCodePoint(0x1F600).toString();
+		intBuilder.append(emoji);
+		intBuilder.append("Z");
+		assertEquals(emoji + "Z", CodePointCharStream.fromBuffer(intBuilder.build()).toString());
+	}
+
+	@Test
 	public void builderMixedAsciiThenBmp() {
 		CodePointBuffer.Builder builder = CodePointBuffer.builder(4);
 		CharBuffer a = CharBuffer.allocate(1);
@@ -252,5 +278,24 @@ public class TestCodePointBuffer {
 		b6.append(CharBuffer.wrap("xy".toCharArray()));
 		b6.ensureRemaining(128);
 		assertNotNull(b6.build());
+	}
+
+	private static void assertEquivalentStringAndBufferAppend(String input) {
+		CodePointBuffer.Builder stringBuilder = CodePointBuffer.builder(input.length());
+		stringBuilder.append(input);
+		CodePointBuffer stringBuffer = stringBuilder.build();
+
+		CodePointBuffer.Builder charBufferBuilder = CodePointBuffer.builder(input.length());
+		charBufferBuilder.append(CharBuffer.wrap(input.toCharArray()));
+		CodePointBuffer charBuffer = charBufferBuilder.build();
+
+		assertEquals(charBuffer.getType(), stringBuffer.getType());
+		assertEquals(charBuffer.remaining(), stringBuffer.remaining());
+		for (int i = 0; i < charBuffer.remaining(); i++) {
+			assertEquals(charBuffer.get(i), stringBuffer.get(i));
+		}
+		assertEquals(
+			CodePointCharStream.fromBuffer(charBuffer).toString(),
+			CodePointCharStream.fromBuffer(stringBuffer).toString());
 	}
 }
