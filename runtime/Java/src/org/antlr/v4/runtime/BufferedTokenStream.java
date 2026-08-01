@@ -486,11 +486,21 @@ public class BufferedTokenStream implements TokenStream {
 		// Pre-size from the character stream when available. Typical source code
 		// is roughly 4–8 characters per token; under-estimating only costs a
 		// later growth, over-estimating is cheap relative to Token objects.
+		//
+		// Some streams (notably {@link UnbufferedCharStream}) intentionally
+		// throw {@link UnsupportedOperationException} from {@link CharStream#size}
+		// because they cannot know the full input length. Treat that as "no
+		// estimate" and keep the default token-list capacity.
 		CharStream chars = tokenSource.getInputStream();
 		if (chars != null && tokens instanceof ArrayList) {
-			int estimate = chars.size() >> 2; // size/4
-			if (estimate > tokens.size()) {
-				((ArrayList<Token>)tokens).ensureCapacity(estimate);
+			try {
+				int estimate = chars.size() >> 2; // size/4
+				if (estimate > tokens.size()) {
+					((ArrayList<Token>)tokens).ensureCapacity(estimate);
+				}
+			}
+			catch (UnsupportedOperationException ignored) {
+				// Unbuffered / streaming inputs: skip capacity hint.
 			}
 		}
 		final int blockSize = 1000;
