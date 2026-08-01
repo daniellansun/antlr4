@@ -83,7 +83,7 @@ public class ScopeParser {
 		String declarator = decl.getItem1().substring(0, rightEdgeOfDeclarator + 1);
 		Tuple2<Integer, Integer> p;
 		String text = decl.getItem1();
-		text = text.replaceAll("::","");
+		text = text.replace("::","");
 		if ( text.contains(":") ) {
 			// declarator has type appearing after the name like "x:T"
 			p = _parsePostfixDecl(attr, declarator, action, g);
