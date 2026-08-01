@@ -49,6 +49,19 @@
             <version>0.16</version>
             <scope>compile</scope>
         </dependency>
+        <!--
+          Direct HPPC for ATNHotPathMicroBenchmark only. The runtime shades HPPC
+          into org.antlr.v4.runtime.shaded… at package time, so the shaded
+          package is not available on the reactor compile classpath (which uses
+          runtime target/classes + this dependency). Keep the same Java 8
+          HPPC line as runtime/Java.
+        -->
+        <dependency>
+            <groupId>com.carrotsearch</groupId>
+            <artifactId>hppc</artifactId>
+            <version>0.9.1</version>
+            <scope>compile</scope>
+        </dependency>
         <dependency>
             <groupId>org.openjdk.jmh</groupId>
             <artifactId>jmh-core</artifactId>
