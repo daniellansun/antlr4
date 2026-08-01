@@ -331,19 +331,11 @@ public class ParserATNSimulator extends ATNSimulator {
 	private final EpsilonClosure epsilonClosure = new EpsilonClosure(this);
 
 	/**
-	 * Retained reach / intermediate sets for {@link #computeTargetState}.
-	 * {@link RetainedConfigSet#obtain(int)} always returns empty;
-	 * {@link RetainedConfigSet#release()} runs in {@code finally} after each edge.
+	 * Reach / target-state engine: retained config sets and the edge
+	 * computation for {@link #computeTargetState}. Package-private; not part
+	 * of the public API.
 	 */
-	private final RetainedConfigSet retainedReach = new RetainedConfigSet(false);
-	private final RetainedConfigSet retainedIntermediate = new RetainedConfigSet(false);
-
-	/**
-	 * Retained config view for {@link #computeTargetState}. {@link ReachConfigSource#reset}
-	 * binds the source set; {@link ReachConfigSource#release()} runs in {@code finally}
-	 * so the full-context rewrite list keeps capacity across predictions.
-	 */
-	private final ReachConfigSource retainedReachConfigs = new ReachConfigSource();
+	private final ReachComputation reachComputation = new ReachComputation(this);
 
 	/**
 	 * Retained prediction-context cache for ATN simulation. Cleared at the start
@@ -355,8 +347,9 @@ public class ParserATNSimulator extends ATNSimulator {
 
 	/**
 	 * Retained alt-1 context index for {@link #applyPrecedenceFilter}. Empty
-	 * clear is O(1); capacity is kept across precedence-DFA starts. HPPC type
-	 * is private — not visible on any public/protected signature.
+	 * clear is O(1); capacity is kept across precedence-DFA starts. Storage is
+	 * a package-private primitive map (no third-party type on any
+	 * public/protected signature).
 	 */
 	private final ClearableIntObjectHashMap<PredictionContext> retainedPrecedenceAlt1 =
 		new ClearableIntObjectHashMap<PredictionContext>();
@@ -1116,12 +1109,15 @@ public class ParserATNSimulator extends ATNSimulator {
 	 * Compute a target state for an edge in the DFA, and attempt to add the
 	 * computed state and corresponding edge to the DFA.
 	 *
-	 * @param dfa
-	 * @param s The current DFA state
-	 * @param remainingGlobalContext
-	 * @param t The next input symbol
-	 * @param useContext
-	 * @param contextCache
+	 * <p>Delegates to package-private {@link ReachComputation}, which owns the
+	 * retained reach / intermediate sets and the full-context config view.</p>
+	 *
+	 * @param dfa the DFA owning this decision
+	 * @param s the current DFA state
+	 * @param remainingGlobalContext remaining full context, or {@code null}
+	 * @param t the next input symbol
+	 * @param useContext whether full-context prediction is active
+	 * @param contextCache prediction-context cache for this simulation
 	 *
 	 * @return The computed target DFA state for the given input symbol
 	 * {@code t}. If {@code t} does not lead to a valid DFA state, this method
@@ -1129,158 +1125,7 @@ public class ParserATNSimulator extends ATNSimulator {
 	 */
 	@NotNull
 	protected Tuple2<DFAState, ParserRuleContext> computeTargetState(@NotNull DFA dfa, @NotNull DFAState s, ParserRuleContext remainingGlobalContext, int t, boolean useContext, PredictionContextCache contextCache) {
-		final int sourceConfigCount = s.configs.size();
-		// Monomorphic config access: retained zero-copy view over s.configs;
-		// materializes a list only when full-context prediction appends return
-		// states (rewrite list capacity is preserved across edges).
-		final ReachConfigSource configs = retainedReachConfigs;
-		IntegerList contextElements = null;
-
-		// Bind retained scratch inside try so finally always release()s even if
-		// obtain/reset fails mid-setup (e.g. OOM on first buffer allocation).
-		ATNConfigSet reach = null;
-		ATNConfigSet intermediate = null;
-		try {
-			configs.reset(s.configs);
-			// obtain() always empty; release() in finally after DFA clones.
-			// Locals may rebind (EOF filter) like the pre-retention algorithm.
-			reach = retainedReach.obtain(sourceConfigCount);
-			intermediate = retainedIntermediate.obtain(sourceConfigCount);
-			boolean stepIntoGlobal;
-			do {
-				boolean hasMoreContext = !useContext || remainingGlobalContext != null;
-				if (!hasMoreContext) {
-					reach.setOutermostConfigSet(true);
-				}
-
-				intermediate.clear();
-
-				/* Configurations already in a rule stop state indicate reaching the end
-				 * of the decision rule (local context) or end of the start rule (full
-				 * context). Once reached, these configurations are never updated by a
-				 * closure operation, so they are handled separately for the performance
-				 * advantage of having a smaller intermediate set when calling closure.
-				 *
-				 * For full-context reach operations, separate handling is required to
-				 * ensure that the alternative matching the longest overall sequence is
-				 * chosen when multiple such configurations can match the input.
-				 */
-				List<ATNConfig> skippedStopStates = null;
-
-				final int configCount = configs.size();
-				for (int ci = 0; ci < configCount; ci++) {
-					ATNConfig c = configs.get(ci);
-					/*if ( debug ) System.out.println("testing "+getTokenName(t)+" at "+c.toString());*/
-
-					ATNState cState = c.getState();
-					if (cState instanceof RuleStopState) {
-						assert c.getContext().isEmpty();
-						if (useContext && !c.getReachesIntoOuterContext() || t == IntStream.EOF) {
-							if (skippedStopStates == null) {
-								skippedStopStates = new ArrayList<ATNConfig>(2);
-							}
-
-							skippedStopStates.add(c);
-						}
-
-						continue;
-					}
-
-					int n = cState.getNumberOfOptimizedTransitions();
-					for (int ti=0; ti<n; ti++) {               // for each optimized transition
-						Transition trans = cState.getOptimizedTransition(ti);
-						ATNState target = getReachableTarget(c, trans, t);
-						if ( target!=null ) {
-							intermediate.add(c.transform(target, false), contextCache);
-						}
-					}
-				}
-
-
-				/* This block optimizes the reach operation for intermediate sets which
-				 * trivially indicate a termination state for the overall
-				 * adaptivePredict operation.
-				 *
-				 * The conditions assume that intermediate
-				 * contains all configurations relevant to the reach set, but this
-				 * condition is not true when one or more configurations have been
-				 * withheld in skippedStopStates, or when the current symbol is EOF.
-				 */
-				if (optimize_unique_closure && skippedStopStates == null && t != Token.EOF && intermediate.getUniqueAlt() != ATN.INVALID_ALT_NUMBER) {
-					// intermediate is the edge result; release() after clone.
-					intermediate.setOutermostConfigSet(reach.isOutermostConfigSet());
-					return finishTargetEdge(dfa, s, t, contextElements, intermediate, remainingGlobalContext, contextCache);
-				}
-
-				/* If the reach set could not be trivially determined, perform a closure
-				 * operation on the intermediate set to compute its initial value.
-				 */
-				final boolean collectPredicates = false;
-				boolean treatEofAsEpsilon = t == Token.EOF;
-				closure(intermediate, reach, collectPredicates, hasMoreContext, contextCache, treatEofAsEpsilon);
-				stepIntoGlobal = reach.getDipsIntoOuterContext();
-
-				if (t == IntStream.EOF) {
-					/* After consuming EOF no additional input is possible, so we are
-					 * only interested in configurations which reached the end of the
-					 * decision rule (local context) or end of the start rule (full
-					 * context). Update reach to contain only these configurations. This
-					 * handles both explicit EOF transitions in the grammar and implicit
-					 * EOF transitions following the end of the decision or start rule.
-					 *
-					 * This is handled before the configurations in skippedStopStates,
-					 * because any configurations potentially added from that list are
-					 * already guaranteed to meet this condition whether or not it's
-					 * required.
-					 */
-					// May rebind to a fresh filtered set (not scratch-owned).
-					reach = removeAllConfigsNotInRuleStopState(reach, contextCache);
-				}
-
-				/* If skippedStopStates is not null, then it contains at least one
-				 * configuration. For full-context reach operations, these
-				 * configurations reached the end of the start rule, in which case we
-				 * only add them back to reach if no configuration during the current
-				 * closure operation reached such a state. This ensures adaptivePredict
-				 * chooses an alternative matching the longest overall sequence when
-				 * multiple alternatives are viable.
-				 */
-				if (skippedStopStates != null && (!useContext || !PredictionMode.hasConfigInRuleStopState(reach))) {
-					assert !skippedStopStates.isEmpty();
-					for (int i = 0, n = skippedStopStates.size(); i < n; i++) {
-						reach.add(skippedStopStates.get(i), contextCache);
-					}
-				}
-
-				if (useContext && stepIntoGlobal) {
-					reach.clear();
-
-					remainingGlobalContext = skipTailCalls(remainingGlobalContext);
-					int nextContextElement = getReturnState(remainingGlobalContext);
-					if (contextElements == null) {
-						contextElements = new IntegerList();
-					}
-
-					if (remainingGlobalContext.isEmpty()) {
-						remainingGlobalContext = null;
-					} else {
-						remainingGlobalContext = remainingGlobalContext.getParent();
-					}
-
-					contextElements.add(nextContextElement);
-					if (nextContextElement != PredictionContext.EMPTY_FULL_STATE_KEY) {
-						configs.appendContext(nextContextElement, contextCache);
-					}
-				}
-			} while (useContext && stepIntoGlobal);
-
-			return finishTargetEdge(dfa, s, t, contextElements, reach, remainingGlobalContext, contextCache);
-		}
-		finally {
-			retainedReachConfigs.release();
-			retainedReach.release();
-			retainedIntermediate.release();
-		}
+		return reachComputation.computeTargetState(dfa, s, remainingGlobalContext, t, useContext, contextCache);
 	}
 
 	/**
@@ -1289,29 +1134,7 @@ public class ParserATNSimulator extends ATNSimulator {
 	 */
 	@NotNull
 	final ReachConfigSource retainedReachConfigs() {
-		return retainedReachConfigs;
-	}
-
-	/**
-	 * Install a DFA edge for the computed config set, or {@link #ERROR} if empty.
-	 */
-	@NotNull
-	private Tuple2<DFAState, ParserRuleContext> finishTargetEdge(
-			@NotNull DFA dfa,
-			@NotNull DFAState s,
-			int t,
-			@Nullable IntegerList contextElements,
-			@NotNull ATNConfigSet edgeConfigs,
-			ParserRuleContext remainingGlobalContext,
-			PredictionContextCache contextCache)
-	{
-		if (edgeConfigs.isEmpty()) {
-			addDFAEdge(s, t, ERROR);
-			return Tuple.create(ERROR, remainingGlobalContext);
-		}
-
-		DFAState result = addDFAEdge(dfa, s, t, contextElements, edgeConfigs, contextCache);
-		return Tuple.create(result, remainingGlobalContext);
+		return reachComputation.retainedReachConfigs();
 	}
 
 	/**
@@ -1551,10 +1374,10 @@ public class ParserATNSimulator extends ATNSimulator {
 	 * </p>
 	 *
 	 * <p>Alt-1 prediction contexts are indexed by ATN state number in a
-	 * primitive {@code int}-keyed map (HPPC, retained as an implementation
-	 * detail of this method only) so filtering of higher alternatives avoids
-	 * {@link Integer} boxing on each state-number lookup. No HPPC type appears
-	 * in this method's signature.</p>
+	 * retained primitive {@code int}-keyed map (implementation detail of this
+	 * method only) so filtering of higher alternatives avoids {@link Integer}
+	 * boxing on each state-number lookup. The protected signature uses only
+	 * JDK and ANTLR types.</p>
 	 *
 	 * @param configs The configuration set computed by
 	 * {@link #computeStartState} as the start state for the DFA.
@@ -1565,7 +1388,7 @@ public class ParserATNSimulator extends ATNSimulator {
 	@NotNull
 	protected ATNConfigSet applyPrecedenceFilter(@NotNull ATNConfigSet configs, ParserRuleContext globalContext, PredictionContextCache contextCache) {
 		// Retained primitive map: stateNumber -> alt-1 prediction context.
-		// No HPPC type in this method's signature; empty clear is O(1).
+		// Empty clear is O(1); no third-party type in this method's signature.
 		final int configCount = configs.size();
 		final ClearableIntObjectHashMap<PredictionContext> statesFromAlt1 = retainedPrecedenceAlt1;
 		statesFromAlt1.clear();

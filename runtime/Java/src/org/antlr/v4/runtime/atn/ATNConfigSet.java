@@ -93,17 +93,15 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	 * This map is only used for optimizing the process of adding configs to the set,
 	 * and is {@code null} for read-only sets stored in the DFA.
 	 * <p>
-	 * Implemented as a private primitive {@code long}-keyed map
-	 * ({@link ClearableLongObjectHashMap}, HPPC open addressing underneath,
-	 * not part of any public or protected API) so {@link #getKey} values are
-	 * stored and looked up without {@link Long} boxing on the prediction hot
-	 * path. Hot {@link #add} / {@link #contains} use
-	 * {@code indexOf}/{@code indexGet}/{@code indexInsert} so a key is hashed
-	 * once per operation. {@link #clear()} uses the map's empty-fast-path and
-	 * may sparse-remove known keys when occupancy is low relative to table
-	 * capacity (see {@link #SPARSE_CLEAR_CAPACITY_FACTOR}). External callers
-	 * interact only with the {@link Set}{@code <ATNConfig>} surface of this
-	 * class.
+	 * Implemented as a private primitive {@code long}-keyed open-addressed map
+	 * (package-private storage; not part of any public or protected API) so
+	 * {@link #getKey} values are stored and looked up without {@link Long}
+	 * boxing on the prediction hot path. Hot {@link #add} / {@link #contains}
+	 * hash each key once per operation. {@link #clear()} uses an empty-fast
+	 * path and may sparse-remove known keys when occupancy is low relative to
+	 * table capacity (see {@link #SPARSE_CLEAR_CAPACITY_FACTOR}). External
+	 * callers interact only with the {@link Set}{@code <ATNConfig>} surface
+	 * of this class.
 	 */
 	private final ClearableLongObjectHashMap<ATNConfig> mergedConfigs;
 	/**
@@ -196,8 +194,8 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			this.mergedConfigs = null;
 			this.unmerged = null;
 		} else if (!set.isReadOnly()) {
-			// Object.clone preserves ClearableLongObjectHashMap concrete type.
-			this.mergedConfigs = (ClearableLongObjectHashMap<ATNConfig>)set.mergedConfigs.clone();
+			// Deep-copy the package-private merge map (HPPC stays private to it).
+			this.mergedConfigs = set.mergedConfigs.deepCopy();
 			this.unmerged = (ArrayList<ATNConfig>)set.unmerged.clone();
 		} else {
 			this.mergedConfigs = new ClearableLongObjectHashMap<ATNConfig>(mergedMapExpectedElements(set.configs.size()));

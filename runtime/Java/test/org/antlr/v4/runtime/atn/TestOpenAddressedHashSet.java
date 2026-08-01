@@ -20,7 +20,6 @@ import java.util.Set;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -191,17 +190,6 @@ public class TestOpenAddressedHashSet {
 		assertTrue(set.retainAll(Collections.singleton("a")));
 		assertEquals(Collections.singleton("a"), set);
 		assertFalse(set.retainAll(Collections.singleton("a")));
-	}
-
-	@Test
-	public void delegateIsObjectHashSet() {
-		// Same-package diagnostic: storage is HPPC; type is not on the Set API.
-		OpenAddressedHashSet<String> set = new OpenAddressedHashSet<String>(4);
-		assertNotNull(set.delegate());
-		assertTrue(set.delegate() instanceof ClearableObjectHashSet);
-		set.add("z");
-		assertEquals(1, set.delegate().size());
-		assertTrue(set.delegate().contains("z"));
 	}
 
 	@Test

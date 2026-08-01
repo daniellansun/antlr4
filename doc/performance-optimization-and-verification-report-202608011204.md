@@ -34,14 +34,14 @@ Three iterative design/implement/test/measure cycles were executed against a fix
 
 | Storage | Visibility | Exposed surface |
 |---------|------------|-----------------|
-| `ClearableLongObjectHashMap` | package-private | inside `ATNConfigSet` → `Set<ATNConfig>` |
-| `ClearableObjectHashSet` | package-private | via `OpenAddressedHashSet` → `Set<ATNConfig>` |
-| `ClearableIntObjectHashMap` | package-private field on `ParserATNSimulator` | not in any method signature |
-| `ConcurrentIntIntMap` | package-private | `ATN.ll1Cache` |
-| `ConcurrentIntIntMapView` | package-private | `protected ConcurrentMap LL1Table` (boxed view) |
-| `IntIntHashMap` / `LongObjectHashMap` / … | shaded under `org.antlr.v4.runtime.shaded…` | never public |
+| `ClearableLongObjectHashMap` (composes HPPC; does not extend) | package-private | inside `ATNConfigSet` → `Set<ATNConfig>` |
+| `OpenAddressedHashSet` (composes HPPC + empty-fast clear) | package-private | `Set<ATNConfig>` busy set |
+| `ClearableIntObjectHashMap` (composes HPPC; does not extend) | package-private field on `ParserATNSimulator` | not in any method signature |
+| `ConcurrentIntIntMap` (composes HPPC COW map) | package-private | `ATN.ll1Cache` |
+| `ConcurrentIntIntMapView` | package-private | `protected ConcurrentMap LL1Table` (JDK facade) |
+| `IntIntHashMap` / `LongObjectHashMap` / … | shaded under `org.antlr.v4.runtime.shaded…` | never in ANTLR public/protected signatures |
 
-`ParserATNSimulator` no longer imports `com.carrotsearch.hppc.*`.
+`ParserATNSimulator` no longer imports `com.carrotsearch.hppc.*`. Wrappers use **composition** so HPPC is not part of the production type hierarchy. Signature boundary enforced by `TestHppcApiBoundary`.
 
 ---
 

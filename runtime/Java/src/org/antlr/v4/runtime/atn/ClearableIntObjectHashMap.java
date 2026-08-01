@@ -9,43 +9,66 @@ package org.antlr.v4.runtime.atn;
 import com.carrotsearch.hppc.IntObjectHashMap;
 
 /**
- * Package-private {@link IntObjectHashMap} with O(1) empty {@link #clear()}.
+ * Package-private {@code int → V} map with O(1) empty {@link #clear()}.
+ *
+ * <p>
+ * <strong>Encapsulation:</strong> HPPC {@link IntObjectHashMap} is a private
+ * field only — this type does not extend HPPC, so no HPPC type appears in the
+ * production type hierarchy or in any {@code public}/{@code protected}
+ * signature. Used as a private field on {@link ParserATNSimulator} for the
+ * retained precedence-filter alt-1 index.</p>
  *
  * <p>HPPC's stock {@link IntObjectHashMap#clear()} always
  * {@link java.util.Arrays#fill fills} the entire open-addressed table. Retained
- * scratch maps used by {@link ParserATNSimulator#applyPrecedenceFilter} call
- * clear on every invocation, so empty bulk fills would dominate when the prior
- * edge left the map empty or after an explicit release.</p>
- *
- * <p><strong>Not part of any {@code public} or {@code protected} API.</strong>
- * Call sites keep the map as a private field; no HPPC type appears in
- * signatures of public or protected methods.</p>
+ * scratch maps clear on every filter invocation; empty bulk fills would
+ * dominate when the prior edge left the map empty.</p>
  *
  * @param <VType> value type
  */
-final class ClearableIntObjectHashMap<VType> extends IntObjectHashMap<VType> {
+final class ClearableIntObjectHashMap<VType> {
+
+	/** Private HPPC storage — never exposed in signatures. */
+	private final IntObjectHashMap<VType> map;
 
 	ClearableIntObjectHashMap() {
-		super();
+		this.map = new IntObjectHashMap<VType>();
 	}
 
 	/**
-	 * @param expectedElements capacity hint (same contract as
-	 * {@link IntObjectHashMap#IntObjectHashMap(int)})
+	 * @param expectedElements capacity hint
 	 */
 	ClearableIntObjectHashMap(int expectedElements) {
-		super(expectedElements);
+		this.map = new IntObjectHashMap<VType>(expectedElements);
 	}
 
 	/**
-	 * Clears all entries. Already-empty maps return immediately without
-	 * touching the backing arrays.
+	 * Clears all entries. Already-empty maps return without touching backing
+	 * arrays.
 	 */
-	@Override
-	public void clear() {
-		if (isEmpty()) {
+	void clear() {
+		if (map.isEmpty()) {
 			return;
 		}
-		super.clear();
+		map.clear();
+	}
+
+	int size() {
+		return map.size();
+	}
+
+	boolean isEmpty() {
+		return map.isEmpty();
+	}
+
+	VType get(int key) {
+		return map.get(key);
+	}
+
+	VType put(int key, VType value) {
+		return map.put(key, value);
+	}
+
+	boolean containsKey(int key) {
+		return map.containsKey(key);
 	}
 }

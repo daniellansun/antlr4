@@ -131,11 +131,14 @@ API surface** — they appear only as non-exported implementation detail
 (private fields/locals and package-private diagnostics). Callers and
 subclasses see JDK collection interfaces (for example `Set<ATNConfig>`).
 
-| Structure | Storage (private) | Exposed API | Role |
+| Structure | Storage (private field inside package-private wrapper) | Exposed API | Role |
 | --- | --- | --- | --- |
-| `ATNConfigSet` merge index | `ClearableLongObjectHashMap` (HPPC `LongObjectHashMap`) | `Set<ATNConfig>` | packed `(state, alt)` → config; no `Long` boxing; empty clear O(1) |
-| Precedence filter | `IntObjectHashMap` | method-local only | state number → alt-1 context (not retained/pooled) |
-| Epsilon-closure busy set | `ClearableObjectHashSet` via package-private `OpenAddressedHashSet` | `Set<ATNConfig>` | right-recursion / EOF* guards; no `HashMap.Node`; empty clear O(1) |
+| `ATNConfigSet` merge index | `ClearableLongObjectHashMap` **composes** HPPC `LongObjectHashMap` (does not extend it) | `Set<ATNConfig>` | packed `(state, alt)` → config; no `Long` boxing; empty clear O(1) |
+| Precedence filter | `ClearableIntObjectHashMap` **composes** HPPC `IntObjectHashMap` (private field on simulator) | not in any method signature | state number → alt-1 context; retained; empty clear O(1) |
+| Epsilon-closure busy set | package-private `OpenAddressedHashSet` **composes** HPPC `ObjectHashSet` + empty-fast `clear` | `Set<ATNConfig>` | right-recursion / EOF* guards; no `HashMap.Node`; empty clear O(1) |
+| LL(1) prediction cache | `ConcurrentIntIntMap` **composes** HPPC `IntIntHashMap` (COW) | `protected ConcurrentMap<Integer,Integer> LL1Table` via `ConcurrentIntIntMapView` | primitive get/put on hot path; JDK map for subclasses/tests |
+
+**Rule:** HPPC types never appear in any `public` or `protected` field, method, or constructor signature, and package-private wrappers use **composition** (not inheritance) so HPPC is not part of the production type hierarchy. Unit test `TestHppcApiBoundary` enforces the signature rule by reflection.
 
 `ATNConfigSet.add` / `contains` use `indexOf` / `indexGet` / `indexInsert` so
 each long key is hashed once per operation (not a separate `get` then `put`).
@@ -145,9 +148,12 @@ Cold paths (for example ATN deserialization) keep JDK maps.
 Epsilon-closure orchestration (busy set, predicate vs BFS control, double-
 buffered intermediate layers) lives in package-private `EpsilonClosure` so
 `ParserATNSimulator` stays orchestration-focused. The retained busy set is an
-`OpenAddressedHashSet` (thin `java.util.Set` adapter over HPPC
-`ObjectHashSet`) so the protected recursive `closure` SPI stays interface-
-oriented and source-compatible with the pre-HPPC `Set` signature.
+`OpenAddressedHashSet` (JDK `Set` over HPPC `ObjectHashSet` with empty-fast
+`clear`) so the protected recursive `closure` SPI stays interface-
+oriented and source-compatible with the pre-HPPC `Set` signature. Edge
+reach / target-state computation lives in package-private
+`ReachComputation` (retained config sets + `ReachConfigSource`) so
+`ParserATNSimulator` stays orchestration-focused.
 
 HPPC is shaded into `org.antlr.v4.runtime.shaded.com.carrotsearch.hppc` at
 package time (Java 8–compatible HPPC release). The published runtime is
@@ -197,7 +203,7 @@ API surfaces):
 
 | Mechanism | Effect |
 | --- | --- |
-| `ClearableLongObjectHashMap` / `ClearableObjectHashSet` | empty `clear()` is O(1) (no bulk fill) |
+| `ClearableLongObjectHashMap` / `OpenAddressedHashSet` | empty `clear()` is O(1) (no bulk fill) |
 | `ATNConfigSet.clear` sparse path | when `size * 4 < tableLength`, remove known merge keys (O(n)) instead of filling capacity |
 | `ArrayList.clear` | already nulls only the used prefix `[0, size)` |
 | `RetainedConfigSet` obtain+release | still both clear (defensive); second clear is free when empty |

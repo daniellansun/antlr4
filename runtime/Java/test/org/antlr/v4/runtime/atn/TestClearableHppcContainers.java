@@ -16,9 +16,10 @@ import static org.junit.Assert.assertTrue;
 
 /**
  * Unit tests for package-private clear-optimized HPPC wrappers used on ATN
- * hot paths: {@link ClearableLongObjectHashMap} and
- * {@link ClearableObjectHashSet}. Empty clear must be a pure no-op; non-empty
- * clear must fully drop entries while retaining capacity for reuse.
+ * hot paths: {@link ClearableLongObjectHashMap} (merge index) and empty-fast
+ * clear on the busy set via {@link OpenAddressedHashSet}. Empty clear must be
+ * a pure no-op; non-empty clear must fully drop entries while retaining
+ * capacity for reuse.
  */
 public class TestClearableHppcContainers {
 
@@ -68,28 +69,29 @@ public class TestClearableHppcContainers {
 	}
 
 	@Test
-	public void longMapDefaultConstructorAndClonePreserveClearableType() {
+	public void longMapDefaultConstructorAndDeepCopy() {
 		ClearableLongObjectHashMap<ATNConfig> map = new ClearableLongObjectHashMap<ATNConfig>();
 		BasicState state = new BasicState();
 		state.stateNumber = 3;
 		ATNConfig config = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL);
 		map.put(42L, config);
 
-		ClearableLongObjectHashMap<ATNConfig> copy =
-			(ClearableLongObjectHashMap<ATNConfig>)map.clone();
+		// Composition wrapper: deepCopy clones private HPPC storage only.
+		ClearableLongObjectHashMap<ATNConfig> copy = map.deepCopy();
 		assertEquals(1, copy.size());
 		assertSame(config, copy.get(42L));
 		copy.clear();
 		assertTrue(copy.isEmpty());
 		// Original unaffected.
 		assertEquals(1, map.size());
-		copy.clear(); // empty clear on clone
+		copy.clear(); // empty clear on copy
 		assertTrue(copy.isEmpty());
 	}
 
 	@Test
-	public void objectSetEmptyClearIsIdempotent() {
-		ClearableObjectHashSet<String> set = new ClearableObjectHashSet<String>(8);
+	public void openAddressedBusySetEmptyClearIsIdempotent() {
+		// Busy-set path: empty clear after every close must not pay bulk fill.
+		OpenAddressedHashSet<String> set = new OpenAddressedHashSet<String>(8);
 		assertTrue(set.isEmpty());
 		set.clear();
 		set.clear();
@@ -98,8 +100,8 @@ public class TestClearableHppcContainers {
 	}
 
 	@Test
-	public void objectSetClearDropsElementsAndAllowsReuse() {
-		ClearableObjectHashSet<String> set = new ClearableObjectHashSet<String>(4);
+	public void openAddressedBusySetClearDropsElementsAndAllowsReuse() {
+		OpenAddressedHashSet<String> set = new OpenAddressedHashSet<String>(4);
 		assertTrue(set.add("x"));
 		assertTrue(set.add("y"));
 		assertTrue(set.add(null)); // empty-key path
@@ -118,8 +120,8 @@ public class TestClearableHppcContainers {
 	}
 
 	@Test
-	public void objectSetGrowsThenEmptyClearKeepsCapacitySemantics() {
-		ClearableObjectHashSet<Integer> set = new ClearableObjectHashSet<Integer>(2);
+	public void openAddressedBusySetGrowsThenEmptyClearKeepsCapacitySemantics() {
+		OpenAddressedHashSet<Integer> set = new OpenAddressedHashSet<Integer>(2);
 		for (int i = 0; i < 64; i++) {
 			assertTrue(set.add(i));
 		}

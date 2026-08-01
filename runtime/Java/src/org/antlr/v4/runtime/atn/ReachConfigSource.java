@@ -23,7 +23,8 @@ import java.util.ArrayList;
  * only — no dual-null checks in the reach loop.</p>
  *
  * <p>
- * PERF: A single instance is retained on {@link ParserATNSimulator} and
+ * PERF: A single instance is retained on {@link ReachComputation} (one per
+ * {@link ParserATNSimulator}) and rebound via
  * {@link #reset(ATNConfigSet)}/{@link #release()} around each edge so the
  * view object and the full-context rewrite {@link ArrayList} keep capacity
  * across predictions. SLL paths never touch the list.</p>

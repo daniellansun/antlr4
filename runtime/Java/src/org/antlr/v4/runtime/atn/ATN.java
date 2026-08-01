@@ -100,6 +100,14 @@ public class ATN {
 	 * subclasses and tests keep a stable {@code protected} surface. Backed by
 	 * {@link #ll1Cache} (single store): external boxed access pays boxing only
 	 * when this map is used; the hot path never touches {@link Integer}.
+	 *
+	 * <p>The view honors core {@link Map}/{@link ConcurrentMap} contracts
+	 * ({@link ConcurrentMap#entrySet() entrySet}/{@link Map#keySet() keySet}/
+	 * {@link Map#values() values} stay consistent with {@link Map#size() size};
+	 * {@link ConcurrentMap#putIfAbsent putIfAbsent}/{@link ConcurrentMap#replace
+	 * replace}/{@link ConcurrentMap#remove(Object, Object) remove} are atomic
+	 * with respect to other writers). Iterators are weakly consistent snapshots
+	 * of the published COW table.</p>
 	 */
 	protected final ConcurrentMap<Integer, Integer> LL1Table =
 		new ConcurrentIntIntMapView(ll1Cache);
