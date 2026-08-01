@@ -34,3 +34,5 @@ nbactions*.xml
 
 perf-testsuite/results
 *.log
+
+graphify-out
