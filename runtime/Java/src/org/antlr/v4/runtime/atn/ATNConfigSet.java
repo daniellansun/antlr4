@@ -194,8 +194,9 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			this.mergedConfigs = null;
 			this.unmerged = null;
 		} else if (!set.isReadOnly()) {
-			// Deep-copy the package-private merge map (HPPC stays private to it).
-			this.mergedConfigs = set.mergedConfigs.deepCopy();
+			// Object.clone preserves ClearableLongObjectHashMap (package-private
+			// HPPC subclass); HPPC never appears on public/protected signatures.
+			this.mergedConfigs = (ClearableLongObjectHashMap<ATNConfig>)set.mergedConfigs.clone();
 			this.unmerged = (ArrayList<ATNConfig>)set.unmerged.clone();
 		} else {
 			this.mergedConfigs = new ClearableLongObjectHashMap<ATNConfig>(mergedMapExpectedElements(set.configs.size()));

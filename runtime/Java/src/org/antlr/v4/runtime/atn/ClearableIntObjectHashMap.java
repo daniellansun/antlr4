@@ -12,63 +12,39 @@ import com.carrotsearch.hppc.IntObjectHashMap;
  * Package-private {@code int → V} map with O(1) empty {@link #clear()}.
  *
  * <p>
- * <strong>Encapsulation:</strong> HPPC {@link IntObjectHashMap} is a private
- * field only — this type does not extend HPPC, so no HPPC type appears in the
- * production type hierarchy or in any {@code public}/{@code protected}
- * signature. Used as a private field on {@link ParserATNSimulator} for the
- * retained precedence-filter alt-1 index.</p>
+ * <strong>API boundary:</strong> Package-private only — used as a private field
+ * on {@link ParserATNSimulator} for the retained precedence-filter alt-1 index.
+ * Never appears in any {@code public} or {@code protected} signature. Extends
+ * HPPC so hot {@code put}/{@code get} stay monomorphic without a wrapper
+ * frame; HPPC is not part of the published API.</p>
  *
- * <p>HPPC's stock {@link IntObjectHashMap#clear()} always
- * {@link java.util.Arrays#fill fills} the entire open-addressed table. Retained
- * scratch maps clear on every filter invocation; empty bulk fills would
- * dominate when the prior edge left the map empty.</p>
+ * <p>HPPC's stock {@link IntObjectHashMap#clear()} always bulk-fills the table.
+ * Retained scratch clears every filter invocation; empty clear is a no-op.</p>
  *
  * @param <VType> value type
  */
-final class ClearableIntObjectHashMap<VType> {
-
-	/** Private HPPC storage — never exposed in signatures. */
-	private final IntObjectHashMap<VType> map;
+final class ClearableIntObjectHashMap<VType> extends IntObjectHashMap<VType> {
 
 	ClearableIntObjectHashMap() {
-		this.map = new IntObjectHashMap<VType>();
+		super();
 	}
 
 	/**
 	 * @param expectedElements capacity hint
 	 */
 	ClearableIntObjectHashMap(int expectedElements) {
-		this.map = new IntObjectHashMap<VType>(expectedElements);
+		super(expectedElements);
 	}
 
 	/**
 	 * Clears all entries. Already-empty maps return without touching backing
 	 * arrays.
 	 */
-	void clear() {
-		if (map.isEmpty()) {
+	@Override
+	public void clear() {
+		if (isEmpty()) {
 			return;
 		}
-		map.clear();
-	}
-
-	int size() {
-		return map.size();
-	}
-
-	boolean isEmpty() {
-		return map.isEmpty();
-	}
-
-	VType get(int key) {
-		return map.get(key);
-	}
-
-	VType put(int key, VType value) {
-		return map.put(key, value);
-	}
-
-	boolean containsKey(int key) {
-		return map.containsKey(key);
+		super.clear();
 	}
 }

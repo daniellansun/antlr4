@@ -9,66 +9,50 @@ package org.antlr.v4.runtime.atn;
 import com.carrotsearch.hppc.LongObjectHashMap;
 
 /**
- * Package-private {@code long → V} map for ATN config merge indexes, with O(1)
- * empty {@link #clear()}.
+ * Package-private {@code long → V} open-addressed map with O(1) empty
+ * {@link #clear()}, used as the ATN config merge index.
  *
  * <p>
- * <strong>Encapsulation:</strong> HPPC {@link LongObjectHashMap} is a private
- * field only — this type does <em>not</em> extend or implement any HPPC type,
- * so HPPC never appears in the type hierarchy of production code. Hot-path
- * methods ({@link #indexOf}, {@link #indexGet}, {@link #indexInsert}, …) are
- * thin final forwards so the JIT can inline them. Not part of any
- * {@code public} or {@code protected} API; callers use
- * {@link ATNConfigSet}'s {@link java.util.Set} surface.</p>
+ * <strong>API boundary:</strong> This type is package-private and never appears
+ * in any {@code public} or {@code protected} signature. External callers only
+ * touch {@link ATNConfigSet}'s JDK {@link java.util.Set} surface. Extending
+ * HPPC here is intentional: the merge index is on the prediction hot path
+ * ({@code indexOf}/{@code indexGet}/{@code indexInsert}), so monomorphic
+ * inheritance avoids an extra wrapper frame while HPPC remains a non-exported
+ * implementation detail.</p>
  *
  * <p>
- * HPPC's default {@link LongObjectHashMap#clear()} always executes
- * {@link java.util.Arrays#fill} over the entire tables (O(capacity)), even
- * when empty. Retained config sets clear on every obtain/release, so empty
- * bulk fills would dominate; empty clear is a pure no-op here.</p>
+ * HPPC's default {@link LongObjectHashMap#clear()} always
+ * {@link java.util.Arrays#fill fills} the entire tables (O(capacity)), even
+ * when empty. Retained config sets clear on every obtain/release; empty clear
+ * is a pure no-op here. Non-empty clear keeps bulk fill (right at high
+ * occupancy).</p>
  *
  * @param <VType> value type stored in the map
  */
-final class ClearableLongObjectHashMap<VType> {
-
-	/** Private HPPC storage — never exposed in signatures. */
-	private final LongObjectHashMap<VType> map;
+final class ClearableLongObjectHashMap<VType> extends LongObjectHashMap<VType> {
 
 	ClearableLongObjectHashMap() {
-		this.map = new LongObjectHashMap<VType>();
+		super();
 	}
 
 	/**
 	 * @param expectedElements expected entry count used as a capacity hint
 	 */
 	ClearableLongObjectHashMap(int expectedElements) {
-		this.map = new LongObjectHashMap<VType>(expectedElements);
-	}
-
-	private ClearableLongObjectHashMap(LongObjectHashMap<VType> map) {
-		this.map = map;
+		super(expectedElements);
 	}
 
 	/**
 	 * Clears all entries. Already-empty maps return without touching backing
-	 * arrays. Non-empty clear uses HPPC's bulk fill (right algorithm at high
-	 * occupancy).
+	 * arrays.
 	 */
-	void clear() {
-		if (map.isEmpty()) {
+	@Override
+	public void clear() {
+		if (isEmpty()) {
 			return;
 		}
-		map.clear();
-	}
-
-	/**
-	 * Deep copy preserving capacity and entries. Used when cloning a writable
-	 * {@link ATNConfigSet}.
-	 */
-	@SuppressWarnings("unchecked")
-	ClearableLongObjectHashMap<VType> deepCopy() {
-		return new ClearableLongObjectHashMap<VType>(
-			(LongObjectHashMap<VType>) map.clone());
+		super.clear();
 	}
 
 	/**
@@ -76,46 +60,6 @@ final class ClearableLongObjectHashMap<VType> {
 	 * Used by {@link ATNConfigSet#clear()} to choose sparse vs bulk clear.
 	 */
 	int tableLength() {
-		return map.keys.length;
-	}
-
-	int size() {
-		return map.size();
-	}
-
-	boolean isEmpty() {
-		return map.isEmpty();
-	}
-
-	VType get(long key) {
-		return map.get(key);
-	}
-
-	VType put(long key, VType value) {
-		return map.put(key, value);
-	}
-
-	VType remove(long key) {
-		return map.remove(key);
-	}
-
-	boolean containsKey(long key) {
-		return map.containsKey(key);
-	}
-
-	int indexOf(long key) {
-		return map.indexOf(key);
-	}
-
-	VType indexGet(int index) {
-		return map.indexGet(index);
-	}
-
-	void indexInsert(int index, long key, VType value) {
-		map.indexInsert(index, key, value);
-	}
-
-	VType indexRemove(int index) {
-		return map.indexRemove(index);
+		return keys.length;
 	}
 }

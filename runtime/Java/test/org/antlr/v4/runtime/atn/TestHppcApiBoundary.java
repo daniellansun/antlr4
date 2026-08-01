@@ -111,12 +111,19 @@ public class TestHppcApiBoundary {
 	}
 
 	@Test
-	public void packagePrivateHppcWrappersDoNotExtendHppc() {
-		// Composition-only wrappers: IS-A HPPC would still couple the type
-		// hierarchy even when package-private.
-		assertTrue(!LongObjectHashMapClass.isAssignableFrom(ClearableLongObjectHashMap.class));
-		assertTrue(!IntObjectHashMapClass.isAssignableFrom(ClearableIntObjectHashMap.class));
+	public void packagePrivateHotMapsStayNonPublicAndJdkFacadesHideHppc() {
+		// Hot-path primitive maps may extend HPPC monomorphically, but must
+		// remain package-private so HPPC never enters the published type graph.
+		assertTrue(!Modifier.isPublic(ClearableLongObjectHashMap.class.getModifiers()));
+		assertTrue(!Modifier.isPublic(ClearableIntObjectHashMap.class.getModifiers()));
+		assertTrue(!Modifier.isProtected(ClearableLongObjectHashMap.class.getModifiers()));
+		assertTrue(!Modifier.isProtected(ClearableIntObjectHashMap.class.getModifiers()));
+		// Busy set is a JDK Set adapter (composition), not an HPPC subtype.
+		assertTrue(java.util.Set.class.isAssignableFrom(OpenAddressedHashSet.class));
 		assertTrue(!ObjectHashSetClass.isAssignableFrom(OpenAddressedHashSet.class));
+		// LL(1) primitive store is package-private; protected surface is ConcurrentMap.
+		assertTrue(!Modifier.isPublic(ConcurrentIntIntMap.class.getModifiers()));
+		assertTrue(!Modifier.isPublic(ConcurrentIntIntMapView.class.getModifiers()));
 	}
 
 	@Test
@@ -146,8 +153,6 @@ public class TestHppcApiBoundary {
 	// -------------------------------------------------------------------------
 
 	/** Resolved at class-init so the test still compiles if HPPC is shaded in the main jar. */
-	private static final Class<?> LongObjectHashMapClass = resolveHppc("LongObjectHashMap");
-	private static final Class<?> IntObjectHashMapClass = resolveHppc("IntObjectHashMap");
 	private static final Class<?> ObjectHashSetClass = resolveHppc("ObjectHashSet");
 
 	private static Class<?> resolveHppc(String simpleName) {

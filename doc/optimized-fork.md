@@ -131,14 +131,14 @@ API surface** — they appear only as non-exported implementation detail
 (private fields/locals and package-private diagnostics). Callers and
 subclasses see JDK collection interfaces (for example `Set<ATNConfig>`).
 
-| Structure | Storage (private field inside package-private wrapper) | Exposed API | Role |
+| Structure | Storage (package-private; never public/protected) | Exposed API | Role |
 | --- | --- | --- | --- |
-| `ATNConfigSet` merge index | `ClearableLongObjectHashMap` **composes** HPPC `LongObjectHashMap` (does not extend it) | `Set<ATNConfig>` | packed `(state, alt)` → config; no `Long` boxing; empty clear O(1) |
-| Precedence filter | `ClearableIntObjectHashMap` **composes** HPPC `IntObjectHashMap` (private field on simulator) | not in any method signature | state number → alt-1 context; retained; empty clear O(1) |
+| `ATNConfigSet` merge index | `ClearableLongObjectHashMap` extends HPPC `LongObjectHashMap` (empty-fast clear; monomorphic hot path) | `Set<ATNConfig>` | packed `(state, alt)` → config; no `Long` boxing; empty clear O(1) |
+| Precedence filter | `ClearableIntObjectHashMap` extends HPPC `IntObjectHashMap` (private field on simulator) | not in any method signature | state number → alt-1 context; retained; empty clear O(1) |
 | Epsilon-closure busy set | package-private `OpenAddressedHashSet` **composes** HPPC `ObjectHashSet` + empty-fast `clear` | `Set<ATNConfig>` | right-recursion / EOF* guards; no `HashMap.Node`; empty clear O(1) |
 | LL(1) prediction cache | `ConcurrentIntIntMap` **composes** HPPC `IntIntHashMap` (COW) | `protected ConcurrentMap<Integer,Integer> LL1Table` via `ConcurrentIntIntMapView` | primitive get/put on hot path; JDK map for subclasses/tests |
 
-**Rule:** HPPC types never appear in any `public` or `protected` field, method, or constructor signature, and package-private wrappers use **composition** (not inheritance) so HPPC is not part of the production type hierarchy. Unit test `TestHppcApiBoundary` enforces the signature rule by reflection.
+**Rule:** HPPC types never appear in any `public` or `protected` field, method, or constructor signature. JDK interfaces (`Set`, `ConcurrentMap`) are used at API boundaries. Package-private types may extend HPPC on monomorphic hot paths for performance; `TestHppcApiBoundary` enforces the signature rule by reflection.
 
 `ATNConfigSet.add` / `contains` use `indexOf` / `indexGet` / `indexInsert` so
 each long key is hashed once per operation (not a separate `get` then `put`).

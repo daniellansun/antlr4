@@ -69,22 +69,23 @@ public class TestClearableHppcContainers {
 	}
 
 	@Test
-	public void longMapDefaultConstructorAndDeepCopy() {
+	public void longMapDefaultConstructorAndClonePreserveClearableType() {
 		ClearableLongObjectHashMap<ATNConfig> map = new ClearableLongObjectHashMap<ATNConfig>();
 		BasicState state = new BasicState();
 		state.stateNumber = 3;
 		ATNConfig config = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL);
 		map.put(42L, config);
 
-		// Composition wrapper: deepCopy clones private HPPC storage only.
-		ClearableLongObjectHashMap<ATNConfig> copy = map.deepCopy();
+		@SuppressWarnings("unchecked")
+		ClearableLongObjectHashMap<ATNConfig> copy =
+			(ClearableLongObjectHashMap<ATNConfig>) map.clone();
 		assertEquals(1, copy.size());
 		assertSame(config, copy.get(42L));
 		copy.clear();
 		assertTrue(copy.isEmpty());
 		// Original unaffected.
 		assertEquals(1, map.size());
-		copy.clear(); // empty clear on copy
+		copy.clear(); // empty clear on clone
 		assertTrue(copy.isEmpty());
 	}
 
