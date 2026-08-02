@@ -51,6 +51,39 @@ public class TestCharStreams {
 	}
 
 	@Test
+	public void fromStringEmpty() {
+		CodePointCharStream s = CharStreams.fromString("");
+		assertEquals(0, s.size());
+		assertEquals(IntStream.EOF, s.LA(1));
+		assertEquals("", s.toString());
+	}
+
+	@Test
+	public void fromStringSelectsCompactStorage() {
+		CodePointCharStream ascii = CharStreams.fromString("latin-1-ok");
+		assertTrue(ascii.getInternalStorage() instanceof byte[]);
+
+		CodePointCharStream bmp = CharStreams.fromString("\u4E2D\u6587");
+		assertTrue(bmp.getInternalStorage() instanceof char[]);
+
+		String emoji = new StringBuilder().appendCodePoint(0x1F600).toString();
+		CodePointCharStream smp = CharStreams.fromString(emoji);
+		assertTrue(smp.getInternalStorage() instanceof int[]);
+	}
+
+	@Test
+	public void fromStringMatchesFromReaderContent() throws IOException {
+		String text = "mix-\u00E9-\u4E2D-" + new StringBuilder().appendCodePoint(0x1F4A9);
+		CodePointCharStream fromString = CharStreams.fromString(text, "s");
+		CodePointCharStream fromReader = CharStreams.fromReader(new StringReader(text), "s");
+		assertEquals(fromReader.size(), fromString.size());
+		assertEquals(fromReader.toString(), fromString.toString());
+		for (int i = 0; i < fromString.size(); i++) {
+			assertEquals(fromReader.LA(i + 1), fromString.LA(i + 1));
+		}
+	}
+
+	@Test
 	public void fromReader() throws IOException {
 		CodePointCharStream s = CharStreams.fromReader(new StringReader("reader-data"));
 		assertEquals("reader-data", s.toString());

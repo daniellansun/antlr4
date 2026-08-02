@@ -203,9 +203,13 @@ public enum CharStreams {
 	 * Creates a {@link CharStream} given a {@link String} and the {@code sourceName}
 	 * from which it came.
 	 *
-	 * <p>The UTF-16 contents are converted directly into the compact
-	 * code-point storage. This avoids materializing a temporary {@link CharBuffer}
-	 * solely to copy the same {@link String} a second time.</p>
+	 * <p>UTF-16 code units are converted directly into {@link CodePointBuffer}'s
+	 * compact byte / char / int storage via
+	 * {@link CodePointBuffer.Builder#append(String)}. That path shares the same
+	 * conversion state machine as {@link CodePointBuffer.Builder#append(CharBuffer)}
+	 * (including read-only {@link CharBuffer#wrap(CharSequence)} views) and does
+	 * not allocate a temporary mutable {@link CharBuffer} or char array solely to
+	 * feed the builder.</p>
 	 */
 	public static CodePointCharStream fromString(String s, String sourceName) {
 		// Initial guess assumes no code points > U+FFFF: one code

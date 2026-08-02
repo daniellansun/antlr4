@@ -136,6 +136,12 @@ public class CodePointBuffer {
 		private CharBuffer charBuffer;
 		private IntBuffer intBuffer;
 		private int prevHighSurrogate;
+		/**
+		 * Reused for array-backed {@link CharBuffer} appends so the shared
+		 * {@link #appendCharSequence} path can scan {@code char[]} without
+		 * allocating a view per call. Builders are not thread-safe.
+		 */
+		private final CharArrayRange charArrayRange = new CharArrayRange();
 
 		private Builder(int initialBufferSize) {
 			type = Type.BYTE;
@@ -213,78 +219,102 @@ public class CodePointBuffer {
 			}
 		}
 
+		/**
+		 * Appends UTF-16 code units from {@code utf16In}.
+		 *
+		 * <p>Array-backed buffers and read-only buffers (including
+		 * {@link CharBuffer#wrap(CharSequence)} views of a {@link String}) share
+		 * one conversion implementation ({@link #appendCharSequence}). There is
+		 * no intermediate mutable copy of the input; units are written straight
+		 * into the compact byte / char / int storage. Array-backed buffers are
+		 * scanned through a reusable {@code char[]} view to avoid per-unit
+		 * {@link CharBuffer} bounds checks on the {@link CharStreams#fromReader}
+		 * path.</p>
+		 *
+		 * <p>Each call is a complete UTF-16 sequence: an unpaired high surrogate
+		 * at the end of this call is stored as a lone code unit and does not
+		 * combine with the first unit of a later {@code append}.</p>
+		 */
 		public void append(CharBuffer utf16In) {
 			ensureRemaining(utf16In.remaining());
 			if (utf16In.hasArray()) {
-				appendArray(utf16In);
-			} else {
-				// TODO
-				throw new UnsupportedOperationException("TODO");
+				int remaining = utf16In.remaining();
+				charArrayRange.reset(
+					utf16In.array(),
+					utf16In.arrayOffset() + utf16In.position(),
+					remaining);
+				appendCharSequence(charArrayRange, 0, remaining);
 			}
+			else {
+				// CharBuffer is a CharSequence: length() == remaining() and
+				// charAt(i) is relative to the current position.
+				appendCharSequence(utf16In, 0, utf16In.length());
+			}
+			utf16In.position(utf16In.limit());
 		}
 
 		/**
-		 * Appends UTF-16 code units from a {@link String} without first copying
-		 * them into a temporary {@link CharBuffer}. This is used by
-		 * {@link CharStreams#fromString(String, String)}; it preserves the same
-		 * byte/char/int storage selection and surrogate handling as
-		 * {@link #append(CharBuffer)}.
+		 * Appends UTF-16 code units from a {@link String} without allocating a
+		 * temporary {@link CharBuffer} or char array. Semantically equivalent to
+		 * {@link #append(CharBuffer) append}{@code (CharBuffer.wrap(utf16In))},
+		 * but avoids the view object on the hot {@link CharStreams#fromString}
+		 * path.
 		 *
 		 * <p>Package-private because the runtime's public string factory is
 		 * {@link CharStreams#fromString(String)}.</p>
+		 *
+		 * <p>Like {@link #append(CharBuffer)}, each call is a complete UTF-16
+		 * sequence; unpaired high surrogates are not carried across calls.</p>
 		 */
 		void append(String utf16In) {
 			ensureRemaining(utf16In.length());
+			appendCharSequence(utf16In, 0, utf16In.length());
+		}
+
+		/**
+		 * Single UTF-16 conversion state machine used by both
+		 * {@link #append(CharBuffer)} and {@link #append(String)}.
+		 *
+		 * @param utf16In source of UTF-16 code units ({@link String} or
+		 *                {@link CharBuffer}); {@code charAt} indices are in
+		 *                {@code [start, end)}
+		 * @param start   inclusive start index into {@code utf16In}
+		 * @param end     exclusive end index into {@code utf16In}
+		 */
+		private void appendCharSequence(CharSequence utf16In, int start, int end) {
 			switch (type) {
 				case BYTE:
-					appendStringByte(utf16In, 0);
+					appendByte(utf16In, start, end);
 					break;
 				case CHAR:
-					appendStringChar(utf16In, 0);
+					appendChar(utf16In, start, end);
 					break;
 				case INT:
-					appendStringInt(utf16In, 0);
+					appendInt(utf16In, start, end);
 					break;
 			}
 		}
 
-		private void appendArray(CharBuffer utf16In) {
-			assert utf16In.hasArray();
-
-			switch (type) {
-				case BYTE:
-					appendArrayByte(utf16In);
-					break;
-				case CHAR:
-					appendArrayChar(utf16In);
-					break;
-				case INT:
-					appendArrayInt(utf16In);
-					break;
-			}
-		}
-
-		private void appendStringByte(String utf16In, int start) {
+		private void appendByte(CharSequence utf16In, int start, int end) {
 			assert prevHighSurrogate == -1;
 
 			byte[] outByte = byteBuffer.array();
 			int outOffset = byteBuffer.arrayOffset() + byteBuffer.position();
-			final int length = utf16In.length();
 
-			for (int i = start; i < length; i++) {
+			for (int i = start; i < end; i++) {
 				char c = utf16In.charAt(i);
 				if (c <= 0xFF) {
-					outByte[outOffset++] = (byte)(c & 0xFF);
+					outByte[outOffset++] = (byte) (c & 0xFF);
 				}
 				else {
 					byteBuffer.position(outOffset - byteBuffer.arrayOffset());
 					if (!Character.isHighSurrogate(c)) {
-						byteToCharBuffer(length - i);
-						appendStringChar(utf16In, i);
+						byteToCharBuffer(end - i);
+						appendChar(utf16In, i, end);
 					}
 					else {
-						byteToIntBuffer(length - i);
-						appendStringInt(utf16In, i);
+						byteToIntBuffer(end - i);
+						appendInt(utf16In, i, end);
 					}
 					return;
 				}
@@ -293,22 +323,21 @@ public class CodePointBuffer {
 			byteBuffer.position(outOffset - byteBuffer.arrayOffset());
 		}
 
-		private void appendStringChar(String utf16In, int start) {
+		private void appendChar(CharSequence utf16In, int start, int end) {
 			assert prevHighSurrogate == -1;
 
 			char[] outChar = charBuffer.array();
 			int outOffset = charBuffer.arrayOffset() + charBuffer.position();
-			final int length = utf16In.length();
 
-			for (int i = start; i < length; i++) {
+			for (int i = start; i < end; i++) {
 				char c = utf16In.charAt(i);
 				if (!Character.isHighSurrogate(c)) {
 					outChar[outOffset++] = c;
 				}
 				else {
 					charBuffer.position(outOffset - charBuffer.arrayOffset());
-					charToIntBuffer(length - i);
-					appendStringInt(utf16In, i);
+					charToIntBuffer(end - i);
+					appendInt(utf16In, i, end);
 					return;
 				}
 			}
@@ -316,19 +345,19 @@ public class CodePointBuffer {
 			charBuffer.position(outOffset - charBuffer.arrayOffset());
 		}
 
-		private void appendStringInt(String utf16In, int start) {
+		private void appendInt(CharSequence utf16In, int start, int end) {
 			int[] outInt = intBuffer.array();
 			int outOffset = intBuffer.arrayOffset() + intBuffer.position();
-			final int length = utf16In.length();
 
-			for (int i = start; i < length; i++) {
+			for (int i = start; i < end; i++) {
 				char c = utf16In.charAt(i);
 				if (prevHighSurrogate != -1) {
 					if (Character.isLowSurrogate(c)) {
-						outInt[outOffset++] = Character.toCodePoint((char)prevHighSurrogate, c);
+						outInt[outOffset++] = Character.toCodePoint((char) prevHighSurrogate, c);
 						prevHighSurrogate = -1;
 					}
 					else {
+						// Dangling high surrogate before a non-low unit
 						outInt[outOffset++] = prevHighSurrogate;
 						if (Character.isHighSurrogate(c)) {
 							prevHighSurrogate = c & 0xFFFF;
@@ -348,119 +377,12 @@ public class CodePointBuffer {
 			}
 
 			if (prevHighSurrogate != -1) {
+				// End of this append: store unpaired high as a lone code unit.
+				// Clear so a later append does not pair with a unit already written.
 				outInt[outOffset++] = prevHighSurrogate & 0xFFFF;
+				prevHighSurrogate = -1;
 			}
 
-			intBuffer.position(outOffset - intBuffer.arrayOffset());
-		}
-
-		private void appendArrayByte(CharBuffer utf16In) {
-			assert prevHighSurrogate == -1;
-
-			char[] in = utf16In.array();
-			int inOffset = utf16In.arrayOffset() + utf16In.position();
-			int inLimit = utf16In.arrayOffset() + utf16In.limit();
-
-			byte[] outByte = byteBuffer.array();
-			int outOffset = byteBuffer.arrayOffset() + byteBuffer.position();
-
-			while (inOffset < inLimit) {
-				char c = in[inOffset];
-				if (c <= 0xFF) {
-					outByte[outOffset] = (byte)(c & 0xFF);
-				} else {
-					utf16In.position(inOffset - utf16In.arrayOffset());
-					byteBuffer.position(outOffset - byteBuffer.arrayOffset());
-					if (!Character.isHighSurrogate(c)) {
-						byteToCharBuffer(utf16In.remaining());
-						appendArrayChar(utf16In);
-						return;
-					} else {
-						byteToIntBuffer(utf16In.remaining());
-						appendArrayInt(utf16In);
-						return;
-					}
-				}
-				inOffset++;
-				outOffset++;
-			}
-
-			utf16In.position(inOffset - utf16In.arrayOffset());
-			byteBuffer.position(outOffset - byteBuffer.arrayOffset());
-		}
-
-		private void appendArrayChar(CharBuffer utf16In) {
-			assert prevHighSurrogate == -1;
-
-			char[] in = utf16In.array();
-			int inOffset = utf16In.arrayOffset() + utf16In.position();
-			int inLimit = utf16In.arrayOffset() + utf16In.limit();
-
-			char[] outChar = charBuffer.array();
-			int outOffset = charBuffer.arrayOffset() + charBuffer.position();
-
-			while (inOffset < inLimit) {
-				char c = in[inOffset];
-				if (!Character.isHighSurrogate(c)) {
-					outChar[outOffset] = c;
-				} else {
-					utf16In.position(inOffset - utf16In.arrayOffset());
-					charBuffer.position(outOffset - charBuffer.arrayOffset());
-					charToIntBuffer(utf16In.remaining());
-					appendArrayInt(utf16In);
-					return;
-				}
-				inOffset++;
-				outOffset++;
-			}
-
-			utf16In.position(inOffset - utf16In.arrayOffset());
-			charBuffer.position(outOffset - charBuffer.arrayOffset());
-		}
-
-		private void appendArrayInt(CharBuffer utf16In) {
-			char[] in = utf16In.array();
-			int inOffset = utf16In.arrayOffset() + utf16In.position();
-			int inLimit = utf16In.arrayOffset() + utf16In.limit();
-
-			int[] outInt = intBuffer.array();
-			int outOffset = intBuffer.arrayOffset() + intBuffer.position();
-
-			while (inOffset < inLimit) {
-				char c = in[inOffset];
-				inOffset++;
-				if (prevHighSurrogate != -1) {
-					if (Character.isLowSurrogate(c)) {
-						outInt[outOffset] = Character.toCodePoint((char) prevHighSurrogate, c);
-						outOffset++;
-						prevHighSurrogate = -1;
-					} else {
-						// Dangling high surrogate
-						outInt[outOffset] = prevHighSurrogate;
-						outOffset++;
-						if (Character.isHighSurrogate(c)) {
-							prevHighSurrogate = c & 0xFFFF;
-						} else {
-							outInt[outOffset] = c & 0xFFFF;
-							outOffset++;
-							prevHighSurrogate = -1;
-						}
-					}
-				} else if (Character.isHighSurrogate(c)) {
-					prevHighSurrogate = c & 0xFFFF;
-				} else {
-					outInt[outOffset] = c & 0xFFFF;
-					outOffset++;
-				}
-			}
-
-			if (prevHighSurrogate != -1) {
-				// Dangling high surrogate
-				outInt[outOffset] = prevHighSurrogate & 0xFFFF;
-				outOffset++;
-			}
-
-			utf16In.position(inOffset - utf16In.arrayOffset());
 			intBuffer.position(outOffset - intBuffer.arrayOffset());
 		}
 
@@ -498,6 +420,43 @@ public class CodePointBuffer {
 			type = Type.INT;
 			charBuffer = null;
 			intBuffer = newBuffer;
+		}
+	}
+
+	/**
+	 * Zero-allocation {@link CharSequence} over a {@code char[]} slice.
+	 * Used only as a transient view while {@link Builder} converts UTF-16 input;
+	 * not exposed outside this class.
+	 */
+	private static final class CharArrayRange implements CharSequence {
+		private char[] array;
+		private int offset;
+		private int length;
+
+		void reset(char[] array, int offset, int length) {
+			this.array = array;
+			this.offset = offset;
+			this.length = length;
+		}
+
+		@Override
+		public int length() {
+			return length;
+		}
+
+		@Override
+		public char charAt(int index) {
+			return array[offset + index];
+		}
+
+		@Override
+		public CharSequence subSequence(int start, int end) {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		public String toString() {
+			return new String(array, offset, length);
 		}
 	}
 }

@@ -12,6 +12,7 @@ import java.nio.CharBuffer;
 import java.nio.IntBuffer;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -98,28 +99,120 @@ public class TestCodePointBuffer {
 
 	@Test
 	public void builderStringAppendMatchesCharBufferAppendForAllStorageTypes() {
-		assertEquivalentStringAndBufferAppend("ascii-only-0123");
-		assertEquivalentStringAndBufferAppend("\u0100\u4E2D\u0101");
-		assertEquivalentStringAndBufferAppend(
+		assertEquivalentAppendPaths("ascii-only-0123");
+		assertEquivalentAppendPaths("");
+		assertEquivalentAppendPaths("\u0100\u4E2D\u0101");
+		assertEquivalentAppendPaths(
 			"\u0100" + new StringBuilder().appendCodePoint(0x1F600).toString());
-		assertEquivalentStringAndBufferAppend(
+		assertEquivalentAppendPaths(
 			"A" + new StringBuilder().appendCodePoint(0x1F600).append("B").toString());
-		assertEquivalentStringAndBufferAppend(new String(new char[] {'A', '\uD83D', 'B'}));
-		assertEquivalentStringAndBufferAppend(new String(new char[] {'A', '\uD83D', '\uD83D'}));
+		assertEquivalentAppendPaths(new String(new char[] {'A', '\uD83D', 'B'}));
+		assertEquivalentAppendPaths(new String(new char[] {'A', '\uD83D', '\uD83D'}));
+		assertEquivalentAppendPaths(new String(new char[] {'\uD83D'}));
+		assertEquivalentAppendPaths(new String(new char[] {'\uD83D', '\uD83D', '\uDE00'}));
 	}
 
 	@Test
-	public void builderStringAppendContinuesAcrossCharAndIntStorage() {
+	public void builderAppendAcceptsReadOnlyStringWrappedCharBuffer() {
+		// CharBuffer.wrap(String) is read-only and hasArray()==false; this used to throw.
+		String input = "A\u4E2D" + new StringBuilder().appendCodePoint(0x1F600).toString();
+		CodePointBuffer.Builder builder = CodePointBuffer.builder(input.length());
+		CharBuffer readOnly = CharBuffer.wrap(input);
+		assertFalse(readOnly.hasArray());
+		builder.append(readOnly);
+		assertEquals(0, readOnly.remaining());
+		assertEquals(input, CodePointCharStream.fromBuffer(builder.build()).toString());
+	}
+
+	@Test
+	public void builderStringAppendContinuesAcrossStorageTypes() {
+		// BYTE then BMP upgrade on a later append
+		CodePointBuffer.Builder byteThenChar = CodePointBuffer.builder(1);
+		byteThenChar.append("AB");
+		byteThenChar.append("\u0100");
+		assertEquals("AB\u0100", CodePointCharStream.fromBuffer(byteThenChar.build()).toString());
+
+		// CHAR then CHAR
 		CodePointBuffer.Builder charBuilder = CodePointBuffer.builder(1);
 		charBuilder.append("\u0100");
 		charBuilder.append("\u0101");
 		assertEquals("\u0100\u0101", CodePointCharStream.fromBuffer(charBuilder.build()).toString());
 
+		// INT then BMP
 		CodePointBuffer.Builder intBuilder = CodePointBuffer.builder(1);
 		String emoji = new StringBuilder().appendCodePoint(0x1F600).toString();
 		intBuilder.append(emoji);
 		intBuilder.append("Z");
 		assertEquals(emoji + "Z", CodePointCharStream.fromBuffer(intBuilder.build()).toString());
+
+		// BYTE then SMP upgrade on a later append
+		CodePointBuffer.Builder byteThenInt = CodePointBuffer.builder(2);
+		byteThenInt.append("xy");
+		byteThenInt.append(emoji);
+		assertEquals("xy" + emoji, CodePointCharStream.fromBuffer(byteThenInt.build()).toString());
+	}
+
+	@Test
+	public void builderAppendDoesNotPairSurrogatesAcrossCalls() {
+		// Each append is a complete UTF-16 sequence: a high left at the end of
+		// one call is stored as a lone unit and must not pair with a later low.
+		CodePointBuffer.Builder stringBuilder = CodePointBuffer.builder(2);
+		stringBuilder.append(new String(new char[] {'\uD83D'}));
+		stringBuilder.append(new String(new char[] {'\uDE00'}));
+		CodePointBuffer stringBuf = stringBuilder.build();
+		assertEquals(2, stringBuf.remaining());
+		assertEquals(0xD83D, stringBuf.get(0));
+		assertEquals(0xDE00, stringBuf.get(1));
+
+		CodePointBuffer.Builder arrayBuilder = CodePointBuffer.builder(2);
+		arrayBuilder.append(CharBuffer.wrap(new char[] {'\uD83D'}));
+		arrayBuilder.append(CharBuffer.wrap(new char[] {'\uDE00'}));
+		CodePointBuffer arrayBuf = arrayBuilder.build();
+		assertEquals(2, arrayBuf.remaining());
+		assertEquals(0xD83D, arrayBuf.get(0));
+		assertEquals(0xDE00, arrayBuf.get(1));
+
+		CodePointBuffer.Builder wrapBuilder = CodePointBuffer.builder(2);
+		wrapBuilder.append(CharBuffer.wrap(new String(new char[] {'\uD83D'})));
+		wrapBuilder.append(CharBuffer.wrap(new String(new char[] {'\uDE00'})));
+		CodePointBuffer wrapBuf = wrapBuilder.build();
+		assertEquals(2, wrapBuf.remaining());
+		assertEquals(0xD83D, wrapBuf.get(0));
+		assertEquals(0xDE00, wrapBuf.get(1));
+	}
+
+	@Test
+	public void builderAppendPairsSurrogatesWithinASingleCall() {
+		String emoji = new StringBuilder().appendCodePoint(0x1F600).toString();
+		CodePointBuffer.Builder b = CodePointBuffer.builder(2);
+		b.append(emoji);
+		CodePointBuffer buf = b.build();
+		assertEquals(1, buf.remaining());
+		assertEquals(0x1F600, buf.get(0));
+	}
+
+	@Test
+	public void builderAppendLoneLowSurrogateIsStoredAsCodeUnit() {
+		assertEquivalentAppendPaths(new String(new char[] {'\uDE00'}));
+		CodePointBuffer.Builder b = CodePointBuffer.builder(1);
+		b.append(new String(new char[] {'A', '\uDE00', 'B'}));
+		CodePointBuffer buf = b.build();
+		assertEquals(3, buf.remaining());
+		assertEquals('A', buf.get(0));
+		assertEquals(0xDE00, buf.get(1));
+		assertEquals('B', buf.get(2));
+	}
+
+	@Test
+	public void builderAppendConsumesCharBufferPosition() {
+		CharBuffer cb = CharBuffer.wrap("abcd".toCharArray());
+		cb.position(1);
+		cb.limit(3); // "bc"
+		CodePointBuffer.Builder builder = CodePointBuffer.builder(2);
+		builder.append(cb);
+		assertEquals(3, cb.position());
+		assertEquals(0, cb.remaining());
+		assertEquals("bc", CodePointCharStream.fromBuffer(builder.build()).toString());
 	}
 
 	@Test
@@ -280,22 +373,51 @@ public class TestCodePointBuffer {
 		assertNotNull(b6.build());
 	}
 
-	private static void assertEquivalentStringAndBufferAppend(String input) {
-		CodePointBuffer.Builder stringBuilder = CodePointBuffer.builder(input.length());
-		stringBuilder.append(input);
-		CodePointBuffer stringBuffer = stringBuilder.build();
+	/**
+	 * Asserts that {@link CodePointBuffer.Builder#append(String)},
+	 * array-backed {@link CharBuffer}, and read-only
+	 * {@link CharBuffer#wrap(CharSequence)} produce identical compact storage.
+	 */
+	private static void assertEquivalentAppendPaths(String input) {
+		CodePointBuffer stringBuffer = buildViaString(input);
+		CodePointBuffer arrayBuffer = buildViaArrayCharBuffer(input);
+		CodePointBuffer wrapBuffer = buildViaWrappedString(input);
 
-		CodePointBuffer.Builder charBufferBuilder = CodePointBuffer.builder(input.length());
-		charBufferBuilder.append(CharBuffer.wrap(input.toCharArray()));
-		CodePointBuffer charBuffer = charBufferBuilder.build();
-
-		assertEquals(charBuffer.getType(), stringBuffer.getType());
-		assertEquals(charBuffer.remaining(), stringBuffer.remaining());
-		for (int i = 0; i < charBuffer.remaining(); i++) {
-			assertEquals(charBuffer.get(i), stringBuffer.get(i));
-		}
+		assertBuffersEqual(arrayBuffer, stringBuffer);
+		assertBuffersEqual(arrayBuffer, wrapBuffer);
 		assertEquals(
-			CodePointCharStream.fromBuffer(charBuffer).toString(),
+			CodePointCharStream.fromBuffer(arrayBuffer).toString(),
 			CodePointCharStream.fromBuffer(stringBuffer).toString());
+		assertEquals(
+			CodePointCharStream.fromBuffer(arrayBuffer).toString(),
+			CodePointCharStream.fromBuffer(wrapBuffer).toString());
+	}
+
+	private static CodePointBuffer buildViaString(String input) {
+		CodePointBuffer.Builder builder = CodePointBuffer.builder(Math.max(1, input.length()));
+		builder.append(input);
+		return builder.build();
+	}
+
+	private static CodePointBuffer buildViaArrayCharBuffer(String input) {
+		CodePointBuffer.Builder builder = CodePointBuffer.builder(Math.max(1, input.length()));
+		builder.append(CharBuffer.wrap(input.toCharArray()));
+		return builder.build();
+	}
+
+	private static CodePointBuffer buildViaWrappedString(String input) {
+		CodePointBuffer.Builder builder = CodePointBuffer.builder(Math.max(1, input.length()));
+		CharBuffer wrapped = CharBuffer.wrap(input);
+		assertFalse("CharBuffer.wrap(String) should be a non-array view", wrapped.hasArray());
+		builder.append(wrapped);
+		return builder.build();
+	}
+
+	private static void assertBuffersEqual(CodePointBuffer expected, CodePointBuffer actual) {
+		assertEquals(expected.getType(), actual.getType());
+		assertEquals(expected.remaining(), actual.remaining());
+		for (int i = 0; i < expected.remaining(); i++) {
+			assertEquals(expected.get(i), actual.get(i));
+		}
 	}
 }
