@@ -70,6 +70,40 @@ public class CharStreamsBenchmark {
 		blackhole.consume(CharStreams.fromString(state.text));
 	}
 
+	@State(Scope.Thread)
+	public static class CharBufferState {
+		@Param({"1024", "20640"})
+		public int utf16Length;
+
+		@Param({"ascii", "bmp", "smp"})
+		public String content;
+
+		public char[] chars;
+
+		@Setup
+		public void setup() {
+			StringBuilder builder = new StringBuilder(utf16Length);
+			if ("ascii".equals(content)) {
+				appendAscii(builder, utf16Length);
+			}
+			else if ("bmp".equals(content)) {
+				appendBmp(builder, utf16Length);
+			}
+			else {
+				appendSmp(builder, utf16Length);
+			}
+			chars = builder.toString().toCharArray();
+		}
+	}
+
+	@Benchmark
+	public void from_char_buffer_array(CharBufferState state, Blackhole blackhole) {
+		org.antlr.v4.runtime.CodePointBuffer.Builder builder =
+			org.antlr.v4.runtime.CodePointBuffer.builder(state.chars.length);
+		builder.append(java.nio.CharBuffer.wrap(state.chars));
+		blackhole.consume(CodePointCharStream.fromBuffer(builder.build()));
+	}
+
 	/**
 	 * Mirrors the dominant lexer access pattern: look ahead one code point,
 	 * consume it, and restart from the beginning for the next invocation.
