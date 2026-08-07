@@ -15,7 +15,7 @@ import java.util.List;
 
 /**
  * This implementation of {@link TokenStream} loads tokens from a
- * {@link TokenSource} and places the tokens in a buffer to provide
+ * {@link TokenSource} on-demand, and places the tokens in a buffer to provide
  * access to any previous token by index.
  *
  * <p>
@@ -25,14 +25,11 @@ import java.util.List;
  * {@link Token#HIDDEN_CHANNEL}, use a filtering token stream such a
  * {@link CommonTokenStream}.</p>
  *
- * <p><strong>Initialization:</strong> When the underlying
- * {@link CharStream#size()} is available (typical for file/string inputs used
- * by compilers), the first initializing look ({@link #LT}, {@link #LA},
- * {@link #seek}, etc.) <em>eagerly</em> lexes the entire input into the buffer.
- * Streams that throw {@link UnsupportedOperationException} from {@code size()}
- * (for example unbuffered inputs) keep classic on-demand fetching. Eager fill
- * improves throughput for batch parses but advances the lexer to EOF earlier
- * than pure on-demand buffering.</p>
+ * <p>Tokens are fetched lazily as the cursor advances (via {@link #sync}), so
+ * lexer errors surface interleaved with parser recovery in the historic order.
+ * Call {@link #fill()} explicitly when a full buffer is required up front.
+ * When {@link CharStream#size()} is available, setup and {@link #fill} may
+ * pre-size the internal list capacity without changing fetch ordering.</p>
  */
 public class BufferedTokenStream implements TokenStream {
 	/**
@@ -318,47 +315,44 @@ public class BufferedTokenStream implements TokenStream {
 	 * Initialize the token buffer and set {@link #p} to the first on-channel
 	 * (or stream-specific) token.
 	 *
-	 * <p>PERF: When the character stream reports a finite {@link CharStream#size},
-	 * eagerly materialize the entire token buffer (with capacity pre-sizing)
-	 * instead of fetching one token at a time via {@link #sync} during the first
-	 * pass. Compilers and batch tools almost always use sized streams
-	 * ({@link CodePointCharStream}, {@link ANTLRInputStream}); on-demand sync
-	 * otherwise dominates inclusive CPU during lex+parse of multi-kilobyte
-	 * inputs. Unbuffered streams that throw
-	 * {@link UnsupportedOperationException} from {@code size()} keep the
-	 * historic single-token setup path.</p>
+	 * <p>Tokens are fetched on demand ({@link #sync}(0) only). Full lexing of
+	 * the input is intentionally <em>not</em> performed here: eager fill would
+	 * advance the lexer to EOF before the parser runs, which reorders
+	 * lexer-vs-parser error notifications (for example token recognition errors
+	 * appearing before single-token deletion messages). Callers that want the
+	 * complete buffer should use {@link #fill()}.</p>
+	 *
+	 * <p>PERF: When {@link CharStream#size()} is available, pre-size the token
+	 * list capacity (~4 chars per token) so later on-demand growth avoids
+	 * repeated array copies. Capacity sizing does not change fetch order or
+	 * error interleaving.</p>
 	 */
     protected void setup() {
-		CharStream chars = tokenSource.getInputStream();
-		if (chars != null) {
-			try {
-				int charCount = chars.size();
-				// Known-length input: bulk-fill once. fill() itself calls
-				// lazyInit, so implement the fill body here without re-entry.
-				if (tokens instanceof ArrayList) {
-					int estimate = charCount >> 2; // ~4 chars per token
-					if (estimate > tokens.size()) {
-						((ArrayList<Token>)tokens).ensureCapacity(estimate);
-					}
-				}
-				final int blockSize = 1000;
-				while (true) {
-					int fetched = fetch(blockSize);
-					if (fetched < blockSize) {
-						break;
-					}
-				}
-				p = adjustSeekIndex(0);
-				cachedLT1 = null;
-				return;
-			}
-			catch (UnsupportedOperationException ignored) {
-				// Streaming / unbuffered input: fall through to on-demand sync.
-			}
-		}
+		ensureTokenCapacityFromCharStream();
 		sync(0);
 		p = adjustSeekIndex(0);
 		cachedLT1 = null;
+	}
+
+	/**
+	 * Pre-size {@link #tokens} from {@link CharStream#size()} when known.
+	 * No-op for streams that throw {@link UnsupportedOperationException}
+	 * (unbuffered inputs) or when the token list is not an {@link ArrayList}.
+	 */
+	private void ensureTokenCapacityFromCharStream() {
+		CharStream chars = tokenSource.getInputStream();
+		if (chars == null || !(tokens instanceof ArrayList)) {
+			return;
+		}
+		try {
+			int estimate = chars.size() >> 2; // ~4 chars per token
+			if (estimate > tokens.size()) {
+				((ArrayList<Token>)tokens).ensureCapacity(estimate);
+			}
+		}
+		catch (UnsupportedOperationException ignored) {
+			// Streaming / unbuffered input: keep default capacity.
+		}
 	}
 
     /** Reset this token stream by setting its token source. */
@@ -589,26 +583,8 @@ public class BufferedTokenStream implements TokenStream {
     /** Get all tokens from lexer until EOF. */
     public void fill() {
         lazyInit();
-		// Pre-size from the character stream when available. Typical source code
-		// is roughly 4–8 characters per token; under-estimating only costs a
-		// later growth, over-estimating is cheap relative to Token objects.
-		//
-		// Some streams (notably {@link UnbufferedCharStream}) intentionally
-		// throw {@link UnsupportedOperationException} from {@link CharStream#size}
-		// because they cannot know the full input length. Treat that as "no
-		// estimate" and keep the default token-list capacity.
-		CharStream chars = tokenSource.getInputStream();
-		if (chars != null && tokens instanceof ArrayList) {
-			try {
-				int estimate = chars.size() >> 2; // size/4
-				if (estimate > tokens.size()) {
-					((ArrayList<Token>)tokens).ensureCapacity(estimate);
-				}
-			}
-			catch (UnsupportedOperationException ignored) {
-				// Unbuffered / streaming inputs: skip capacity hint.
-			}
-		}
+		// Capacity pre-size only; see ensureTokenCapacityFromCharStream.
+		ensureTokenCapacityFromCharStream();
 		final int blockSize = 1000;
 		while (true) {
 			int fetched = fetch(blockSize);

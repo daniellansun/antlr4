@@ -15,6 +15,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+// assertTrue used by setupIsOnDemandButFillMaterializesAll
 
 public class TestBufferedTokenStream {
 	private static CommonToken tok(int type, String text) {
@@ -51,14 +52,13 @@ public class TestBufferedTokenStream {
 	}
 
 	/**
-	 * Eager fill when the character stream reports a finite size (the common
-	 * compiler path). MockTokenSource has no CharStream so stays on-demand.
+	 * Setup remains on-demand (only first token), preserving historic lexer /
+	 * parser error interleaving. Explicit {@link BufferedTokenStream#fill()}
+	 * still materializes the full buffer when requested.
 	 */
 	@Test
-	public void eagerFillWhenCharStreamSized() {
+	public void setupIsOnDemandButFillMaterializesAll() {
 		String source = "int x = 1;";
-		// Use a real lexer-free path: ListTokenSource has no char stream either.
-		// CodePointCharStream + a tiny hand-rolled source that wraps fromString.
 		CharStream chars = CharStreams.fromString(source);
 		TokenSource ts = new TokenSource() {
 			int i;
@@ -69,28 +69,25 @@ public class TestBufferedTokenStream {
 					return factory.create(Token.EOF, "EOF");
 				}
 				char c = data[i++];
-				CommonToken t = new CommonToken((int)c, String.valueOf(c));
-				return t;
+				return new CommonToken((int)c, String.valueOf(c));
 			}
 			@Override public int getLine() { return 1; }
 			@Override public int getCharPositionInLine() { return i; }
 			@Override public CharStream getInputStream() { return chars; }
-			@Override public String getSourceName() { return "eager"; }
+			@Override public String getSourceName() { return "ondemand"; }
 			@Override public TokenFactory getTokenFactory() { return factory; }
 			@Override public void setTokenFactory(TokenFactory factory) { }
 		};
 		BufferedTokenStream tokens = new BufferedTokenStream(ts);
-		// First LT triggers setup; sized stream should bulk-fetch all tokens + EOF
+		// First LT only fetches the first token (+ channel adjust)
 		Token first = tokens.LT(1);
 		assertEquals((int)'i', first.getType());
-		// size includes all characters + EOF after eager fill
+		assertTrue("setup must stay on-demand; full lex would reorder errors",
+			tokens.size() < source.length() + 1);
+
+		tokens.fill();
 		assertEquals(source.length() + 1, tokens.size());
 		assertEquals((int)'i', tokens.LA(1));
-		// After consuming past end, EOF
-		for (int n = 0; n < source.length(); n++) {
-			tokens.consume();
-		}
-		assertEquals(Token.EOF, tokens.LA(1));
 	}
 
 	@Test

@@ -281,13 +281,15 @@ then walk the array (`getOptimizedTransition` / `getNumberOfOptimizedTransitions
 instead of `ArrayList.get` / `size` on every edge. Mutations of optimized
 transitions (test-only after freeze) invalidate the snapshot automatically.
 
-#### Eager token buffer fill + LA(1) fast path
+#### Token buffer capacity pre-size + LA(1) fast path
 
-When `TokenSource.getInputStream()` reports a finite `CharStream.size()`
-(file / string streams used by compilers), `BufferedTokenStream.setup`
-bulk-fills the token list once (with capacity pre-size) instead of
-on-demand `sync` during the first parse pass. Unbuffered streams that throw
-from `size()` keep historic on-demand setup.
+When `TokenSource.getInputStream()` reports a finite `CharStream.size()`,
+`BufferedTokenStream.setup` / `fill` pre-size the token list capacity
+(~4 characters per token) so on-demand growth avoids repeated array copies.
+**Fetch order remains on-demand** via `sync`: fully lexing in `setup` would
+advance the lexer to EOF before the parser runs and reorder lexer-vs-parser
+error notifications (CI regressions on single-token deletion tests). Callers
+that need a complete buffer should still call `fill()` explicitly.
 
 `CommonTokenStream.LT(1)` / `LA(1)` and `BufferedTokenStream.LA(1)` short-circuit
 to `tokens.get(p)` after the cursor is initialized (p already on-channel).
