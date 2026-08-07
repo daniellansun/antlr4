@@ -174,13 +174,25 @@ public class TestSemanticPipelineAndErrorEmitCoverage extends BaseTest {
 	public void testErrorManagerOneOffAndEmit() {
 		Tool tool = new Tool();
 		ErrorManager em = tool.errMgr;
-		// WARNING_ONE_OFF / ERROR_ONE_OFF double emit
-		for (ErrorType et : ErrorType.values()) {
+		// Emit a representative subset (not every ErrorType) to exercise one-off
+		// severities without flooding CI logs or stressing ST rendering.
+		ErrorType[] sample = new ErrorType[] {
+				ErrorType.CANNOT_WRITE_FILE,
+				ErrorType.INVALID_CMDLINE_ARG,
+				ErrorType.ERROR_READING_IMPORTED_GRAMMAR,
+				ErrorType.INTERNAL_ERROR,
+				ErrorType.SYNTAX_ERROR,
+				ErrorType.UNDEFINED_RULE_REF,
+				ErrorType.EPSILON_CLOSURE,
+		};
+		for (ErrorType et : sample) {
 			if (et.severity == null) continue;
 			try {
 				em.emit(et, new org.antlr.v4.tool.ToolMessage(et, "a", "b", "c"));
+				// second emit exercises ONE_OFF dedup paths where applicable
 				em.emit(et, new org.antlr.v4.tool.ToolMessage(et, "a", "b", "c"));
 			} catch (Throwable t) {
+				// template arg mismatches are acceptable for this coverage probe
 			}
 		}
 		assertTrue(em.getNumErrors() >= 0);

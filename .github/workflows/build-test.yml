@@ -34,15 +34,28 @@ jobs:
           java-version: ${{ matrix.java }}
           check-latest: true
       - name: Install maven
-        run: wget https://archive.apache.org/dist/maven/maven-3/3.8.6/binaries/apache-maven-3.8.6-bin.zip && unzip -qq apache-maven-3.8.6-bin.zip
-      - name: Set environment variables
-        run: export M2_HOME=$PWD/apache-maven-3.8.6 && export PATH=$M2_HOME/bin:$PATH && echo "MAVEN_OPTS='-Xmx1g -DENABLE_JACOCO=true'" > ~/.mavenrc
+        run: |
+          wget https://archive.apache.org/dist/maven/maven-3/3.8.6/binaries/apache-maven-3.8.6-bin.zip
+          unzip -qq apache-maven-3.8.6-bin.zip
+          # Persist across subsequent steps (export in a step does not)
+          echo "$PWD/apache-maven-3.8.6/bin" >> "$GITHUB_PATH"
       - name: Test with Maven
-        run: mvn test -Dantlr.testinprocess=true -DJDK_SOURCE_ROOT=../runtime/Java/src -Dperformance.package=
+        env:
+          # JVM opts for Maven + surefire forks; headless avoids AWT crashes on CI runners
+          MAVEN_OPTS: -Xmx1g -Djava.awt.headless=true
+        # ENABLE_JACOCO must be a Maven property (profile activation), not only a JVM flag.
+        # JDK_SOURCE_ROOT is resolved relative to each module's basedir (tool/ -> ../runtime/Java/src).
+        # performance.package= keeps TestPerformance from scanning a large package tree.
+        run: >
+          mvn test
+          -DENABLE_JACOCO=true
+          -Dantlr.testinprocess=true
+          -Djava.awt.headless=true
+          -DJDK_SOURCE_ROOT=../runtime/Java/src
+          -Dperformance.package=
         timeout-minutes: 60
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           verbose: true
-

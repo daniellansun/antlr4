@@ -55,6 +55,11 @@ import static org.junit.Assert.*;
  */
 public class TestToolBuildDependencyAndDOTCoverage extends BaseTest {
 
+	static {
+		// Keep CI/surefire free of accidental AWT init from shared JVM forks.
+		System.setProperty("java.awt.headless", "true");
+	}
+
 	@Test
 	public void testBuildDependencyGeneratorFullPaths() throws Exception {
 		mkdir(tmpdir);

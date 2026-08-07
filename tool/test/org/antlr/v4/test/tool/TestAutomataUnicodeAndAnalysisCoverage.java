@@ -61,6 +61,10 @@ import static org.junit.Assert.*;
  */
 public class TestAutomataUnicodeAndAnalysisCoverage extends BaseTest {
 
+	static {
+		System.setProperty("java.awt.headless", "true");
+	}
+
 	@Test
 	public void testATNFactoryPrinterVisitorOptimizer() throws Exception {
 		Grammar g = new Grammar(
