@@ -15,7 +15,7 @@ import java.util.List;
 
 /**
  * This implementation of {@link TokenStream} loads tokens from a
- * {@link TokenSource} on-demand, and places the tokens in a buffer to provide
+ * {@link TokenSource} and places the tokens in a buffer to provide
  * access to any previous token by index.
  *
  * <p>
@@ -24,6 +24,15 @@ import java.util.List;
  * channel, such as {@link Token#DEFAULT_CHANNEL} or
  * {@link Token#HIDDEN_CHANNEL}, use a filtering token stream such a
  * {@link CommonTokenStream}.</p>
+ *
+ * <p><strong>Initialization:</strong> When the underlying
+ * {@link CharStream#size()} is available (typical for file/string inputs used
+ * by compilers), the first initializing look ({@link #LT}, {@link #LA},
+ * {@link #seek}, etc.) <em>eagerly</em> lexes the entire input into the buffer.
+ * Streams that throw {@link UnsupportedOperationException} from {@code size()}
+ * (for example unbuffered inputs) keep classic on-demand fetching. Eager fill
+ * improves throughput for batch parses but advances the lexer to EOF earlier
+ * than pure on-demand buffering.</p>
  */
 public class BufferedTokenStream implements TokenStream {
 	/**
@@ -67,6 +76,18 @@ public class BufferedTokenStream implements TokenStream {
 	 */
 	protected boolean fetchedEOF;
 
+	/**
+	 * Cached {@link #LT LT(1)} / {@code tokens.get(p)} after the stream cursor is
+	 * positioned. Refreshed on successful {@link #consume}; cleared when consume
+	 * cannot advance, and on {@link #seek} / {@link #setTokenSource}.
+	 *
+	 * <p>PERF: Every {@link Parser#enterRule} and {@link Parser#match} probes
+	 * LT(1). Caching the current token (on-channel after
+	 * {@link #adjustSeekIndex}) avoids repeated {@link ArrayList#get} for the
+	 * dominant k=1 case.</p>
+	 */
+	private Token cachedLT1;
+
     public BufferedTokenStream(@NotNull TokenSource tokenSource) {
 		if (tokenSource == null) {
 			throw new NullPointerException("tokenSource cannot be null");
@@ -106,6 +127,7 @@ public class BufferedTokenStream implements TokenStream {
     public void seek(int index) {
         lazyInit();
         p = adjustSeekIndex(index);
+		cachedLT1 = null;
     }
 
     @Override
@@ -136,6 +158,16 @@ public class BufferedTokenStream implements TokenStream {
 
 		if (sync(p + 1)) {
 			p = adjustSeekIndex(p + 1);
+			// Refresh LT(1) cache for the new cursor (common after match/consume).
+			if (p >= 0 && p < tokens.size()) {
+				cachedLT1 = tokens.get(p);
+			}
+			else {
+				cachedLT1 = null;
+			}
+		}
+		else {
+			cachedLT1 = null;
 		}
     }
 
@@ -204,7 +236,21 @@ public class BufferedTokenStream implements TokenStream {
 	}
 
 	@Override
-	public int LA(int i) { return LT(i).getType(); }
+	public int LA(int i) {
+		// PERF: LA(1) dominates prediction and match.
+		if (i == 1) {
+			Token t = cachedLT1;
+			if (t != null) {
+				return t.getType();
+			}
+			if (p >= 0 && p < tokens.size()) {
+				t = tokens.get(p);
+				cachedLT1 = t;
+				return t.getType();
+			}
+		}
+		return LT(i).getType();
+	}
 
     protected Token LB(int k) {
         if ( (p-k)<0 ) return null;
@@ -214,9 +260,26 @@ public class BufferedTokenStream implements TokenStream {
 	@NotNull
     @Override
     public Token LT(int k) {
+		// PERF: LT(1) after setup — use / fill cache without re-entering setup.
+		if (k == 1) {
+			Token t = cachedLT1;
+			if (t != null) {
+				return t;
+			}
+			if (p >= 0 && p < tokens.size()) {
+				t = tokens.get(p);
+				cachedLT1 = t;
+				return t;
+			}
+		}
         lazyInit();
         if ( k==0 ) return null;
         if ( k < 0 ) return LB(-k);
+		if ( k == 1 ) {
+			Token t = tokens.get(p);
+			cachedLT1 = t;
+			return t;
+		}
 
 		int i = p + k - 1;
 		sync(i);
@@ -251,9 +314,51 @@ public class BufferedTokenStream implements TokenStream {
 		}
 	}
 
+    /**
+	 * Initialize the token buffer and set {@link #p} to the first on-channel
+	 * (or stream-specific) token.
+	 *
+	 * <p>PERF: When the character stream reports a finite {@link CharStream#size},
+	 * eagerly materialize the entire token buffer (with capacity pre-sizing)
+	 * instead of fetching one token at a time via {@link #sync} during the first
+	 * pass. Compilers and batch tools almost always use sized streams
+	 * ({@link CodePointCharStream}, {@link ANTLRInputStream}); on-demand sync
+	 * otherwise dominates inclusive CPU during lex+parse of multi-kilobyte
+	 * inputs. Unbuffered streams that throw
+	 * {@link UnsupportedOperationException} from {@code size()} keep the
+	 * historic single-token setup path.</p>
+	 */
     protected void setup() {
+		CharStream chars = tokenSource.getInputStream();
+		if (chars != null) {
+			try {
+				int charCount = chars.size();
+				// Known-length input: bulk-fill once. fill() itself calls
+				// lazyInit, so implement the fill body here without re-entry.
+				if (tokens instanceof ArrayList) {
+					int estimate = charCount >> 2; // ~4 chars per token
+					if (estimate > tokens.size()) {
+						((ArrayList<Token>)tokens).ensureCapacity(estimate);
+					}
+				}
+				final int blockSize = 1000;
+				while (true) {
+					int fetched = fetch(blockSize);
+					if (fetched < blockSize) {
+						break;
+					}
+				}
+				p = adjustSeekIndex(0);
+				cachedLT1 = null;
+				return;
+			}
+			catch (UnsupportedOperationException ignored) {
+				// Streaming / unbuffered input: fall through to on-demand sync.
+			}
+		}
 		sync(0);
 		p = adjustSeekIndex(0);
+		cachedLT1 = null;
 	}
 
     /** Reset this token stream by setting its token source. */
@@ -262,6 +367,7 @@ public class BufferedTokenStream implements TokenStream {
         tokens.clear();
         p = -1;
         fetchedEOF = false;
+		cachedLT1 = null;
     }
 
     public List<Token> getTokens() { return tokens; }

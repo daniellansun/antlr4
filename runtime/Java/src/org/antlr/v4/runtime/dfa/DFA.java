@@ -351,17 +351,45 @@ public class DFA {
 		}
 	}
 
+	/**
+	 * Returns {@code true} if this DFA has not yet learned any useful start
+	 * state information.
+	 *
+	 * <p>For ordinary (non-precedence) DFAs this is true when both
+	 * {@link #s0} and {@link #s0full} are still {@code null}. For precedence
+	 * DFAs the synthetic start states always exist, so emptiness is defined by
+	 * whether those states have any outgoing symbol edges yet.</p>
+	 *
+	 * <p>PERF: Precedence-DFA emptiness is answered via
+	 * {@link DFAState#isEdgesEmpty()} — never via
+	 * {@link DFAState#getEdgeMap()}{@code .isEmpty()}, which would allocate a
+	 * full boxed map on every {@link org.antlr.v4.runtime.atn.ParserATNSimulator#adaptivePredict}
+	 * call for left-recursive expression decisions (the common case in
+	 * languages such as Java and Groovy).</p>
+	 */
 	public boolean isEmpty() {
 		if (isPrecedenceDfa()) {
-			return s0.get().getEdgeMap().isEmpty() && s0full.get().getEdgeMap().isEmpty();
+			// Synthetic s0 / s0full are non-null for precedence DFAs; edges start empty.
+			DFAState local = s0.get();
+			DFAState full = s0full.get();
+			return (local == null || local.isEdgesEmpty())
+				&& (full == null || full.isEdgesEmpty());
 		}
 
 		return s0.get() == null && s0full.get() == null;
 	}
 
+	/**
+	 * Returns {@code true} if this DFA has learned at least one full-context
+	 * start path.
+	 *
+	 * <p>PERF: Precedence DFAs use {@link DFAState#isEdgesEmpty()} on
+	 * {@link #s0full} instead of materializing {@link DFAState#getEdgeMap()}.</p>
+	 */
 	public boolean isContextSensitive() {
 		if (isPrecedenceDfa()) {
-			return !s0full.get().getEdgeMap().isEmpty();
+			DFAState full = s0full.get();
+			return full != null && !full.isEdgesEmpty();
 		}
 
 		return s0full.get() != null;

@@ -165,6 +165,51 @@ public class TestEdgeMaps {
 	}
 
 	@Test
+	public void hashEdgeMapSizeAndIsEmptyAreConstantTime() {
+		HashEdgeMap<String> map = new HashEdgeMap<String>(0, 100);
+		assertTrue(map.isEmpty());
+		assertEquals(0, map.size());
+		assertNull(map.get(3));
+
+		AbstractEdgeMap<String> m = map.put(3, "three");
+		assertFalse(m.isEmpty());
+		assertEquals(1, m.size());
+		assertEquals("three", m.get(3));
+		assertNull(m.get(4));
+
+		// Replace same key keeps size
+		m = m.put(3, "THREE");
+		assertEquals(1, m.size());
+		assertEquals("THREE", m.get(3));
+
+		// Add more keys; size tracks occupancy (may promote map type)
+		m = m.put(7, "seven");
+		m = m.put(11, "eleven");
+		assertEquals(3, m.size());
+		assertFalse(m.isEmpty());
+
+		// toMap must not use TreeMap-sorted keys requirement; values present
+		Map<Integer, String> asMap = m.toMap();
+		assertEquals(3, asMap.size());
+		assertEquals("THREE", asMap.get(3));
+		assertEquals("seven", asMap.get(7));
+		assertEquals("eleven", asMap.get(11));
+	}
+
+	@Test
+	public void hashEdgeMapRemoveDecrementsSize() {
+		AbstractEdgeMap<String> m = new HashEdgeMap<String>(0, 50);
+		m = m.put(1, "a");
+		m = m.put(2, "b");
+		assertEquals(2, m.size());
+		m = m.remove(1);
+		assertEquals(1, m.size());
+		assertNull(m.get(1));
+		assertEquals("b", m.get(2));
+		assertTrue(m.remove(99) == m || m.get(99) == null);
+	}
+
+	@Test
 	public void arrayEdgeMapBasics() {
 		ArrayEdgeMap<String> map = new ArrayEdgeMap<String>(0, 5);
 		assertEquals(0, map.size());

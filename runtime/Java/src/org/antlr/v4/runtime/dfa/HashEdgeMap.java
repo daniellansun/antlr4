@@ -11,17 +11,41 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 
 /**
+ * Sparse open-addressed edge map used while a DFA state has only a few outgoing
+ * edges. Grows by doubling and promotes to {@link ArrayEdgeMap} when density
+ * approaches half of the allowed symbol range.
+ *
+ * <p>PERF: {@link #isEmpty()} / {@link #size()} are O(1) via a retained
+ * occupancy counter (updated only under the same monitor as structural
+ * mutations). {@link #toMap()} remains a cold diagnostic path (sorted
+ * {@link TreeMap} for stable {@link DFASerializer} output); hot emptiness
+ * checks must use {@link #isEmpty()} directly rather than
+ * {@code toMap().isEmpty()}.</p>
  *
  * @author Sam Harwell
  */
 public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
-	private static final int DEFAULT_MAX_SIZE = 2;
+	/**
+	 * Initial open-addressed table length (power of two). Raised from 2 to 8 so
+	 * the common "handful of outgoing edges" case (parser token edges, short
+	 * lexer loops) avoids collision-driven resize churn on the first few
+	 * {@link #put} calls. Tables still promote to {@link ArrayEdgeMap} once
+	 * density approaches half of the allowed symbol range.
+	 */
+	private static final int DEFAULT_MAX_SIZE = 8;
 
 	private final AtomicIntegerArray keys;
 	private final T[] values;
+	/**
+	 * Number of non-null slots. Updated only inside {@code synchronized (this)}
+	 * mutation paths; read without the monitor for O(1) {@link #size()} /
+	 * {@link #isEmpty()} (same visibility model as {@link ArrayEdgeMap}).
+	 */
+	private final AtomicInteger size;
 
 	public HashEdgeMap(int minIndex, int maxIndex) {
 		this(minIndex, maxIndex, DEFAULT_MAX_SIZE);
@@ -32,6 +56,7 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 		super(minIndex, maxIndex);
 		this.keys = new AtomicIntegerArray(maxSparseSize);
 		this.values = (T[])new Object[maxSparseSize];
+		this.size = new AtomicInteger();
 	}
 
 	@SuppressWarnings("unchecked")
@@ -44,6 +69,7 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 
 			keys = new AtomicIntegerArray(maxSparseSize);
 			values = (T[])new Object[maxSparseSize];
+			int occupied = 0;
 			for (int i = 0; i < map.values.length; i++) {
 				int key = map.keys.get(i);
 				T value = map.values[i];
@@ -51,8 +77,10 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 					int bucket = bucket(key);
 					keys.set(bucket, key);
 					values[bucket] = value;
+					occupied++;
 				}
 			}
+			this.size = new AtomicInteger(occupied);
 		}
 	}
 
@@ -80,19 +108,12 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 
 	@Override
 	public int size() {
-		int size = 0;
-		for (T edge : values) {
-			if (edge != null) {
-				size++;
-			}
-		}
-
-		return size;
+		return size.get();
 	}
 
 	@Override
 	public boolean isEmpty() {
-		return size() == 0;
+		return size.get() == 0;
 	}
 
 	@Override
@@ -102,6 +123,9 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 
 	@Override
 	public T get(int key) {
+		// Hot path: DFA edge walk during adaptivePredict / lexer match.
+		// Do not gate on size.get() — that is an extra atomic read on every
+		// warm edge lookup; empty maps already miss via values[bucket] == null.
 		int bucket = bucket(key);
 
 		// Read the value first
@@ -127,7 +151,16 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 			int bucket = bucket(key);
 			int currentKey = keys.get(bucket);
 			if (currentKey == key) {
-				values[bucket] = value;
+				// Same key: replace value; occupancy unchanged if slot was occupied.
+				// keys are only written when inserting into an empty slot, so a
+				// matching key implies a live entry (size > 0).
+				if (values[bucket] == null) {
+					values[bucket] = value;
+					size.incrementAndGet();
+				}
+				else {
+					values[bucket] = value;
+				}
 				return this;
 			}
 
@@ -136,6 +169,7 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 				// Write the key first
 				keys.set(bucket, key);
 				values[bucket] = value;
+				size.incrementAndGet();
 				return this;
 			}
 
@@ -170,8 +204,11 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 
 		HashEdgeMap<T> result = new HashEdgeMap<T>(this, values.length);
 		int bucket = result.bucket(key);
-		result.keys.set(bucket, 0);
-		result.values[bucket] = null;
+		if (result.values[bucket] != null) {
+			result.keys.set(bucket, 0);
+			result.values[bucket] = null;
+			result.size.decrementAndGet();
+		}
 		return result;
 	}
 
@@ -190,13 +227,15 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 			return Collections.emptyMap();
 		}
 
+		// TreeMap: sorted keys for stable DFASerializer / diagnostic dumps.
+		// This path is cold — never call toMap() from adaptivePredict hot paths
+		// (use isEmpty()/size() instead; see DFA.isEmpty).
 		synchronized (this) {
 			Map<Integer, T> result = new TreeMap<Integer, T>();
 			for (int i = 0; i < values.length; i++) {
-				int key = keys.get(i);
 				T value = values[i];
 				if (value != null) {
-					result.put(key, value);
+					result.put(keys.get(i), value);
 				}
 			}
 

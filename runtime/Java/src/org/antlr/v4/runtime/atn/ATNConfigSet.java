@@ -423,11 +423,15 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		assert !outermostConfigSet || !dipsIntoOuterContext;
 	}
 
+	/**
+	 * Whether {@code left} may merge into the existing {@code right} config.
+	 *
+	 * <p>PERF: The packed {@code leftKey} already encodes
+	 * {@code (stateNumber, alt)} (see {@link #getKey}). Comparing keys alone
+	 * establishes state+alt equality; a separate
+	 * {@code getState().stateNumber} walk is redundant on the hot merge path.</p>
+	 */
 	protected boolean canMerge(ATNConfig left, long leftKey, ATNConfig right) {
-		if (left.getState().stateNumber != right.getState().stateNumber) {
-			return false;
-		}
-
 		if (leftKey != getKey(right)) {
 			return false;
 		}

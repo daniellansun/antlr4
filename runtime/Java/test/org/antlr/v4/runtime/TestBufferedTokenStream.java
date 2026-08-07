@@ -50,6 +50,49 @@ public class TestBufferedTokenStream {
 		assertEquals(Token.EOF, tokens.LA(1));
 	}
 
+	/**
+	 * Eager fill when the character stream reports a finite size (the common
+	 * compiler path). MockTokenSource has no CharStream so stays on-demand.
+	 */
+	@Test
+	public void eagerFillWhenCharStreamSized() {
+		String source = "int x = 1;";
+		// Use a real lexer-free path: ListTokenSource has no char stream either.
+		// CodePointCharStream + a tiny hand-rolled source that wraps fromString.
+		CharStream chars = CharStreams.fromString(source);
+		TokenSource ts = new TokenSource() {
+			int i;
+			final TokenFactory factory = CommonTokenFactory.DEFAULT;
+			final char[] data = source.toCharArray();
+			@Override public Token nextToken() {
+				if (i >= data.length) {
+					return factory.create(Token.EOF, "EOF");
+				}
+				char c = data[i++];
+				CommonToken t = new CommonToken((int)c, String.valueOf(c));
+				return t;
+			}
+			@Override public int getLine() { return 1; }
+			@Override public int getCharPositionInLine() { return i; }
+			@Override public CharStream getInputStream() { return chars; }
+			@Override public String getSourceName() { return "eager"; }
+			@Override public TokenFactory getTokenFactory() { return factory; }
+			@Override public void setTokenFactory(TokenFactory factory) { }
+		};
+		BufferedTokenStream tokens = new BufferedTokenStream(ts);
+		// First LT triggers setup; sized stream should bulk-fetch all tokens + EOF
+		Token first = tokens.LT(1);
+		assertEquals((int)'i', first.getType());
+		// size includes all characters + EOF after eager fill
+		assertEquals(source.length() + 1, tokens.size());
+		assertEquals((int)'i', tokens.LA(1));
+		// After consuming past end, EOF
+		for (int n = 0; n < source.length(); n++) {
+			tokens.consume();
+		}
+		assertEquals(Token.EOF, tokens.LA(1));
+	}
+
 	@Test
 	public void fillAndSizeAndGetText() {
 		BufferedTokenStream tokens = stream(tok(1, "a"), tok(2, "b"), tok(3, "c"));

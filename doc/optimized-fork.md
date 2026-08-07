@@ -248,6 +248,53 @@ Hot loops walk `ATNConfigSet` by index (`get(i)`) instead of enhanced-for
 iterators, avoiding `Iterator` allocation on reach, closure BFS layers, and
 related paths.
 
+#### DFA emptiness without `TreeMap` (precedence DFAs)
+
+`ParserATNSimulator.adaptivePredict` calls `DFA.isEmpty()` (historically twice
+per prediction). For **precedence DFAs** (left-recursive expression rules —
+the common case in Java, Groovy, etc.) the synthetic `s0` / `s0full` states
+always exist, so emptiness was defined as “no outgoing symbol edges yet”.
+
+The previous implementation answered that via
+`s0.get().getEdgeMap().isEmpty()`, and `HashEdgeMap.toMap()` built a
+**`TreeMap<Integer, DFAState>`** (boxed keys + red-black inserts) on every
+call. Flame graphs of synthetic Java multi-file parse showed
+`DFA.isEmpty` → `HashEdgeMap.toMap` → `TreeMap` at **~17% inclusive CPU**.
+
+Mitigation:
+
+| API | Behavior |
+| --- | --- |
+| `DFAState.isEdgesEmpty()` / `isContextEdgesEmpty()` | O(1) occupancy; no `Map` allocation |
+| `DFA.isEmpty()` / `isContextSensitive()` | use the above; never `getEdgeMap().isEmpty()` |
+| `HashEdgeMap.size` / `isEmpty` | O(1) via retained occupancy counter |
+| `HashEdgeMap.toMap()` | cold path only (still sorted `TreeMap` for stable dumps) |
+| `adaptivePredict` | answers emptiness **once** per call |
+
+`getEdgeMap()` remains for diagnostics / `DFASerializer` only.
+
+#### Frozen optimized ATN transitions
+
+After ATN deserialization and optimization, each `ATNState` freezes its
+optimized transition list into a `Transition[]`. Epsilon closure and reach
+then walk the array (`getOptimizedTransition` / `getNumberOfOptimizedTransitions`)
+instead of `ArrayList.get` / `size` on every edge. Mutations of optimized
+transitions (test-only after freeze) invalidate the snapshot automatically.
+
+#### Eager token buffer fill + LA(1) fast path
+
+When `TokenSource.getInputStream()` reports a finite `CharStream.size()`
+(file / string streams used by compilers), `BufferedTokenStream.setup`
+bulk-fills the token list once (with capacity pre-size) instead of
+on-demand `sync` during the first parse pass. Unbuffered streams that throw
+from `size()` keep historic on-demand setup.
+
+`CommonTokenStream.LT(1)` / `LA(1)` and `BufferedTokenStream.LA(1)` short-circuit
+to `tokens.get(p)` after the cursor is initialized (p already on-channel).
+`BufferedTokenStream` retains a private `cachedLT1` reference, refreshed on
+`consume` and cleared on `seek` / `setTokenSource`, so `Parser.enterRule` /
+`match` do not re-index the token list on every call.
+
 #### API note (subclasses)
 
 The recursive protected

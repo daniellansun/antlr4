@@ -202,6 +202,33 @@ public class DFAState {
 		edges = edges.put(symbol, target);
 	}
 
+	/**
+	 * Returns {@code true} if this state has no outgoing symbol edges.
+	 *
+	 * <p>PERF: Prefer this over {@link #getEdgeMap()}{@code .isEmpty()} on hot
+	 * paths. {@link #getEdgeMap()} materializes a boxed {@link Map} (historically
+	 * a {@link java.util.TreeMap} for {@link HashEdgeMap}) solely to answer a
+	 * boolean question — profiled at ~17% of end-to-end Java parse CPU when
+	 * {@link DFA#isEmpty()} used that pattern for every precedence-DFA
+	 * prediction.</p>
+	 *
+	 * @return {@code true} if there are no symbol edges from this state
+	 */
+	public final boolean isEdgesEmpty() {
+		return edges.isEmpty();
+	}
+
+	/**
+	 * Returns {@code true} if this state has no context edges.
+	 *
+	 * <p>Same allocation-avoidance rationale as {@link #isEdgesEmpty()}.</p>
+	 *
+	 * @return {@code true} if there are no context edges from this state
+	 */
+	public final boolean isContextEdgesEmpty() {
+		return contextEdges.isEmpty();
+	}
+
 	public Map<Integer, DFAState> getEdgeMap() {
 		return edges.toMap();
 	}

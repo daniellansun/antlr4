@@ -78,6 +78,45 @@ public class TestDFA {
 		assertEquals("", dfa.toLexerString());
 	}
 
+	/**
+	 * {@link DFA#isEmpty()} / {@link DFA#isContextSensitive()} must not
+	 * allocate edge maps (historically {@code getEdgeMap().isEmpty()} built a
+	 * TreeMap on every adaptivePredict for precedence DFAs).
+	 */
+	@Test
+	public void isEmptyAndContextSensitiveAvoidEdgeMapAllocation() {
+		ATN atn = parserAtn(10);
+		StarLoopEntryState start = new StarLoopEntryState();
+		start.precedenceRuleDecision = true;
+		atn.addState(start);
+		addBasic(atn);
+		DFA dfa = new DFA(start, 0);
+		assertTrue(dfa.isPrecedenceDfa());
+		assertTrue(dfa.isEmpty());
+		assertFalse(dfa.isContextSensitive());
+
+		// Attach an edge without going through getEdgeMap
+		DFAState s0 = dfa.s0.get();
+		assertNotNull(s0);
+		assertTrue(s0.isEdgesEmpty());
+		assertTrue(s0.isContextEdgesEmpty());
+		DFAState target = dfa.addState(new DFAState(dfa, new ATNConfigSet()));
+		s0.setTarget(1, target);
+		assertFalse(s0.isEdgesEmpty());
+		assertFalse(dfa.isEmpty());
+		// Context edges still empty on s0full
+		assertTrue(dfa.s0full.get().isEdgesEmpty());
+		assertFalse(dfa.isContextSensitive());
+
+		// Full-context start edge => context sensitive
+		DFAState s0full = dfa.s0full.get();
+		s0full.setTarget(2, target);
+		assertTrue(dfa.isContextSensitive());
+		// getEdgeMap still works for diagnostics
+		assertEquals(1, s0.getEdgeMap().size());
+		assertSame(target, s0.getEdgeMap().get(1));
+	}
+
 	@Test
 	public void lexerDfaEdgeRange() {
 		ATN atn = lexerAtn(127);

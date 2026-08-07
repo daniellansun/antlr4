@@ -608,6 +608,16 @@ public class ATNDeserializer {
 
 		identifyTailCalls(atn);
 
+		// PERF: Freeze optimized transition lists into arrays so prediction
+		// hot paths (epsilon closure, reach) avoid ArrayList get/size on every
+		// edge walk. ATN states are immutable after deserialization.
+		for (int i = 0, n = atn.states.size(); i < n; i++) {
+			ATNState state = atn.states.get(i);
+			if (state != null) {
+				state.freezeOptimizedTransitions();
+			}
+		}
+
 		return atn;
 	}
 
