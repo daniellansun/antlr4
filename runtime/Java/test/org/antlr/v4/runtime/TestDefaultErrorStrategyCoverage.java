@@ -497,4 +497,51 @@ public class TestDefaultErrorStrategyCoverage {
 		assertEquals(1, msgs.size());
 		assertTrue(msgs.get(0).contains("no viable alternative"));
 	}
+
+	/**
+	 * Successful match is the hot path: {@code reportMatch} must be a no-op when
+	 * not recovering, and must clear recovery mode after a reported error.
+	 */
+	@Test
+	public void reportMatchFastPathWhenNotRecovering() {
+		SeqParser p = new SeqParser(abRule(), new String[] { "r" }, NAMES, 1, 2);
+		p.removeErrorListeners();
+		DefaultErrorStrategy s = new DefaultErrorStrategy();
+		assertFalse(s.inErrorRecoveryMode(p));
+		// Many successful matches (generated parsers call this every match)
+		for (int i = 0; i < 100; i++) {
+			s.reportMatch(p);
+		}
+		assertFalse(s.inErrorRecoveryMode(p));
+
+		// Enter recovery then leave via reportMatch
+		s.reportError(p, new InputMismatchException(p));
+		assertTrue(s.inErrorRecoveryMode(p));
+		s.reportMatch(p);
+		assertFalse(s.inErrorRecoveryMode(p));
+	}
+
+	/**
+	 * {@link DefaultErrorStrategy#sync} early-returns while recovering and
+	 * accepts tokens already in the next-token set without recovery work.
+	 */
+	@Test
+	public void syncEarlyExitAndAcceptingLookahead() {
+		ATN atn = abRule();
+		SeqParser p = new SeqParser(atn, new String[] { "r" }, NAMES, 1, 2);
+		p.removeErrorListeners();
+		p.setState(atn.ruleToStartState[0].stateNumber);
+		DefaultErrorStrategy s = new DefaultErrorStrategy();
+
+		// LA(1)=A is expected at start → sync is a pure accept path
+		s.sync(p);
+		assertFalse(s.inErrorRecoveryMode(p));
+		assertEquals(1, p.getCurrentToken().getType());
+
+		// While recovering, sync must not throw or advance
+		s.reportError(p, new InputMismatchException(p));
+		assertTrue(s.inErrorRecoveryMode(p));
+		s.sync(p);
+		assertTrue(s.inErrorRecoveryMode(p));
+	}
 }

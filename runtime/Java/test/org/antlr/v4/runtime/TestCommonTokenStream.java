@@ -55,6 +55,46 @@ public class TestCommonTokenStream {
 		assertEquals("x", tokens.LT(-4).getText());
 	}
 
+	/**
+	 * LT(1)/LA(1) cache must never surface hidden-channel tokens after consume
+	 * or seek (p is always adjustSeekIndex'd onto the default channel).
+	 */
+	@Test
+	public void lt1CacheRespectsChannelAfterConsumeAndSeek() {
+		TokenSource lexer = new MockTokenSource(
+			off(" "),
+			on(1, "a"),
+			off(" "),
+			off("\t"),
+			on(2, "b"),
+			off(" "),
+			on(3, "c")
+		);
+		CommonTokenStream tokens = new CommonTokenStream(lexer);
+		// Multiple LT(1)/LA(1) hits exercise the cache
+		assertEquals("a", tokens.LT(1).getText());
+		assertEquals(1, tokens.LA(1));
+		assertEquals("a", tokens.LT(1).getText());
+		assertEquals(1, tokens.LA(1));
+
+		tokens.consume();
+		assertEquals("b", tokens.LT(1).getText());
+		assertEquals(2, tokens.LA(1));
+		// k>1 still skips hidden
+		assertEquals("c", tokens.LT(2).getText());
+
+		tokens.seek(0);
+		assertEquals("a", tokens.LT(1).getText());
+		assertEquals(1, tokens.LA(1));
+
+		// Seek to a raw buffer index that is hidden; adjustSeekIndex should
+		// advance to the next on-channel token before caching.
+		tokens.seek(2); // off-channel " "
+		assertEquals(Token.DEFAULT_CHANNEL, tokens.LT(1).getChannel());
+		assertEquals("b", tokens.LT(1).getText());
+		assertEquals(2, tokens.LA(1));
+	}
+
 	@Test
 	public void channelConstructorFiltersToChannel() {
 		TokenSource lexer = new MockTokenSource(

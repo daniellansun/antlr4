@@ -90,6 +90,11 @@ public class CommonTokenStream extends BufferedTokenStream {
 
     @Override
     public Token LT(int k) {
+		// PERF: LT(1)/LA(1)/enterRule/match — hit the base cachedLT1 path when
+		// the cursor is already on-channel (always true after adjustSeekIndex).
+		if (k == 1) {
+			return super.LT(1);
+		}
         //System.out.println("enter LT("+k+")");
         lazyInit();
         if ( k == 0 ) return null;
@@ -107,6 +112,15 @@ public class CommonTokenStream extends BufferedTokenStream {
 //		if ( i>range ) range = i;
         return tokens.get(i);
     }
+
+	/**
+	 * PERF: Channel-aware LA(1) via the base LT(1) cache (p is always on-channel
+	 * after {@link #adjustSeekIndex}).
+	 */
+	@Override
+	public int LA(int i) {
+		return i == 1 ? super.LA(1) : super.LA(i);
+	}
 
 	/** Count EOF just once. */
 	public int getNumberOfOnChannelTokens() {

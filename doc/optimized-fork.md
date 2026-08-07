@@ -248,6 +248,55 @@ Hot loops walk `ATNConfigSet` by index (`get(i)`) instead of enhanced-for
 iterators, avoiding `Iterator` allocation on reach, closure BFS layers, and
 related paths.
 
+#### DFA emptiness without `TreeMap` (precedence DFAs)
+
+`ParserATNSimulator.adaptivePredict` calls `DFA.isEmpty()` (historically twice
+per prediction). For **precedence DFAs** (left-recursive expression rules —
+the common case in Java, Groovy, etc.) the synthetic `s0` / `s0full` states
+always exist, so emptiness was defined as “no outgoing symbol edges yet”.
+
+The previous implementation answered that via
+`s0.get().getEdgeMap().isEmpty()`, and `HashEdgeMap.toMap()` built a
+**`TreeMap<Integer, DFAState>`** (boxed keys + red-black inserts) on every
+call. Flame graphs of synthetic Java multi-file parse showed
+`DFA.isEmpty` → `HashEdgeMap.toMap` → `TreeMap` at **~17% inclusive CPU**.
+
+Mitigation:
+
+| API | Behavior |
+| --- | --- |
+| `DFAState.isEdgesEmpty()` / `isContextEdgesEmpty()` | O(1) occupancy; no `Map` allocation |
+| `DFA.isEmpty()` / `isContextSensitive()` | use the above; never `getEdgeMap().isEmpty()` |
+| `HashEdgeMap.size` / `isEmpty` | O(1) via retained occupancy counter |
+| `HashEdgeMap.toMap()` | cold path only (still sorted `TreeMap` for stable dumps) |
+| `adaptivePredict` | answers emptiness **once** per call |
+
+`getEdgeMap()` remains for diagnostics / `DFASerializer` only.
+
+#### Frozen optimized ATN transitions
+
+After ATN deserialization and optimization, each `ATNState` freezes its
+optimized transition list into a `Transition[]`. Epsilon closure and reach
+then walk the array (`getOptimizedTransition` / `getNumberOfOptimizedTransitions`)
+instead of `ArrayList.get` / `size` on every edge. Mutations of optimized
+transitions (test-only after freeze) invalidate the snapshot automatically.
+
+#### Token buffer capacity pre-size + LA(1) fast path
+
+When `TokenSource.getInputStream()` reports a finite `CharStream.size()`,
+`BufferedTokenStream.setup` / `fill` pre-size the token list capacity
+(~4 characters per token) so on-demand growth avoids repeated array copies.
+**Fetch order remains on-demand** via `sync`: fully lexing in `setup` would
+advance the lexer to EOF before the parser runs and reorder lexer-vs-parser
+error notifications (CI regressions on single-token deletion tests). Callers
+that need a complete buffer should still call `fill()` explicitly.
+
+`CommonTokenStream.LT(1)` / `LA(1)` and `BufferedTokenStream.LA(1)` short-circuit
+to `tokens.get(p)` after the cursor is initialized (p already on-channel).
+`BufferedTokenStream` retains a private `cachedLT1` reference, refreshed on
+`consume` and cleared on `seek` / `setTokenSource`, so `Parser.enterRule` /
+`match` do not re-index the token list on every call.
+
 #### API note (subclasses)
 
 The recursive protected
@@ -262,3 +311,34 @@ any other `public`/`protected` signature of the optimized runtime.
 **Reason for exclusion:** Implementation complexity
 
 The optimized release uses an exact implementation for merging `PredictionContext` instances. In some cases, the reference release produces prediction context graphs which are not fully reduced (maximum sharing of nodes in the graph). The algorithm used by the optimized fork implements an exact merge for these contexts, so the `PredictionContext` instances appearing in the DFA cache are fully reduced.
+
+### Generated recognizer code quality (Java target / tool module)
+
+**Reason for exclusion:** Implementation complexity (target-specific)
+
+The Java code generator (`tool/.../templates/codegen/Java/Java.stg`) is tuned so
+that the *generated* lexer/parser sources themselves are leaner and cheaper on
+the hot path, without changing parse semantics.
+
+| Generated pattern | Before | After | Why |
+| --- | --- | --- | --- |
+| LL(\*) decisions | `getInterpreter().adaptivePredict(_input, d, _ctx)` | private `_adaptivePredict(d)` → `_interp.adaptivePredict(...)` | one monomorphic helper; no virtual `getInterpreter()` per decision |
+| Star/plus exit test | FQN `org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER` | unchanged (must stay FQN) | a token named `ATN` would shadow the type import |
+| ATN class init | `deserialize(_serializedATN.toCharArray())` | `deserialize(_serializedATN)` | single buffer (see below); no `toCharArray`+`clone` double copy |
+| Imports | `java.util.Iterator` always imported | omitted when unused | cleaner generated sources |
+
+Runtime counterparts used heavily by generated call sites:
+
+| Runtime site | Optimization |
+| --- | --- |
+| `ATNDeserializer.deserialize(String)` | owns one `toCharArray()` buffer; mutates in place (no defensive clone) |
+| `ATNDeserializer.deserialize(char[])` | still clones (caller may reuse the array) — source-compatible |
+| `DefaultErrorStrategy.reportMatch` | no-op when not in recovery (every successful `match`) |
+| `DefaultErrorStrategy.sync` | early exit while recovering; single `getATN()` for state + nextTokens |
+| `Parser.match` / `matchWildcard` / `consume` | direct `_input.LT(1)` / `_input.consume()` on the hot path |
+
+**Compatibility:** Generated parsers remain source- and binary-compatible at the
+public API level. The private `_adaptivePredict` helper is not part of the
+supported surface. HPPC types remain confined to package-private runtime
+internals (see the HPPC section above); nothing in the tool templates emits
+HPPC types into generated code.

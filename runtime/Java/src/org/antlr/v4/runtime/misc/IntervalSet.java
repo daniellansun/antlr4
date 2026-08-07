@@ -382,6 +382,22 @@ public class IntervalSet implements IntSet {
     @Override
     public boolean contains(int el) {
 		int n = intervals.size();
+		// PERF: FIRST/FOLLOW sets used by DefaultErrorStrategy.sync and
+		// nextTokens commonly hold 1–2 intervals. Linear scan avoids the
+		// binary-search loop overhead and ArrayList.get mid-index traffic
+		// for those tiny sets while remaining O(n) correct for larger ones.
+		if (n <= 4) {
+			for (int i = 0; i < n; i++) {
+				Interval I = intervals.get(i);
+				if (el < I.a) {
+					return false; // sorted disjoint intervals
+				}
+				if (el <= I.b) {
+					return true;
+				}
+			}
+			return false;
+		}
 		int l = 0;
 		int r = n - 1;
 		// Binary search for the element in the (sorted,

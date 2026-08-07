@@ -15,6 +15,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+// assertTrue used by setupIsOnDemandButFillMaterializesAll
 
 public class TestBufferedTokenStream {
 	private static CommonToken tok(int type, String text) {
@@ -48,6 +49,45 @@ public class TestBufferedTokenStream {
 		tokens.consume();
 		tokens.consume();
 		assertEquals(Token.EOF, tokens.LA(1));
+	}
+
+	/**
+	 * Setup remains on-demand (only first token), preserving historic lexer /
+	 * parser error interleaving. Explicit {@link BufferedTokenStream#fill()}
+	 * still materializes the full buffer when requested.
+	 */
+	@Test
+	public void setupIsOnDemandButFillMaterializesAll() {
+		String source = "int x = 1;";
+		CharStream chars = CharStreams.fromString(source);
+		TokenSource ts = new TokenSource() {
+			int i;
+			final TokenFactory factory = CommonTokenFactory.DEFAULT;
+			final char[] data = source.toCharArray();
+			@Override public Token nextToken() {
+				if (i >= data.length) {
+					return factory.create(Token.EOF, "EOF");
+				}
+				char c = data[i++];
+				return new CommonToken((int)c, String.valueOf(c));
+			}
+			@Override public int getLine() { return 1; }
+			@Override public int getCharPositionInLine() { return i; }
+			@Override public CharStream getInputStream() { return chars; }
+			@Override public String getSourceName() { return "ondemand"; }
+			@Override public TokenFactory getTokenFactory() { return factory; }
+			@Override public void setTokenFactory(TokenFactory factory) { }
+		};
+		BufferedTokenStream tokens = new BufferedTokenStream(ts);
+		// First LT only fetches the first token (+ channel adjust)
+		Token first = tokens.LT(1);
+		assertEquals((int)'i', first.getType());
+		assertTrue("setup must stay on-demand; full lex would reorder errors",
+			tokens.size() < source.length() + 1);
+
+		tokens.fill();
+		assertEquals(source.length() + 1, tokens.size());
+		assertEquals((int)'i', tokens.LA(1));
 	}
 
 	@Test

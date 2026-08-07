@@ -126,6 +126,19 @@ public abstract class ATNState {
 
 	protected List<Transition> optimizedTransitions = transitions;
 
+	/**
+	 * Optional array view of {@link #optimizedTransitions} for the prediction
+	 * hot path. Populated by {@link #freezeOptimizedTransitions()} after ATN
+	 * construction / deserialization finishes mutating transitions. Cleared
+	 * automatically if optimized transitions are mutated again.
+	 *
+	 * <p>PERF: {@link #getOptimizedTransition(int)} and
+	 * {@link #getNumberOfOptimizedTransitions()} prefer this array so epsilon
+	 * closure and reach avoid {@link ArrayList#get} / {@link ArrayList#size}
+	 * virtual calls and bounds-check overhead on every edge walk.</p>
+	 */
+	private Transition[] optimizedTransitionsArray;
+
 	/** Used to cache lookahead during parsing, not used during construction */
     public IntervalSet nextTokenWithinRule;
 
@@ -188,6 +201,11 @@ public abstract class ATNState {
 			epsilonOnlyTransitions = false;
 		}
 
+		// When optimizedTransitions still aliases transitions, invalidate any
+		// freeze snapshot so hot-path array views cannot miss the new edge.
+		if (optimizedTransitions == transitions) {
+			optimizedTransitionsArray = null;
+		}
 		transitions.add(index, e);
 	}
 
@@ -196,10 +214,16 @@ public abstract class ATNState {
 	}
 
 	public void setTransition(int i, Transition e) {
+		if (optimizedTransitions == transitions) {
+			optimizedTransitionsArray = null;
+		}
 		transitions.set(i, e);
 	}
 
 	public Transition removeTransition(int index) {
+		if (optimizedTransitions == transitions) {
+			optimizedTransitionsArray = null;
+		}
 		return transitions.remove(index);
 	}
 
@@ -216,10 +240,18 @@ public abstract class ATNState {
 	}
 
 	public int getNumberOfOptimizedTransitions() {
+		Transition[] arr = optimizedTransitionsArray;
+		if (arr != null) {
+			return arr.length;
+		}
 		return optimizedTransitions.size();
 	}
 
 	public Transition getOptimizedTransition(int i) {
+		Transition[] arr = optimizedTransitionsArray;
+		if (arr != null) {
+			return arr[i];
+		}
 		return optimizedTransitions.get(i);
 	}
 
@@ -228,6 +260,7 @@ public abstract class ATNState {
 			optimizedTransitions = new ArrayList<Transition>();
 		}
 
+		optimizedTransitionsArray = null;
 		optimizedTransitions.add(e);
 	}
 
@@ -236,6 +269,7 @@ public abstract class ATNState {
 			throw new IllegalStateException();
 		}
 
+		optimizedTransitionsArray = null;
 		optimizedTransitions.set(i, e);
 	}
 
@@ -244,7 +278,29 @@ public abstract class ATNState {
 			throw new IllegalStateException();
 		}
 
+		optimizedTransitionsArray = null;
 		optimizedTransitions.remove(i);
+	}
+
+	/**
+	 * Snapshot {@link #optimizedTransitions} into a fixed array for hot-path
+	 * reads. Safe to call multiple times. When the list is empty, the snapshot
+	 * is the shared {@link Transition#EMPTY_ARRAY}.
+	 *
+	 * <p>Invoked once per state after ATN deserialization / optimization so
+	 * runtime prediction never pays {@link ArrayList} dispatch on transition
+	 * walks. Subsequent mutations of optimized transitions (or of
+	 * {@link #transitions} while it is still aliased as the optimized list)
+	 * invalidate the snapshot automatically.</p>
+	 */
+	public final void freezeOptimizedTransitions() {
+		List<Transition> list = optimizedTransitions;
+		int n = list.size();
+		if (n == 0) {
+			optimizedTransitionsArray = Transition.EMPTY_ARRAY;
+			return;
+		}
+		optimizedTransitionsArray = list.toArray(new Transition[n]);
 	}
 
 }

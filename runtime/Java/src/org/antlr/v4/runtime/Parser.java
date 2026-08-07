@@ -201,7 +201,9 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	 */
 	@NotNull
 	public Token match(int ttype) throws RecognitionException {
-		Token t = getCurrentToken();
+		// Direct field access (same as getCurrentToken) keeps the generated
+		// match() hot path free of an extra virtual call.
+		Token t = _input.LT(1);
 		if ( t.getType()==ttype ) {
 			if ( ttype==Token.EOF ) {
 				matchedEOF = true;
@@ -240,7 +242,7 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	 */
 	@NotNull
 	public Token matchWildcard() throws RecognitionException {
-		Token t = getCurrentToken();
+		Token t = _input.LT(1);
 		if (t.getType() > 0) {
 			_errHandler.reportMatch(this);
 			consume();
@@ -454,7 +456,7 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 			if (result == null) {
 				ATNDeserializationOptions deserializationOptions = new ATNDeserializationOptions();
 				deserializationOptions.setGenerateRuleBypassTransitions(true);
-				result = new ATNDeserializer(deserializationOptions).deserialize(serializedAtn.toCharArray());
+				result = new ATNDeserializer(deserializationOptions).deserialize(serializedAtn);
 				bypassAltsAtnCache.put(serializedAtn, result);
 			}
 
@@ -565,16 +567,20 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	 * listeners.
 	 */
 	public Token consume() {
-		Token o = getCurrentToken();
+		Token o = _input.LT(1);
 		if (o.getType() != EOF) {
-			getInputStream().consume();
+			_input.consume();
 		}
-		boolean hasListener = _parseListeners != null && !_parseListeners.isEmpty();
-		if (_buildParseTrees || hasListener) {
+		// Common path: build parse trees with no listeners. Empty listener lists
+		// are normalized to null by removeParseListener(s), so a non-null
+		// reference means "notify". Recovery mode is still queried below when
+		// trees or listeners require attaching terminal/error nodes.
+		List<ParseTreeListener> listeners = _parseListeners;
+		if (_buildParseTrees || listeners != null) {
 			if ( _errHandler.inErrorRecoveryMode(this) ) {
 				ErrorNode node = _ctx.addErrorNode(createErrorNode(_ctx,o));
-				if (_parseListeners != null) {
-					for (ParseTreeListener listener : _parseListeners) {
+				if (listeners != null) {
+					for (ParseTreeListener listener : listeners) {
 						listener.visitErrorNode(node);
 					}
 				}
@@ -582,8 +588,8 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 			else {
 				TerminalNode node = createTerminalNode(_ctx, o);
 				_ctx.addChild(node);
-				if (_parseListeners != null) {
-					for (ParseTreeListener listener : _parseListeners) {
+				if (listeners != null) {
+					for (ParseTreeListener listener : listeners) {
 						listener.visitTerminal(node);
 					}
 				}
@@ -631,7 +637,7 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 		_ctx = localctx;
 		_ctx.start = _input.LT(1);
 		if (_buildParseTrees) addContextToParseTree();
-        if ( _parseListeners != null) triggerEnterRuleEvent();
+		if ( _parseListeners != null) triggerEnterRuleEvent();
 	}
 
 	public void enterLeftFactoredRule(ParserRuleContext localctx, int state, int ruleIndex) {

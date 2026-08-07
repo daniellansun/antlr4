@@ -407,7 +407,11 @@ public class ParserATNSimulator extends ATNSimulator {
 	{
 		DFA dfa = atn.decisionToDFA[decision];
 		assert dfa != null;
-		if (optimize_ll1 && !dfa.isPrecedenceDfa() && !dfa.isEmpty()) {
+		// PERF: Answer emptiness once. Precedence DFAs (left-recursive
+		// expression rules) used to pay two TreeMap materializations per call
+		// via getEdgeMap().isEmpty(); isEmpty is now O(1) edge occupancy.
+		final boolean dfaEmpty = dfa.isEmpty();
+		if (optimize_ll1 && !dfa.isPrecedenceDfa() && !dfaEmpty) {
 			int ll1Alt = tryLL1Prediction(input, decision);
 			if (ll1Alt != ATN.INVALID_ALT_NUMBER) {
 				return ll1Alt;
@@ -429,7 +433,7 @@ public class ParserATNSimulator extends ATNSimulator {
 		}
 
 		SimulatorState state = null;
-		if (!dfa.isEmpty()) {
+		if (!dfaEmpty) {
 			state = getStartState(dfa, input, outerContext, useContext);
 		}
 

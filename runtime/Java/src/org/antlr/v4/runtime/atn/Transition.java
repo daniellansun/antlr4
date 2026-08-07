@@ -29,6 +29,12 @@ import java.util.Map;
  *  ATN transitions.</p>
  */
 public abstract class Transition {
+	/**
+	 * Shared empty array for {@link ATNState#freezeOptimizedTransitions()} when
+	 * a state has no optimized transitions. Avoids per-state empty allocations.
+	 */
+	static final Transition[] EMPTY_ARRAY = new Transition[0];
+
 	// constants for serialization
 	public static final int EPSILON			= 1;
 	public static final int RANGE			= 2;

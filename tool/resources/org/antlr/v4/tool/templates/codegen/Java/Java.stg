@@ -30,7 +30,6 @@ import org.antlr.v4.runtime.*;
 import org.antlr.v4.runtime.misc.*;
 import org.antlr.v4.runtime.tree.*;
 import java.util.List;
-import java.util.Iterator;
 import java.util.ArrayList;
 
 <parser>
@@ -245,6 +244,23 @@ public <if(parser.abstractRecognizer)>abstract <endif>class <parser.name> extend
 	@NotNull
 	protected FailedPredicateException createFailedPredicateException(@Nullable String predicate, @Nullable String message) {
 		return new FailedPredicateException(this, predicate, message);
+	}
+
+	/**
+	 * Hot-path helper used by generated rule methods. Prefer this over
+	 * fetching the interpreter via the public accessor so the field is loaded
+	 * once and the call site stays monomorphic for the JIT.
+	 * Named with a leading underscore to avoid colliding with a user rule
+	 * named {@code adaptivePredict}.
+	 *
+	 * \<p>Uses {@code _interp} directly (same storage as
+	 * {@link #getInterpreter()}/{@link #setInterpreter}). Callers that replace
+	 * the simulator must use {@code setInterpreter}; overriding only
+	 * {@code getInterpreter()} without updating the field is unsupported for
+	 * generated decision sites (and for much of the runtime already).\</p>
+	 */
+	private int _adaptivePredict(int decision) {
+		return _interp.adaptivePredict(_input, decision, _ctx);
 	}
 
 	<namedActions.members>
@@ -598,7 +614,7 @@ setState(<choice.stateNumber>);
 _errHandler.sync(this);
 <if(choice.label)><labelref(choice.label)> = _input.LT(1);<endif>
 <preamble; separator="\n">
-switch ( getInterpreter().adaptivePredict(_input,<choice.decision>,_ctx) ) {
+switch ( _adaptivePredict(<choice.decision>) ) {
 <alts:{alt |
 case <i>:
 	<alt>
@@ -609,7 +625,7 @@ case <i>:
 OptionalBlock(choice, alts, error) ::= <<
 setState(<choice.stateNumber>);
 _errHandler.sync(this);
-switch ( getInterpreter().adaptivePredict(_input,<choice.decision>,_ctx) ) {
+switch ( _adaptivePredict(<choice.decision>) ) {
 <alts:{alt |
 case <i><if(!choice.ast.greedy)>+1<endif>:
 	<alt>
@@ -620,7 +636,7 @@ case <i><if(!choice.ast.greedy)>+1<endif>:
 StarBlock(choice, alts, sync, iteration) ::= <<
 setState(<choice.stateNumber>);
 _errHandler.sync(this);
-_alt = getInterpreter().adaptivePredict(_input,<choice.decision>,_ctx);
+_alt = _adaptivePredict(<choice.decision>);
 while ( _alt!=<choice.exitAlt> && _alt!=org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER ) {
 	if ( _alt==1<if(!choice.ast.greedy)>+1<endif> ) {
 		<iteration>
@@ -628,7 +644,7 @@ while ( _alt!=<choice.exitAlt> && _alt!=org.antlr.v4.runtime.atn.ATN.INVALID_ALT
 	}
 	setState(<choice.loopBackStateNumber>);
 	_errHandler.sync(this);
-	_alt = getInterpreter().adaptivePredict(_input,<choice.decision>,_ctx);
+	_alt = _adaptivePredict(<choice.decision>);
 }
 >>
 
@@ -647,7 +663,7 @@ case <i><if(!choice.ast.greedy)>+1<endif>:
 	}
 	setState(<choice.loopBackStateNumber>); <! loopback/exit decision !>
 	_errHandler.sync(this);
-	_alt = getInterpreter().adaptivePredict(_input,<choice.decision>,_ctx);
+	_alt = _adaptivePredict(<choice.decision>);
 } while ( _alt!=<choice.exitAlt> && _alt!=org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER );
 >>
 
@@ -1031,8 +1047,10 @@ public static final String _serializedATN = Utils.join(
 public static final String _serializedATN =
 	"<model.serialized; wrap={"+<\n><\t>"}>";
 <endif>
+<! deserialize(String) uses a single mutable buffer (toCharArray only), avoiding
+   the historical toCharArray()+clone double copy on class init. !>
 public static final ATN _ATN =
-	new ATNDeserializer().deserialize(_serializedATN.toCharArray());
+	new ATNDeserializer().deserialize(_serializedATN);
 static {
 <!	org.antlr.v4.tool.DOTGenerator dot = new org.antlr.v4.tool.DOTGenerator(null);!>
 <!	System.out.println(dot.getDOT(_ATN.decisionToState.get(0), ruleNames, false));!>
