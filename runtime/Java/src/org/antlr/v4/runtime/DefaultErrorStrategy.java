@@ -98,11 +98,24 @@ public class DefaultErrorStrategy implements ANTLRErrorStrategy {
 	/**
 	 * {@inheritDoc}
 	 *
-	 * <p>The default implementation simply calls {@link #endErrorCondition}.</p>
+	 * <p>The default implementation calls {@link #endErrorCondition} only when
+	 * the strategy is currently in error recovery mode (i.e. leaving recovery
+	 * after a successful match). When not recovering, this method is a pure
+	 * no-op — it does <em>not</em> invoke {@code endErrorCondition} on every
+	 * successful match. That matters because every generated
+	 * {@link Parser#match} reaches this method on the hot path.</p>
+	 *
+	 * <p>Subclasses that previously overrode {@link #endErrorCondition} as a
+	 * general “match succeeded” hook should override {@code reportMatch}
+	 * instead (or call {@code super.reportMatch} then run their own logic).</p>
 	 */
 	@Override
 	public void reportMatch(Parser recognizer) {
-		endErrorCondition(recognizer);
+		// Fast path: not recovering → nothing to clear. Generated parsers call
+		// this on every successful token match.
+		if (errorRecoveryMode) {
+			endErrorCondition(recognizer);
+		}
 	}
 
 	/**
@@ -235,18 +248,24 @@ public class DefaultErrorStrategy implements ANTLRErrorStrategy {
 	 */
 	@Override
 	public void sync(Parser recognizer) throws RecognitionException {
-		ATNState s = recognizer.getInterpreter().atn.states.get(recognizer.getState());
-//		System.err.println("sync @ "+s.stateNumber+"="+s.getClass().getSimpleName());
-		// If already recovering, don't try to sync
+		// Early exit before any ATN / lookahead work. Generated parsers invoke
+		// sync before nearly every decision and loop iteration.
+		// Use the overridable inErrorRecoveryMode() so subclasses that redefine
+		// recovery state without only flipping the field still short-circuit.
 		if (inErrorRecoveryMode(recognizer)) {
 			return;
 		}
 
-        TokenStream tokens = recognizer.getInputStream();
-        int la = tokens.LA(1);
+		ATN atn = recognizer.getATN();
+		ATNState s = atn.states.get(recognizer.getState());
+//		System.err.println("sync @ "+s.stateNumber+"="+s.getClass().getSimpleName());
 
-        // try cheaper subset first; might get lucky. seems to shave a wee bit off
-		IntervalSet nextTokens = recognizer.getATN().nextTokens(s);
+		TokenStream tokens = recognizer.getInputStream();
+		int la = tokens.LA(1);
+
+		// try cheaper subset first; might get lucky. seems to shave a wee bit off
+		// Reuse the ATN reference from above (avoids a second getInterpreter/getATN).
+		IntervalSet nextTokens = atn.nextTokens(s);
 		if (nextTokens.contains(la)) {
 			// We are sure the token matches
 			nextTokensContext = null;

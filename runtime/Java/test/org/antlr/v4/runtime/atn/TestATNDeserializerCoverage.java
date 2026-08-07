@@ -314,6 +314,43 @@ public class TestATNDeserializerCoverage {
 		assertTrue(restored.ruleToStartState[0].isPrecedenceRule);
 	}
 
+	/**
+	 * {@link ATNDeserializer#deserialize(String)} must match the char[] path
+	 * and must not require callers to pre-clone (string path owns its buffer).
+	 */
+	@Test
+	public void stringDeserializeMatchesCharArrayPath() {
+		ATN atn = ATNTestHelpers.buildParserOptionalAthenB();
+		char[] data = serialize(atn, Collections.singletonList("s"));
+		// Preserve original for char[] path which clones internally
+		char[] dataCopy = data.clone();
+		String encoded = new String(data);
+
+		ATN fromChars = new ATNDeserializer().deserialize(dataCopy);
+		ATN fromString = new ATNDeserializer().deserialize(encoded);
+
+		assertEquals(fromChars.states.size(), fromString.states.size());
+		assertEquals(fromChars.getNumberOfDecisions(), fromString.getNumberOfDecisions());
+		assertEquals(fromChars.grammarType, fromString.grammarType);
+		assertEquals(fromChars.maxTokenType, fromString.maxTokenType);
+		// Original array must remain usable for a second char[] deserialize (clone semantics)
+		ATN fromCharsAgain = new ATNDeserializer().deserialize(data);
+		assertEquals(fromChars.states.size(), fromCharsAgain.states.size());
+	}
+
+	@Test
+	public void stringDeserializeRejectsBadVersionLikeCharArray() {
+		char[] data = new char[] { (char) 99 }; // wrong version
+		String encoded = new String(data);
+		try {
+			new ATNDeserializer().deserialize(encoded);
+			fail("expected UnsupportedOperationException for bad version");
+		}
+		catch (UnsupportedOperationException expected) {
+			assertNotNull(expected.getCause());
+		}
+	}
+
 	@Test
 	public void optimizeCollapsesSetsAndEpsilons() {
 		// multiple set-like alts for optimizeSets — decision uses only epsilons

@@ -311,3 +311,34 @@ any other `public`/`protected` signature of the optimized runtime.
 **Reason for exclusion:** Implementation complexity
 
 The optimized release uses an exact implementation for merging `PredictionContext` instances. In some cases, the reference release produces prediction context graphs which are not fully reduced (maximum sharing of nodes in the graph). The algorithm used by the optimized fork implements an exact merge for these contexts, so the `PredictionContext` instances appearing in the DFA cache are fully reduced.
+
+### Generated recognizer code quality (Java target / tool module)
+
+**Reason for exclusion:** Implementation complexity (target-specific)
+
+The Java code generator (`tool/.../templates/codegen/Java/Java.stg`) is tuned so
+that the *generated* lexer/parser sources themselves are leaner and cheaper on
+the hot path, without changing parse semantics.
+
+| Generated pattern | Before | After | Why |
+| --- | --- | --- | --- |
+| LL(\*) decisions | `getInterpreter().adaptivePredict(_input, d, _ctx)` | private `_adaptivePredict(d)` → `_interp.adaptivePredict(...)` | one monomorphic helper; no virtual `getInterpreter()` per decision |
+| Star/plus exit test | FQN `org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER` | unchanged (must stay FQN) | a token named `ATN` would shadow the type import |
+| ATN class init | `deserialize(_serializedATN.toCharArray())` | `deserialize(_serializedATN)` | single buffer (see below); no `toCharArray`+`clone` double copy |
+| Imports | `java.util.Iterator` always imported | omitted when unused | cleaner generated sources |
+
+Runtime counterparts used heavily by generated call sites:
+
+| Runtime site | Optimization |
+| --- | --- |
+| `ATNDeserializer.deserialize(String)` | owns one `toCharArray()` buffer; mutates in place (no defensive clone) |
+| `ATNDeserializer.deserialize(char[])` | still clones (caller may reuse the array) — source-compatible |
+| `DefaultErrorStrategy.reportMatch` | no-op when not in recovery (every successful `match`) |
+| `DefaultErrorStrategy.sync` | early exit while recovering; single `getATN()` for state + nextTokens |
+| `Parser.match` / `matchWildcard` / `consume` | direct `_input.LT(1)` / `_input.consume()` on the hot path |
+
+**Compatibility:** Generated parsers remain source- and binary-compatible at the
+public API level. The private `_adaptivePredict` helper is not part of the
+supported surface. HPPC types remain confined to package-private runtime
+internals (see the HPPC section above); nothing in the tool templates emits
+HPPC types into generated code.

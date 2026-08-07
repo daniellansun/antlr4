@@ -164,10 +164,46 @@ public class ATNDeserializer {
 		return SUPPORTED_UUIDS.indexOf(actualUuid) >= featureIndex;
 	}
 
+	/**
+	 * Deserializes an ATN from its serialized {@link String} form.
+	 *
+	 * <p>This path is preferred for generated recognizers: {@link String#toCharArray()}
+	 * produces a private buffer that is mutated in place for the historical
+	 * {@code +2} encoding shift, avoiding a second defensive {@code clone()} that
+	 * the {@link #deserialize(char[])} overload must perform for caller safety.</p>
+	 *
+	 * @param data the serialized ATN (tool-encoded string literal)
+	 * @return the reconstructed ATN
+	 */
+	@NotNull
+	public ATN deserialize(@NotNull String data) {
+		// Single allocation: toCharArray() is private to us and safe to mutate.
+		return deserializeMutating(data.toCharArray());
+	}
+
+	/**
+	 * Deserializes an ATN from a char array.
+	 *
+	 * <p>The input array is defensively cloned before the decoding shift is
+	 * applied so callers may reuse {@code data} afterward. Prefer
+	 * {@link #deserialize(String)} when the source is a string constant to
+	 * avoid the clone.</p>
+	 *
+	 * @param data the serialized ATN characters
+	 * @return the reconstructed ATN
+	 */
+	@NotNull
 	@SuppressWarnings("deprecation")
 	public ATN deserialize(@NotNull char[] data) {
-		data = data.clone();
+		return deserializeMutating(data.clone());
+	}
 
+	/**
+	 * Internal deserialize that mutates {@code data} in place (decoding shift).
+	 * Callers must pass a buffer they exclusively own.
+	 */
+	@SuppressWarnings("deprecation")
+	private ATN deserializeMutating(@NotNull char[] data) {
 		// Each char value in data is shifted by +2 at the entry to this method.
 		// This is an encoding optimization targeting the serialized values 0
 		// and -1 (serialized to 0xFFFF), each of which are very common in the

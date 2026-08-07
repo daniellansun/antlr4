@@ -30,6 +30,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertTrue;
 
 public class TestCodeGeneration extends BaseTest {
 	@Test public void testArgDecl() throws Exception { // should use template not string
@@ -61,6 +62,84 @@ public class TestCodeGeneration extends BaseTest {
 				"Token: 't1';";
 		List<String> evals = getEvalInfoForString(g, "() { return getTokens(");
 		assertNotEquals(0, evals.size());
+	}
+
+	/**
+	 * Generated parsers must emit the private {@code _adaptivePredict} helper
+	 * and call it from LL(*) decision sites instead of
+	 * {@code getInterpreter().adaptivePredict(...)}.
+	 */
+	@Test public void generatedParserUsesAdaptivePredictHelper() throws Exception {
+		// Non-LL(1) alternatives force LL(*) adaptivePredict codegen (not LA switch).
+		String g =
+			"grammar T;\n" +
+			"s : A B | A C ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n" +
+			"C : 'c' ;\n";
+		String source = generateParserSource(g, false);
+		assertTrue("missing _adaptivePredict helper",
+			source.contains("private int _adaptivePredict(int decision)"));
+		assertTrue("helper must bind _interp.adaptivePredict",
+			source.contains("_interp.adaptivePredict(_input, decision, _ctx)"));
+		assertTrue("decision sites must call _adaptivePredict",
+			source.contains("switch ( _adaptivePredict(") || source.contains("= _adaptivePredict("));
+		// Decision sites only (ignore any residual comment/doc text).
+		assertFalse("must not call getInterpreter().adaptivePredict at decision sites",
+			source.contains("getInterpreter().adaptivePredict(_input,"));
+	}
+
+	@Test public void generatedStarLoopUsesFullyQualifiedInvalidAltConstant() throws Exception {
+		// force_atn disables LL(1) specialization so StarBlock/PlusBlock templates
+		// emit adaptivePredict loops that compare against INVALID_ALT_NUMBER.
+		// The constant MUST be fully qualified: a grammar may define a token
+		// named ATN (see testReferenceToATN), which would shadow the type import.
+		String g =
+			"grammar T;\n" +
+			"s : A* B ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n";
+		String source = generateParserSource(g, true);
+		assertTrue(source.contains("_adaptivePredict("));
+		assertTrue("INVALID_ALT_NUMBER must be FQN to avoid token-name shadowing",
+			source.contains("org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER"));
+	}
+
+	/**
+	 * Class-init of generated recognizers must use
+	 * {@link org.antlr.v4.runtime.atn.ATNDeserializer#deserialize(String)} to
+	 * avoid the historical {@code toCharArray()+clone} double copy.
+	 */
+	@Test public void generatedRecognizerDeserializesAtnFromString() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : 'a' ;\n";
+		String source = generateParserSource(g, false);
+		assertTrue(source.contains("new ATNDeserializer().deserialize(_serializedATN)"));
+		assertFalse(source.contains("deserialize(_serializedATN.toCharArray())"));
+		assertFalse("unused Iterator import should be omitted",
+			source.contains("import java.util.Iterator;"));
+	}
+
+	/** Render the full generated parser source for structural assertions. */
+	private String generateParserSource(String grammarString, boolean forceAtn) throws RecognitionException {
+		Grammar g = new Grammar(grammarString);
+		if (g.ast == null || g.ast.hasErrors) {
+			throw new IllegalStateException("grammar has errors");
+		}
+		g.tool.force_atn = forceAtn;
+		SemanticPipeline sem = new SemanticPipeline(g);
+		sem.process();
+		ATNFactory factory = new ParserATNFactory(g);
+		if (g.isLexer()) {
+			factory = new LexerATNFactory((LexerGrammar) g);
+		}
+		g.atn = factory.createATN();
+		// LL(1) analysis populates decisionLOOK used by the code generator.
+		new org.antlr.v4.analysis.AnalysisPipeline(g).process();
+		CodeGenerator gen = new CodeGenerator(g);
+		ST outputFileST = gen.generateParser();
+		return outputFileST.render();
 	}
 
 	/** Add tags around each attribute/template/value write */
