@@ -407,11 +407,16 @@ public class ParserATNSimulator extends ATNSimulator {
 	{
 		DFA dfa = atn.decisionToDFA[decision];
 		assert dfa != null;
-		// PERF: Answer emptiness once. Precedence DFAs (left-recursive
-		// expression rules) used to pay two TreeMap materializations per call
-		// via getEdgeMap().isEmpty(); isEmpty is now O(1) edge occupancy.
-		final boolean dfaEmpty = dfa.isEmpty();
-		if (optimize_ll1 && !dfa.isPrecedenceDfa() && !dfaEmpty) {
+
+		// PERF: For non-precedence DFAs, answer emptiness with two atomic loads
+		// (s0 / s0full) instead of isEmpty()+isPrecedenceDfa() double dispatch.
+		// Precedence DFAs still use isEmpty() (edge occupancy on synthetic s0).
+		final boolean precedence = dfa.isPrecedenceDfa();
+		final boolean dfaEmpty = precedence
+			? dfa.isEmpty()
+			: (dfa.s0.get() == null && dfa.s0full.get() == null);
+
+		if (optimize_ll1 && !precedence && !dfaEmpty) {
 			int ll1Alt = tryLL1Prediction(input, decision);
 			if (ll1Alt != ATN.INVALID_ALT_NUMBER) {
 				return ll1Alt;
@@ -434,6 +439,8 @@ public class ParserATNSimulator extends ATNSimulator {
 
 		SimulatorState state = null;
 		if (!dfaEmpty) {
+			// Always go through getStartState so subclasses (e.g. ProfilingATNSimulator)
+			// can observe the start snapshot. getStartState itself does a single s0 load.
 			state = getStartState(dfa, input, outerContext, useContext);
 		}
 
@@ -491,11 +498,13 @@ public class ParserATNSimulator extends ATNSimulator {
 				return new SimulatorState(outerContext, state, false, outerContext);
 			}
 			else {
-				if (dfa.s0.get() == null) {
+				// PERF: Single atomic load — s0 is stable for the warm DFA path.
+				DFAState s0State = dfa.s0.get();
+				if (s0State == null) {
 					return null;
 				}
 
-				return new SimulatorState(outerContext, dfa.s0.get(), false, outerContext);
+				return new SimulatorState(outerContext, s0State, false, outerContext);
 			}
 		}
 

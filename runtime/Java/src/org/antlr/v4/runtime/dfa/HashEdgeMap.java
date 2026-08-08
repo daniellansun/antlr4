@@ -126,15 +126,19 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 		// Hot path: DFA edge walk during adaptivePredict / lexer match.
 		// Do not gate on size.get() — that is an extra atomic read on every
 		// warm edge lookup; empty maps already miss via values[bucket] == null.
-		int bucket = bucket(key);
-
-		// Read the value first
-		T value = values[bucket];
-		if (value == null || keys.get(bucket) != key) {
+		//
+		// PERF: Localize the values array and inline the power-of-two mask so
+		// the common miss (null slot) pays only a plain array load. Key check
+		// (AtomicIntegerArray) runs only after a non-null value is observed.
+		// Write order is key-then-value under the put monitor; readers observe
+		// value first so a non-null value implies a committed key.
+		final T[] vals = values;
+		final int bucket = key & (vals.length - 1);
+		final T value = vals[bucket];
+		if (value == null) {
 			return null;
 		}
-
-		return value;
+		return keys.get(bucket) == key ? value : null;
 	}
 
 	@Override
@@ -151,16 +155,10 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 			int bucket = bucket(key);
 			int currentKey = keys.get(bucket);
 			if (currentKey == key) {
-				// Same key: replace value; occupancy unchanged if slot was occupied.
-				// keys are only written when inserting into an empty slot, so a
-				// matching key implies a live entry (size > 0).
-				if (values[bucket] == null) {
-					values[bucket] = value;
-					size.incrementAndGet();
-				}
-				else {
-					values[bucket] = value;
-				}
+				// Same key: replace value only. Keys are written only when a
+				// slot is first occupied, so a matching key is always live —
+				// occupancy is unchanged (no size update).
+				values[bucket] = value;
 				return this;
 			}
 

@@ -381,14 +381,30 @@ public class IntervalSet implements IntSet {
     /** {@inheritDoc} */
     @Override
     public boolean contains(int el) {
-		int n = intervals.size();
+		final List<Interval> ivals = intervals;
+		final int n = ivals.size();
 		// PERF: FIRST/FOLLOW sets used by DefaultErrorStrategy.sync and
-		// nextTokens commonly hold 1–2 intervals. Linear scan avoids the
-		// binary-search loop overhead and ArrayList.get mid-index traffic
-		// for those tiny sets while remaining O(n) correct for larger ones.
+		// nextTokens commonly hold 1–2 intervals. Specialize n==1 / n==2
+		// (dominant in generated sync() probes) then fall through to a short
+		// linear scan for n<=4; binary search only for larger sets.
+		if (n == 1) {
+			Interval I = ivals.get(0);
+			return el >= I.a && el <= I.b;
+		}
+		if (n == 2) {
+			Interval I0 = ivals.get(0);
+			if (el < I0.a) {
+				return false;
+			}
+			if (el <= I0.b) {
+				return true;
+			}
+			Interval I1 = ivals.get(1);
+			return el >= I1.a && el <= I1.b;
+		}
 		if (n <= 4) {
 			for (int i = 0; i < n; i++) {
-				Interval I = intervals.get(i);
+				Interval I = ivals.get(i);
 				if (el < I.a) {
 					return false; // sorted disjoint intervals
 				}
@@ -404,7 +420,7 @@ public class IntervalSet implements IntSet {
 		// disjoint) array of intervals.
 		while (l <= r) {
 			int m = (l + r) / 2;
-			Interval I = intervals.get(m);
+			Interval I = ivals.get(m);
 			int a = I.a;
 			int b = I.b;
 			if ( b<el ) {

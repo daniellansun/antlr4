@@ -194,11 +194,16 @@ public class DFAState {
 		return acceptStateInfo.getLexerActionExecutor();
 	}
 
-	public DFAState getTarget(int symbol) {
+	/**
+	 * PERF: {@code final} so warm {@code execDFA} edge walks can monomorphically
+	 * inline through to {@link AbstractEdgeMap#get} (Hash/Array) without a
+	 * virtual call at this layer.
+	 */
+	public final DFAState getTarget(int symbol) {
 		return edges.get(symbol);
 	}
 
-	public void setTarget(int symbol, DFAState target) {
+	public final void setTarget(int symbol, DFAState target) {
 		edges = edges.put(symbol, target);
 	}
 

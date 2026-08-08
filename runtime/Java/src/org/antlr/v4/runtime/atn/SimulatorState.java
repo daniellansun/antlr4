@@ -9,6 +9,8 @@ import org.antlr.v4.runtime.dfa.DFAState;
 import org.antlr.v4.runtime.misc.NotNull;
 
 /**
+ * Snapshot of DFA simulation position for {@link ParserATNSimulator#execDFA}
+ * / {@link ParserATNSimulator#execATN}.
  *
  * @author Sam Harwell
  */

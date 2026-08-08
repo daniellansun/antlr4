@@ -51,4 +51,20 @@ public class TestATNStateFreeze {
 		state.freezeOptimizedTransitions();
 		assertEquals(0, state.getNumberOfOptimizedTransitions());
 	}
+
+	/**
+	 * Hand-built ATNs without freeze still answer optimized transitions via the
+	 * list path (construction / tests). Production freezes at deserialize.
+	 */
+	@Test
+	public void unfrozenStateUsesListPathUntilExplicitFreeze() {
+		BasicState state = new BasicState();
+		BasicState t1 = new BasicState();
+		t1.stateNumber = 1;
+		state.addTransition(new AtomTransition(t1, 42));
+		assertSame(t1, state.getOptimizedTransition(0).target);
+		assertEquals(1, state.getNumberOfOptimizedTransitions());
+		state.freezeOptimizedTransitions();
+		assertSame(t1, state.getOptimizedTransition(0).target);
+	}
 }

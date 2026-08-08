@@ -113,6 +113,30 @@ public class TestBufferedTokenStream {
 		assertEquals("a", tokens.LT(1).getText());
 	}
 
+	/**
+	 * LA(1) and LT(1) share a single cache resolution path; consume/seek keep
+	 * the cache coherent with the cursor.
+	 */
+	@Test
+	public void lt1CacheCoherentAcrossLaLtConsumeAndSeek() {
+		BufferedTokenStream tokens = stream(tok(1, "a"), tok(2, "b"), tok(3, "c"));
+		tokens.fill();
+		Token lt1 = tokens.LT(1);
+		assertSame("LA(1) must reuse LT(1) cache identity", lt1, tokens.LT(1));
+		assertEquals(1, tokens.LA(1));
+		assertEquals(lt1.getType(), tokens.LA(1));
+
+		tokens.consume();
+		assertEquals("b", tokens.LT(1).getText());
+		assertEquals(2, tokens.LA(1));
+
+		tokens.seek(2);
+		assertEquals("c", tokens.LT(1).getText());
+		assertEquals(3, tokens.LA(1));
+		// k!=1 still works after seek clears/refills cache on next LT(1)
+		assertEquals("b", tokens.LT(-1).getText());
+	}
+
 	@Test
 	public void markAndReleaseAreNoOps() {
 		BufferedTokenStream tokens = stream(tok(1, "a"));

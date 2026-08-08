@@ -277,9 +277,12 @@ Mitigation:
 
 After ATN deserialization and optimization, each `ATNState` freezes its
 optimized transition list into a `Transition[]`. Epsilon closure and reach
-then walk the array (`getOptimizedTransition` / `getNumberOfOptimizedTransitions`)
-instead of `ArrayList.get` / `size` on every edge. Mutations of optimized
-transitions (test-only after freeze) invalidate the snapshot automatically.
+prefer the array (`getOptimizedTransition` /
+`getNumberOfOptimizedTransitions`) so the common case is a null-check plus
+array load — matching the shape the JIT expects on production ATNs.
+Unfrozen construction/test graphs still fall back to the `ArrayList` until
+`freezeOptimizedTransitions()` is called. Mutations of optimized transitions
+invalidate the snapshot automatically.
 
 #### Token buffer capacity pre-size + LA(1) fast path
 
@@ -296,6 +299,13 @@ to `tokens.get(p)` after the cursor is initialized (p already on-channel).
 `BufferedTokenStream` retains a private `cachedLT1` reference, refreshed on
 `consume` and cleared on `seek` / `setTokenSource`, so `Parser.enterRule` /
 `match` do not re-index the token list on every call.
+
+**Design note (post-review):** experiments that extracted a private helper used on
+the *warm hit* path (`return lt1().getType()`) added a call boundary that the
+JIT did not always remove, and showed multi-scenario regressions in A/B
+harness runs. The production hit path remains **fully inlined** (field load +
+`getType`); maintainability cleanups that touch this path must preserve that
+shape.
 
 #### API note (subclasses)
 

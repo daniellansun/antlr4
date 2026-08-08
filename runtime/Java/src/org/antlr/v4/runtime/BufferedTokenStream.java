@@ -412,6 +412,25 @@ public class BufferedTokenStream implements TokenStream {
 	 * EOF.
 	 */
 	protected int nextTokenOnChannel(int i, int channel) {
+		// PERF: When the cursor is already inside the filled buffer (common on
+		// warm LT(k>1) and adjustSeekIndex), avoid a sync call per step.
+		if (i < tokens.size()) {
+			Token token = tokens.get(i);
+			while (token.getChannel() != channel) {
+				if (token.getType() == Token.EOF) {
+					return i;
+				}
+				i++;
+				if (i >= tokens.size()) {
+					if (!sync(i)) {
+						return tokens.size() - 1;
+					}
+				}
+				token = tokens.get(i);
+			}
+			return i;
+		}
+
 		sync(i);
 		if (i >= size()) {
 			return size() - 1;
@@ -442,10 +461,18 @@ public class BufferedTokenStream implements TokenStream {
 	 * as though it were on every channel.</p>
 	 */
 	protected int previousTokenOnChannel(int i, int channel) {
-		sync(i);
-		if (i >= size()) {
-			// the EOF token is on every channel
-			return size() - 1;
+		// PERF: CommonTokenStream.LB walks backward over already-fetched tokens.
+		// Skip sync when i is already inside the buffer (sync would be a no-op
+		// arithmetic check, but still a call + field loads on every step).
+		if (i < 0) {
+			return -1;
+		}
+		if (i >= tokens.size()) {
+			sync(i);
+			if (i >= size()) {
+				// the EOF token is on every channel
+				return size() - 1;
+			}
 		}
 
 		while (i >= 0) {
