@@ -122,14 +122,17 @@ run_harness() {
   local name="$1"
   local label="$2"
   local dir="${WORK_ROOT}/${name}"
+  local repo="${WORK_ROOT}/m2-${name}"
   local out_tsv="${RESULTS_DIR}/${label}-${STAMP}.tsv"
   local out_log="${RESULTS_DIR}/${label}-${STAMP}.log"
 
-  echo "==> Building ${name}"
+  echo "==> Building ${name} (repo.local=${repo})"
   (
     cd "${dir}"
-    # Install reactor artifacts needed by perf-testsuite.
-    mvn ${MVN_OPTS} -pl runtime/JavaAnnotations,runtime/Java,tool,antlr4-maven-plugin,perf-testsuite -am install
+    # Isolated local repo: both commits share version 4.13.2.14 and must
+    # not clobber each other's snapshots.
+    mvn ${MVN_OPTS} -Dmaven.repo.local="${repo}" \
+      -pl runtime/JavaAnnotations,runtime/Java,tool,antlr4-maven-plugin,perf-testsuite -am install
   )
 
   echo "==> Running ComparativeParseHarness (${label})"
@@ -137,6 +140,7 @@ run_harness() {
     cd "${dir}"
     # --synthetic true: identical corpus on both commits (runtime sources differ).
     mvn -pl perf-testsuite -q exec:java \
+      -Dmaven.repo.local="${repo}" \
       -Dexec.classpathScope=compile \
       -Dexec.mainClass=org.antlr.v4.test.runtime.java.api.perf.jmh.ComparativeParseHarness \
       -Dexec.args="--label ${label} --files ${FILES} --warmup ${WARMUP} --iters ${ITERS} --threads ${THREADS} --synthetic true --methods 12 --singleMethods 40" \

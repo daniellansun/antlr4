@@ -63,14 +63,24 @@ public final class GroovyParseHarness {
 			ParseWorkload.PredictionStrategy.TWO_STAGE, false, warmup, iters));
 		rows.add(runParse("groovy_parse_single_ll_warm", single,
 			ParseWorkload.PredictionStrategy.LL, false, warmup, iters));
+		rows.add(runParse("groovy_parse_single_sll_warm", single,
+			ParseWorkload.PredictionStrategy.SLL, false, warmup, iters));
+		rows.add(runParse("groovy_parse_single_profiling_warm", single,
+			ParseWorkload.PredictionStrategy.PROFILING, false, warmup, iters));
 		rows.add(runBatch("groovy_batch_serial_two_stage_warm", corpus,
 			ParseWorkload.PredictionStrategy.TWO_STAGE, false, 1, warmup, iters));
 		rows.add(runBatch("groovy_batch_serial_ll_warm", corpus,
 			ParseWorkload.PredictionStrategy.LL, false, 1, warmup, iters));
+		rows.add(runBatch("groovy_batch_serial_sll_warm", corpus,
+			ParseWorkload.PredictionStrategy.SLL, false, 1, warmup, iters));
+		rows.add(runBatch("groovy_batch_serial_profiling_warm", corpus,
+			ParseWorkload.PredictionStrategy.PROFILING, false, 1, warmup, iters));
 		rows.add(runBatch("groovy_batch_parallel_two_stage_warm", corpus,
 			ParseWorkload.PredictionStrategy.TWO_STAGE, false, threads, warmup, iters));
 		rows.add(runBatch("groovy_batch_parallel_ll_warm", corpus,
 			ParseWorkload.PredictionStrategy.LL, false, threads, warmup, iters));
+		rows.add(runBatch("groovy_batch_parallel_sll_warm", corpus,
+			ParseWorkload.PredictionStrategy.SLL, false, threads, warmup, iters));
 		rows.add(runBatch("groovy_batch_parallel_two_stage_cold_build", corpus,
 			ParseWorkload.PredictionStrategy.TWO_STAGE, true, threads, warmup, iters));
 

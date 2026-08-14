@@ -53,7 +53,14 @@ public final class ParseWorkload {
 		/** Single-stage LL. */
 		LL,
 		/** Two-stage: SLL+Bail, retry full LL on cancellation (production default). */
-		TWO_STAGE
+		TWO_STAGE,
+		/**
+		 * Warm SLL through {@link org.antlr.v4.runtime.atn.ProfilingATNSimulator}
+		 * ({@link Parser#setProfile(boolean)}). Forces {@code getStartState} on
+		 * every decision so A/B can measure the snapshot path independently of
+		 * the production inlined-{@code s0} walk.
+		 */
+		PROFILING
 	}
 
 	/**
@@ -151,6 +158,19 @@ public final class ParseWorkload {
 	}
 
 	/**
+	 * Rebind {@code lexer} to {@code text} and fill a token stream. Exercises
+	 * {@link Lexer#setInputStream} / {@link Lexer#reset} without allocating a
+	 * new lexer class (IDE / REPL / batch reuse).
+	 */
+	public static int lexReuse(Lexer lexer, String text) {
+		lexer.setInputStream(CharStreams.fromString(text));
+		lexer.removeErrorListeners();
+		CommonTokenStream tokens = new CommonTokenStream(lexer);
+		tokens.fill();
+		return tokens.size();
+	}
+
+	/**
 	 * @return token count; never throws for ordinary syntax issues when using
 	 *         {@link PredictionStrategy#LL} or {@link PredictionStrategy#TWO_STAGE}
 	 *         (error recovery / two-stage retry). {@link PredictionStrategy#SLL}
@@ -198,6 +218,12 @@ public final class ParseWorkload {
 					parser.setBuildParseTree(buildTree);
 					parser.compilationUnit();
 				}
+				break;
+			case PROFILING:
+				parser.setProfile(true);
+				parser.getInterpreter().setPredictionMode(PredictionMode.SLL);
+				parser.setErrorHandler(new DefaultErrorStrategy());
+				parser.compilationUnit();
 				break;
 			default:
 				throw new IllegalArgumentException(String.valueOf(strategy));
@@ -247,6 +273,12 @@ public final class ParseWorkload {
 					parser.setBuildParseTree(buildTree);
 					frontEnd.parseStartRule(parser);
 				}
+				break;
+			case PROFILING:
+				parser.setProfile(true);
+				parser.getInterpreter().setPredictionMode(PredictionMode.SLL);
+				parser.setErrorHandler(new DefaultErrorStrategy());
+				frontEnd.parseStartRule(parser);
 				break;
 			default:
 				throw new IllegalArgumentException(String.valueOf(strategy));
