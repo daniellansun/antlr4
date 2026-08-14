@@ -247,14 +247,11 @@ final class ConcurrentIntIntMap {
 		}
 		final int[] entries = new int[n << 1];
 		final int[] cursor = new int[1];
-		snapshot.forEach(new IntIntProcedure() {
-			@Override
-			public void apply(int key, int value) {
-				int i = cursor[0];
-				entries[i] = key;
-				entries[i + 1] = value;
-				cursor[0] = i + 2;
-			}
+		snapshot.forEach((IntIntProcedure) (key, value) -> {
+			int i = cursor[0];
+			entries[i] = key;
+			entries[i + 1] = value;
+			cursor[0] = i + 2;
 		});
 		return entries;
 	}
@@ -270,15 +267,12 @@ final class ConcurrentIntIntMap {
 		IntIntHashMap snapshot = map;
 		final boolean[] found = new boolean[1];
 		// Predicate forEach stops early when apply returns false.
-		snapshot.forEach(new IntIntPredicate() {
-			@Override
-			public boolean apply(int key, int v) {
-				if (v == value) {
-					found[0] = true;
-					return false;
-				}
-				return true;
+		snapshot.forEach((IntIntPredicate) (key, v) -> {
+			if (v == value) {
+				found[0] = true;
+				return false;
 			}
+			return true;
 		});
 		return found[0];
 	}
