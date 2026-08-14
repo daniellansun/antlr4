@@ -38,6 +38,31 @@ public class TestBufferedTokenStream {
 	}
 
 	@Test
+	public void seekToCurrentIndexPreservesCachedLt1() {
+		BufferedTokenStream tokens = stream(tok(1, "x"), tok(2, "y"));
+		Token first = tokens.LT(1);
+		assertSame(first, tokens.cachedLT1());
+		int idx = tokens.index();
+		tokens.seek(idx);
+		assertSame("no-consume rewind must keep the LT(1) cache", first, tokens.cachedLT1());
+		assertSame(first, tokens.LT(1));
+		assertEquals(idx, tokens.index());
+	}
+
+	@Test
+	public void seekToDifferentIndexClearsCachedLt1() {
+		BufferedTokenStream tokens = stream(tok(1, "x"), tok(2, "y"));
+		tokens.fill();
+		Token first = tokens.LT(1);
+		assertSame(first, tokens.cachedLT1());
+		tokens.seek(1);
+		assertEquals(2, tokens.LA(1));
+		Token second = tokens.LT(1);
+		assertEquals("y", second.getText());
+		assertSame(second, tokens.cachedLT1());
+	}
+
+	@Test
 	public void ltAndLaAndConsume() {
 		BufferedTokenStream tokens = stream(tok(1, "x"), tok(2, "="), tok(3, "1"));
 		assertEquals("x", tokens.LT(1).getText());

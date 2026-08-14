@@ -359,6 +359,13 @@ public class ParserATNSimulator extends ATNSimulator {
 		this(null, atn);
 	}
 
+	/**
+	 * Recycled start snapshot for {@link #getStartState}. One allocation per
+	 * simulator; subsequent predictions overwrite it. {@link #computeStartState}
+	 * still returns a fresh instance (cold / full-context).
+	 */
+	private SimulatorState startScratch;
+
 	public ParserATNSimulator(@Nullable Parser parser, @NotNull ATN atn) {
 		super(atn);
 		this.parser = parser;
@@ -438,30 +445,39 @@ public class ParserATNSimulator extends ATNSimulator {
 		}
 
 		SimulatorState state = null;
+		DFAState warmS0 = null;
 		if (!dfaEmpty) {
-			// Always go through getStartState so subclasses (e.g. ProfilingATNSimulator)
-			// can observe the start snapshot. getStartState itself does a single s0 load.
-			state = getStartState(dfa, input, outerContext, useContext);
+			// Warm local-context (SLL) start: one atomic s0 load, then the
+			// private execDFA body with locals (no SimulatorState). Subclasses
+			// that observe getStartState opt in via snapshotStartState().
+			if (!useContext && !snapshotStartState()) {
+				warmS0 = precedence
+					? (parser != null ? dfa.getPrecedenceStartState(parser.getPrecedence(), false) : null)
+					: dfa.s0.get();
+			}
+			else {
+				state = getStartState(dfa, input, outerContext, useContext);
+			}
 		}
 
-		if (state == null) {
-//			if (outerContext == null) outerContext = ParserRuleContext.emptyContext();
-			/*if ( debug ) System.out.println("ATN decision "+dfa.decision+
-											" exec LA(1)=="+ getLookaheadName(input) +
-											", outerContext="+outerContext.toString(parser));*/
-
+		if (warmS0 == null && state == null) {
 			state = computeStartState(dfa, outerContext, useContext);
 		}
 
-		final int m = input.mark(), index = input.index();
+		final int m = input.mark();
+		final int index = input.index();
 		try {
-			int alt = execDFA(dfa, input, index, state);
-			/*if ( debug ) System.out.println("DFA after predictATN: "+dfa.toString(parser.getVocabulary(), parser.getRuleNames()));*/
-			return alt;
+			return warmS0 != null
+				? execDFA(dfa, input, index, outerContext, warmS0, useContext, outerContext)
+				: execDFA(dfa, input, index, state);
 		}
 		finally {
 			this.dfa = null;
-			input.seek(index);
+			// BufferedTokenStream.seek is already a no-op at the current index;
+			// skip the call when prediction did not consume (common SLL accept).
+			if (input.index() != index) {
+				input.seek(index);
+			}
 			input.release(m);
 		}
 	}
@@ -495,7 +511,7 @@ public class ParserATNSimulator extends ATNSimulator {
 					return null;
 				}
 
-				return new SimulatorState(outerContext, state, false, outerContext);
+				return recycleStart(outerContext, state, false, outerContext);
 			}
 			else {
 				// PERF: Single atomic load — s0 is stable for the warm DFA path.
@@ -504,7 +520,7 @@ public class ParserATNSimulator extends ATNSimulator {
 					return null;
 				}
 
-				return new SimulatorState(outerContext, s0State, false, outerContext);
+				return recycleStart(outerContext, s0State, false, outerContext);
 			}
 		}
 
@@ -537,26 +553,58 @@ public class ParserATNSimulator extends ATNSimulator {
 			return null;
 		}
 
-		return new SimulatorState(outerContext, s0, useContext, remainingContext);
+		return recycleStart(outerContext, s0, useContext, remainingContext);
+	}
+
+	/**
+	 * Whether {@link #adaptivePredict} must obtain the start snapshot through
+	 * {@link #getStartState} so a subclass can observe it. Production returns
+	 * {@code false} and inlines the warm SLL DFA start.
+	 */
+	protected boolean snapshotStartState() {
+		return false;
+	}
+
+	private SimulatorState recycleStart(ParserRuleContext outerContext, @NotNull DFAState s0,
+										boolean useContext, ParserRuleContext remaining) {
+		if (startScratch == null) {
+			startScratch = new SimulatorState(outerContext, s0, useContext, remaining);
+			return startScratch;
+		}
+		startScratch.assign(outerContext, s0, useContext, remaining);
+		return startScratch;
 	}
 
 	protected int execDFA(@NotNull DFA dfa,
 					   @NotNull TokenStream input, int startIndex,
 					   @NotNull SimulatorState state)
     {
-		ParserRuleContext outerContext = state.outerContext;
+		return execDFA(dfa, input, startIndex,
+			state.outerContext, state.s0, state.useContext, state.remainingOuterContext);
+	}
+
+	/**
+	 * DFA walk. Private so the warm SLL path can pass locals without a
+	 * {@link SimulatorState} allocation; the protected overload unpacks one.
+	 */
+	private int execDFA(@NotNull DFA dfa,
+						@NotNull TokenStream input, int startIndex,
+						@NotNull ParserRuleContext outerContext,
+						@NotNull DFAState s0,
+						boolean useContext,
+						ParserRuleContext remainingOuterContext)
+    {
 		if ( dfa_debug ) System.out.println("DFA decision "+dfa.decision+
 											" exec LA(1)=="+ getLookaheadName(input) +
 											", outerContext="+outerContext.toString(parser));
 		if ( dfa_debug ) System.out.print(dfa.toString(parser.getVocabulary(), parser.getRuleNames()));
-		DFAState s = state.s0;
+		DFAState s = s0;
 
 		int t = input.LA(1);
-		ParserRuleContext remainingOuterContext = state.remainingOuterContext;
 
 		while ( true ) {
 			if ( dfa_debug ) System.out.println("DFA state "+s.stateNumber+" LA(1)=="+getLookaheadName(input));
-			if ( state.useContext ) {
+			if ( useContext ) {
 				while ( s.isContextSymbol(t) ) {
 					DFAState next = null;
 					if (remainingOuterContext != null) {
@@ -566,7 +614,7 @@ public class ParserATNSimulator extends ATNSimulator {
 
 					if ( next == null ) {
 						// fail over to ATN
-						SimulatorState initialState = new SimulatorState(state.outerContext, s, state.useContext, remainingOuterContext);
+						SimulatorState initialState = new SimulatorState(outerContext, s, useContext, remainingOuterContext);
 						return execATN(dfa, input, startIndex, initialState);
 					}
 
@@ -576,7 +624,7 @@ public class ParserATNSimulator extends ATNSimulator {
 				}
 			}
 
-			if ( isAcceptState(s, state.useContext) ) {
+			if ( isAcceptState(s, useContext) ) {
 				if ( s.predicates!=null ) {
 					if ( dfa_debug ) System.out.println("accept "+s);
 				}
@@ -592,7 +640,7 @@ public class ParserATNSimulator extends ATNSimulator {
 			}
 
 			// t is not updated if one of these states is reached
-			assert !isAcceptState(s, state.useContext);
+			assert !isAcceptState(s, useContext);
 
 			// if no edge, pop over to ATN interpreter, update DFA and return
 			DFAState target = getExistingTargetState(s, t);
@@ -606,7 +654,7 @@ public class ParserATNSimulator extends ATNSimulator {
 									   " at DFA state "+s.stateNumber);
 				}
 
-				SimulatorState initialState = new SimulatorState(outerContext, s, state.useContext, remainingOuterContext);
+				SimulatorState initialState = new SimulatorState(outerContext, s, useContext, remainingOuterContext);
 				alt = execATN(dfa, input, startIndex, initialState);
 				if ( dfa_debug ) {
 					System.out.println("back from DFA update, alt="+alt+", dfa=\n"+dfa.toString(parser.getVocabulary(), parser.getRuleNames()));
@@ -618,11 +666,11 @@ public class ParserATNSimulator extends ATNSimulator {
 				return alt; // we've updated DFA, exec'd action, and have our deepest answer
 			}
 			else if ( target == ERROR ) {
-				SimulatorState errorState = new SimulatorState(outerContext, s, state.useContext, remainingOuterContext);
+				SimulatorState errorState = new SimulatorState(outerContext, s, useContext, remainingOuterContext);
 				return handleNoViableAlt(input, startIndex, errorState);
 			}
 			s = target;
-			if (!isAcceptState(s, state.useContext) && t != IntStream.EOF) {
+			if (!isAcceptState(s, useContext) && t != IntStream.EOF) {
 				input.consume();
 				t = input.LA(1);
 			}
@@ -632,7 +680,7 @@ public class ParserATNSimulator extends ATNSimulator {
 //			return -1;
 //		}
 
-		if ( !state.useContext && s.configs.getConflictInfo()!=null ) {
+		if ( !useContext && s.configs.getConflictInfo()!=null ) {
 			if ( dfa.atnStartState instanceof DecisionState ) {
 				if (!userWantsCtxSensitive ||
 					(!s.configs.getDipsIntoOuterContext() && s.configs.isExactConflict()) ||
@@ -644,7 +692,7 @@ public class ParserATNSimulator extends ATNSimulator {
 					//}
 				}
 				else {
-					assert !state.useContext;
+					assert !useContext;
 
 					// Before attempting full context prediction, check to see if there are
 					// disambiguating or validating predicates to evaluate which allow an
@@ -670,7 +718,7 @@ public class ParserATNSimulator extends ATNSimulator {
 					}
 
 					if (reportAmbiguities) {
-						SimulatorState conflictState = new SimulatorState(outerContext, s, state.useContext, remainingOuterContext);
+						SimulatorState conflictState = new SimulatorState(outerContext, s, useContext, remainingOuterContext);
 						reportAttemptingFullContext(dfa, conflictingAlts, conflictState, startIndex, input.index());
 					}
 

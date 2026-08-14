@@ -94,6 +94,22 @@ public interface ANTLRErrorStrategy {
 		throws RecognitionException;
 
 	/**
+	 * Whether generated parsers must invoke {@link #sync} at decision and
+	 * loop sites. {@code false} means {@link #sync} is a documented no-op and
+	 * the generated {@code _sync()} helper may skip the virtual call.
+	 *
+	 * <p>The default is {@code true}. Strategies whose {@link #sync} is empty
+	 * (notably {@link BailErrorStrategy}) return {@code false}. A subclass
+	 * that overrides {@link #sync} to do work must also return {@code true}
+	 * here.</p>
+	 *
+	 * @since 4.13.2.14
+	 */
+	default boolean isSyncRequired() {
+		return true;
+	}
+
+	/**
 	 * Tests whether or not {@code recognizer} is in the process of recovering
 	 * from an error. In error recovery mode, {@link Parser#consume} adds
 	 * symbols to the parse tree by calling

@@ -333,6 +333,9 @@ the hot path, without changing parse semantics.
 | Generated pattern | Before | After | Why |
 | --- | --- | --- | --- |
 | LL(\*) decisions | `getInterpreter().adaptivePredict(_input, d, _ctx)` | private `_adaptivePredict(d)` → `_interp.adaptivePredict(...)` | one monomorphic helper; no virtual `getInterpreter()` per decision |
+| Decision / loop resync | `_errHandler.sync(this)` at every site | private `_sync()` → `if (errorSyncEnabled()) _errHandler.sync(this)` | two-stage SLL skips the virtual call; flag is cached from `ANTLRErrorStrategy.isSyncRequired()` (not a `getClass()` test) |
+| Rule context ctor | `new XContext(_ctx, getState())` | unchanged (`getState()` is `final` and inlines) | generated code does not reach into `_stateNumber` |
+| Set match | `_input.LA(1)` + `consume()` | `Token _st = _input.LT(1)` + `consume(_st)` | no second LT(1) on the success path |
 | Star/plus exit test | FQN `org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER` | unchanged (must stay FQN) | a token named `ATN` would shadow the type import |
 | ATN class init | `deserialize(_serializedATN.toCharArray())` | `deserialize(_serializedATN)` | single buffer (see below); no `toCharArray`+`clone` double copy |
 | Imports | `java.util.Iterator` always imported | omitted when unused | cleaner generated sources |
@@ -344,11 +347,20 @@ Runtime counterparts used heavily by generated call sites:
 | `ATNDeserializer.deserialize(String)` | owns one `toCharArray()` buffer; mutates in place (no defensive clone) |
 | `ATNDeserializer.deserialize(char[])` | still clones (caller may reuse the array) — source-compatible |
 | `DefaultErrorStrategy.reportMatch` | no-op when not in recovery (every successful `match`) |
-| `DefaultErrorStrategy.sync` | early exit while recovering; single `getATN()` for state + nextTokens |
-| `Parser.match` / `matchWildcard` / `consume` | direct `_input.LT(1)` / `_input.consume()` on the hot path |
+| `DefaultErrorStrategy.sync` | early exit while recovering; skip `nextTokensContext` store when already clear |
+| `Parser.match` / `matchWildcard` / `consume(Token)` | reuse the already-fetched LT(1); no second lookup. `consume(Token)` is `protected` |
+| `Parser.setErrorHandler` | caches `handler.isSyncRequired()` (default `true`; `BailErrorStrategy` returns `false`) |
+| `Parser.enterRule` | `setState(state)` (`final`, inlines to the same field write) |
+| `ParserATNSimulator.adaptivePredict` | warm SLL start is an `s0` load then the private `execDFA` body with locals (no `SimulatorState`). Subclasses opt into `getStartState` via `snapshotStartState()` (not `getClass`). Skip `seek` when prediction did not consume |
+| `BufferedTokenStream.seek` | no-op (keep `cachedLT1`) when already at the target index |
+| `Lexer.nextToken` / `getLine` / `getCharPositionInLine` | use `_interp` directly (no `getInterpreter()`) |
+| `ParserRuleContext.addAnyChild` | children list starts at capacity 4 (not the JDK default of 10) |
 
 **Compatibility:** Generated parsers remain source- and binary-compatible at the
-public API level. The private `_adaptivePredict` helper is not part of the
-supported surface. HPPC types remain confined to package-private runtime
-internals (see the HPPC section above); nothing in the tool templates emits
-HPPC types into generated code.
+public API level. The private `_adaptivePredict` and `_sync` helpers are not
+part of the supported surface. `ANTLRErrorStrategy.isSyncRequired()` is a
+Java 8 default method (existing implementations keep the previous
+always-call-`sync` behavior). `Parser.consume(Token)` is `protected` for
+generated set-match. `Recognizer._stateNumber` stays private. HPPC types remain
+confined to package-private runtime internals (see the HPPC section above);
+nothing in the tool templates emits HPPC types into generated code.

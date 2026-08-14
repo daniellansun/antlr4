@@ -100,6 +100,8 @@ public class TestErrorStrategies {
 		StubParser parser = new StubParser(new CommonToken(1, "a"));
 		BailErrorStrategy bail = new BailErrorStrategy();
 		bail.sync(parser); // should not throw
+		assertFalse(bail.isSyncRequired());
+		assertTrue(new DefaultErrorStrategy().isSyncRequired());
 	}
 
 	@Test

@@ -103,7 +103,7 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 		_mode = Lexer.DEFAULT_MODE;
 		_modeStack.clear();
 
-		getInterpreter().reset();
+		_interp.reset();
 	}
 
 	/** Return a token from this source; i.e., match a token on the char
@@ -119,6 +119,7 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 		// guaranteed at least have text of current token
 		int tokenStartMarker = _input.mark();
 		try{
+			LexerATNSimulator interp = _interp;
 			outer:
 			while (true) {
 				if (_hitEOF) {
@@ -129,8 +130,8 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 				_token = null;
 				_channel = Token.DEFAULT_CHANNEL;
 				_tokenStartCharIndex = _input.index();
-				_tokenStartCharPositionInLine = getInterpreter().getCharPositionInLine();
-				_tokenStartLine = getInterpreter().getLine();
+				_tokenStartCharPositionInLine = interp.getCharPositionInLine();
+				_tokenStartLine = interp.getLine();
 				_text = null;
 				do {
 					_type = Token.INVALID_TYPE;
@@ -139,7 +140,7 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 //								   " at index "+input.index());
 					int ttype;
 					try {
-						ttype = getInterpreter().match(_input, _mode);
+						ttype = interp.match(_input, _mode);
 					}
 					catch (LexerNoViableAltException e) {
 						notifyListeners(e);		// report error
@@ -272,20 +273,20 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 
 	@Override
 	public int getLine() {
-		return getInterpreter().getLine();
+		return _interp.getLine();
 	}
 
 	@Override
 	public int getCharPositionInLine() {
-		return getInterpreter().getCharPositionInLine();
+		return _interp.getCharPositionInLine();
 	}
 
 	public void setLine(int line) {
-		getInterpreter().setLine(line);
+		_interp.setLine(line);
 	}
 
 	public void setCharPositionInLine(int charPositionInLine) {
-		getInterpreter().setCharPositionInLine(charPositionInLine);
+		_interp.setCharPositionInLine(charPositionInLine);
 	}
 
 	/** What is the index of the current character of lookahead? */

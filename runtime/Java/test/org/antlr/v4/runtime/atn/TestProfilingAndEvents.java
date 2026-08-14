@@ -184,11 +184,24 @@ public class TestProfilingAndEvents {
 
 		assertNull(profiler.getCurrentState());
 		assertSame(pi.getDecisionInfo(), profiler.getDecisionInfo());
+		assertTrue(profiler.snapshotStartState());
 
 		// exercise adaptivePredict via parse
 		parser.getInputStream().seek(0);
 		org.antlr.v4.runtime.ParserRuleContext tree = parser.parse(0);
 		assertNotNull(tree);
 		assertTrue(profiler.getDecisionInfo()[0].invocations >= 1);
+	}
+
+	@Test
+	public void productionSimulatorDoesNotForceStartSnapshots() {
+		assertFalse(new ParserATNSimulator(new ATN(ATNType.PARSER, 2)).snapshotStartState());
+		ParserATNSimulator subclass = new ParserATNSimulator(new ATN(ATNType.PARSER, 2)) {
+			@Override
+			protected boolean snapshotStartState() {
+				return true;
+			}
+		};
+		assertTrue(subclass.snapshotStartState());
 	}
 }

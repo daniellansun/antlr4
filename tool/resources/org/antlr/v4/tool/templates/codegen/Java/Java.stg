@@ -263,6 +263,21 @@ public <if(parser.abstractRecognizer)>abstract <endif>class <parser.name> extend
 		return _interp.adaptivePredict(_input, decision, _ctx);
 	}
 
+	/**
+	 * Hot-path helper used by generated rule methods so every decision
+	 * site shares one monomorphic call to the error strategy. Named with a
+	 * leading underscore to avoid colliding with a user rule named
+	 * {@code sync}.
+	 *
+	 * \<p>Skips the virtual sync call when the installed strategy
+	 * reports isSyncRequired() is false (two-stage SLL / BailErrorStrategy).\</p>
+	 */
+	private void _sync() {
+		if (errorSyncEnabled) {
+			_errHandler.sync(this);
+		}
+	}
+
 	<namedActions.members>
 	<parser:(ctor)()>
 	<funcs; separator="\n">
@@ -549,7 +564,7 @@ CodeBlockForAlt(currentAltCodeBlock, locals, preamble, ops) ::= <<
 
 LL1AltBlock(choice, preamble, alts, error) ::= <<
 setState(<choice.stateNumber>);
-_errHandler.sync(this);
+_sync();
 <if(choice.label)><labelref(choice.label)> = _input.LT(1);<endif>
 <preamble; separator="\n">
 switch (_input.LA(1)) {
@@ -563,7 +578,7 @@ default:
 
 LL1OptionalBlock(choice, alts, error) ::= <<
 setState(<choice.stateNumber>);
-_errHandler.sync(this);
+_sync();
 switch (_input.LA(1)) {
 <choice.altLook,alts:{look,alt| <cases(ttypes=look)>
 	<alt>
@@ -575,7 +590,7 @@ default:
 
 LL1OptionalBlockSingleAlt(choice, expr, alts, preamble, error, followExpr) ::= <<
 setState(<choice.stateNumber>);
-_errHandler.sync(this);
+_sync();
 <preamble; separator="\n">
 if (<expr>) {
 	<alts; separator="\n">
@@ -585,24 +600,24 @@ if (<expr>) {
 
 LL1StarBlockSingleAlt(choice, loopExpr, alts, preamble, iteration) ::= <<
 setState(<choice.stateNumber>);
-_errHandler.sync(this);
+_sync();
 <preamble; separator="\n">
 while (<loopExpr>) {
 	<alts; separator="\n">
 	setState(<choice.loopBackStateNumber>);
-	_errHandler.sync(this);
+	_sync();
 	<iteration>
 }
 >>
 
 LL1PlusBlockSingleAlt(choice, loopExpr, alts, preamble, iteration) ::= <<
 setState(<choice.blockStartStateNumber>); <! alt block decision !>
-_errHandler.sync(this);
+_sync();
 <preamble; separator="\n">
 do {
 	<alts; separator="\n">
 	setState(<choice.stateNumber>); <! loopback/exit decision !>
-	_errHandler.sync(this);
+	_sync();
 	<iteration>
 } while ( <loopExpr> );
 >>
@@ -611,7 +626,7 @@ do {
 
 AltBlock(choice, preamble, alts, error) ::= <<
 setState(<choice.stateNumber>);
-_errHandler.sync(this);
+_sync();
 <if(choice.label)><labelref(choice.label)> = _input.LT(1);<endif>
 <preamble; separator="\n">
 switch ( _adaptivePredict(<choice.decision>) ) {
@@ -624,7 +639,7 @@ case <i>:
 
 OptionalBlock(choice, alts, error) ::= <<
 setState(<choice.stateNumber>);
-_errHandler.sync(this);
+_sync();
 switch ( _adaptivePredict(<choice.decision>) ) {
 <alts:{alt |
 case <i><if(!choice.ast.greedy)>+1<endif>:
@@ -635,7 +650,7 @@ case <i><if(!choice.ast.greedy)>+1<endif>:
 
 StarBlock(choice, alts, sync, iteration) ::= <<
 setState(<choice.stateNumber>);
-_errHandler.sync(this);
+_sync();
 _alt = _adaptivePredict(<choice.decision>);
 while ( _alt!=<choice.exitAlt> && _alt!=org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER ) {
 	if ( _alt==1<if(!choice.ast.greedy)>+1<endif> ) {
@@ -643,14 +658,14 @@ while ( _alt!=<choice.exitAlt> && _alt!=org.antlr.v4.runtime.atn.ATN.INVALID_ALT
 		<alts> <! should only be one !>
 	}
 	setState(<choice.loopBackStateNumber>);
-	_errHandler.sync(this);
+	_sync();
 	_alt = _adaptivePredict(<choice.decision>);
 }
 >>
 
 PlusBlock(choice, alts, error) ::= <<
 setState(<choice.blockStartStateNumber>); <! alt block decision !>
-_errHandler.sync(this);
+_sync();
 _alt = 1<if(!choice.ast.greedy)>+1<endif>;
 do {
 	switch (_alt) {
@@ -662,7 +677,7 @@ case <i><if(!choice.ast.greedy)>+1<endif>:
 		<error>
 	}
 	setState(<choice.loopBackStateNumber>); <! loopback/exit decision !>
-	_errHandler.sync(this);
+	_sync();
 	_alt = _adaptivePredict(<choice.decision>);
 } while ( _alt!=<choice.exitAlt> && _alt!=org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER );
 >>
@@ -724,12 +739,13 @@ setState(<m.stateNumber>);
 if ( <if(invert)><m.varName> \<= 0 || <else>!<endif>(<expr>) ) {
 	<if(m.labels)><m.labels:{l | <labelref(l)> = }><endif>_errHandler.recoverInline(this);
 } else {
-	if (_input.LA(1) == Token.EOF) {
+	Token _st = _input.LT(1);
+	if (_st.getType() == Token.EOF) {
 		matchedEOF = true;
 	}
 
 	_errHandler.reportMatch(this);
-	consume();
+	consume(_st);
 }
 >>
 

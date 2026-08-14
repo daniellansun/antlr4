@@ -107,7 +107,7 @@ public class ParserRuleContext extends RuleContext {
 
 		// copy any error nodes to alt label node
 		if ( ctx.children!=null ) {
-			this.children = new ArrayList<ParseTree>();
+			this.children = new ArrayList<ParseTree>(Math.max(CHILDREN_INITIAL_CAPACITY, ctx.children.size()));
 			// reset parent pointer for any error nodes
 			for (ParseTree child : ctx.children) {
 				if (child instanceof ErrorNodeImpl) {
@@ -128,6 +128,13 @@ public class ParserRuleContext extends RuleContext {
 	public void enterRule(ParseTreeListener listener) { }
 	public void exitRule(ParseTreeListener listener) { }
 
+	/**
+	 * Initial {@link #children} capacity. Most rule contexts hold a handful
+	 * of children; the JDK default of 10 wastes the unused tail on every
+	 * internal node when parse trees are built.
+	 */
+	private static final int CHILDREN_INITIAL_CAPACITY = 4;
+
 	/** Add a parse tree node to this as a child.  Works for
 	 *  internal and leaf nodes. Does not set parent link;
 	 *  other add methods must do that. Other addChild methods
@@ -142,7 +149,7 @@ public class ParserRuleContext extends RuleContext {
 	public <T extends ParseTree> T addAnyChild(T t) {
 		assert t.getParent() == null || t.getParent() == this;
 
-		if ( children==null ) children = new ArrayList<ParseTree>();
+		if ( children==null ) children = new ArrayList<ParseTree>(CHILDREN_INITIAL_CAPACITY);
 		children.add(t);
 		return t;
 	}
