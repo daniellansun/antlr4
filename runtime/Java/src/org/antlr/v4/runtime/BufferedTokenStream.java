@@ -85,6 +85,11 @@ public class BufferedTokenStream implements TokenStream {
 	 */
 	private Token cachedLT1;
 
+	/** Visible for same-package tests. */
+	final Token cachedLT1() {
+		return cachedLT1;
+	}
+
     public BufferedTokenStream(@NotNull TokenSource tokenSource) {
 		if (tokenSource == null) {
 			throw new NullPointerException("tokenSource cannot be null");
@@ -123,7 +128,18 @@ public class BufferedTokenStream implements TokenStream {
     @Override
     public void seek(int index) {
         lazyInit();
-        p = adjustSeekIndex(index);
+		int adjusted = adjustSeekIndex(index);
+		if (p == adjusted) {
+			// Already at the target. Keep cachedLT1 so adaptivePredict's
+			// rewind after a no-consume decision does not evict the LA(1)
+			// cache (every subsequent match / enterRule would otherwise
+			// re-index the token list).
+			if (cachedLT1 == null && p >= 0 && p < tokens.size()) {
+				cachedLT1 = tokens.get(p);
+			}
+			return;
+		}
+        p = adjusted;
 		cachedLT1 = null;
     }
 

@@ -267,9 +267,12 @@ public class DefaultErrorStrategy implements ANTLRErrorStrategy {
 		// Reuse the ATN reference from above (avoids a second getInterpreter/getATN).
 		IntervalSet nextTokens = atn.nextTokens(s);
 		if (nextTokens.contains(la)) {
-			// We are sure the token matches
-			nextTokensContext = null;
-			nextTokensState = ATNState.INVALID_STATE_NUMBER;
+			// We are sure the token matches. Skip the store if already clear
+			// (the common non-recovery path hits this on every generated sync).
+			if (nextTokensContext != null) {
+				nextTokensContext = null;
+				nextTokensState = ATNState.INVALID_STATE_NUMBER;
+			}
 			return;
 		}
 

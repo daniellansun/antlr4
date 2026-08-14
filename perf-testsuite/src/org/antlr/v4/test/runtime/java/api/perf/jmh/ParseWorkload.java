@@ -10,7 +10,8 @@ import org.antlr.v4.runtime.BailErrorStrategy;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.DefaultErrorStrategy;
-import org.antlr.v4.runtime.ParserRuleContext;
+import org.antlr.v4.runtime.Lexer;
+import org.antlr.v4.runtime.Parser;
 import org.antlr.v4.runtime.RecognitionException;
 import org.antlr.v4.runtime.atn.PredictionMode;
 import org.antlr.v4.runtime.misc.ParseCancellationException;
@@ -32,13 +33,17 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>Threading model matches real multi-file front ends (Groovy, etc.):
  * <ul>
- *   <li>Each worker owns its own {@link JavaLexer}/{@link JavaParser}
- *       (simulators are not shared across concurrent predictions).</li>
+ *   <li>Each worker owns its own lexer/parser (simulators are not shared
+ *       across concurrent predictions).</li>
  *   <li>DFA is stored on the static ATN and is therefore shared across
  *       workers when not cleared — the common "warm shared cache" case.</li>
  *   <li>{@code clearDfa} forces ATN simulation on the hot path (stresses
  *       retained scratch, HPPC maps, hash cache, sparse clear).</li>
  * </ul>
+ *
+ * <p>Language-specific construction is a {@link FrontEnd}. Java and the
+ * compact Groovy-like grammar share {@link #parseSerial} /
+ * {@link #parseParallel} instead of copying the thread pool.</p>
  */
 public final class ParseWorkload {
 
@@ -50,6 +55,43 @@ public final class ParseWorkload {
 		/** Two-stage: SLL+Bail, retry full LL on cancellation (production default). */
 		TWO_STAGE
 	}
+
+	/**
+	 * Lexer/parser factory for one generated language front end.
+	 */
+	public interface FrontEnd {
+		void clearSharedDfa();
+
+		Lexer newLexer(String text);
+
+		Parser newParser(CommonTokenStream tokens);
+
+		void parseStartRule(Parser parser);
+	}
+
+	public static final FrontEnd JAVA = new FrontEnd() {
+		@Override
+		public void clearSharedDfa() {
+			new JavaLexer(CharStreams.fromString("")).getInterpreter().clearDFA();
+			new JavaParser(new CommonTokenStream(
+				new JavaLexer(CharStreams.fromString("")))).getInterpreter().clearDFA();
+		}
+
+		@Override
+		public Lexer newLexer(String text) {
+			return new JavaLexer(CharStreams.fromString(text));
+		}
+
+		@Override
+		public Parser newParser(CommonTokenStream tokens) {
+			return new JavaParser(tokens);
+		}
+
+		@Override
+		public void parseStartRule(Parser parser) {
+			((JavaParser) parser).compilationUnit();
+		}
+	};
 
 	public static final class Stats {
 		public final long nanos;
@@ -83,16 +125,25 @@ public final class ParseWorkload {
 	}
 
 	public static void clearSharedDfa() {
-		// Generated recognizers share static ATN / decisionToDFA.
-		new JavaLexer(CharStreams.fromString("")).getInterpreter().clearDFA();
-		new JavaParser(new CommonTokenStream(new JavaLexer(CharStreams.fromString("")))).getInterpreter().clearDFA();
+		JAVA.clearSharedDfa();
 	}
 
 	public static int lexFile(String text, boolean clearDfa) {
 		if (clearDfa) {
-			clearSharedDfa();
+			JAVA.clearSharedDfa();
 		}
 		JavaLexer lexer = new JavaLexer(CharStreams.fromString(text));
+		lexer.removeErrorListeners();
+		CommonTokenStream tokens = new CommonTokenStream(lexer);
+		tokens.fill();
+		return tokens.size();
+	}
+
+	public static int lexFile(FrontEnd frontEnd, String text, boolean clearDfa) {
+		if (clearDfa) {
+			frontEnd.clearSharedDfa();
+		}
+		Lexer lexer = frontEnd.newLexer(text);
 		lexer.removeErrorListeners();
 		CommonTokenStream tokens = new CommonTokenStream(lexer);
 		tokens.fill();
@@ -107,7 +158,7 @@ public final class ParseWorkload {
 	 */
 	public static int parseFile(String text, PredictionStrategy strategy, boolean clearDfa, boolean buildTree) {
 		if (clearDfa) {
-			clearSharedDfa();
+			JAVA.clearSharedDfa();
 		}
 		JavaLexer lexer = new JavaLexer(CharStreams.fromString(text));
 		lexer.removeErrorListeners();
@@ -115,11 +166,14 @@ public final class ParseWorkload {
 		JavaParser parser = new JavaParser(tokens);
 		parser.removeErrorListeners();
 		parser.setBuildParseTree(buildTree);
+		invokeJava(parser, tokens, strategy, buildTree);
+		return tokens.size();
+	}
 
+	private static void invokeJava(JavaParser parser, CommonTokenStream tokens,
+								   PredictionStrategy strategy, boolean buildTree) {
 		switch (strategy) {
 			case SLL:
-				// Optimistic SLL (same as two-stage stage-1). Callers that need
-				// never-throw should use TWO_STAGE or LL.
 				parser.getInterpreter().setPredictionMode(PredictionMode.SLL);
 				parser.setErrorHandler(new BailErrorStrategy());
 				parser.compilationUnit();
@@ -136,7 +190,6 @@ public final class ParseWorkload {
 					parser.compilationUnit();
 				}
 				catch (ParseCancellationException ex) {
-					// Full restart of the token stream + parser for stage-2 LL.
 					tokens.seek(0);
 					parser.reset();
 					parser.setInputStream(tokens);
@@ -149,13 +202,65 @@ public final class ParseWorkload {
 			default:
 				throw new IllegalArgumentException(String.valueOf(strategy));
 		}
+	}
+
+	public static int parseFile(FrontEnd frontEnd, String text, PredictionStrategy strategy,
+								boolean clearDfa, boolean buildTree) {
+		if (clearDfa) {
+			frontEnd.clearSharedDfa();
+		}
+		Lexer lexer = frontEnd.newLexer(text);
+		lexer.removeErrorListeners();
+		CommonTokenStream tokens = new CommonTokenStream(lexer);
+		Parser parser = frontEnd.newParser(tokens);
+		parser.removeErrorListeners();
+		parser.setBuildParseTree(buildTree);
+		runStartRule(frontEnd, parser, tokens, strategy, buildTree);
 		return tokens.size();
+	}
+
+	private static void runStartRule(FrontEnd frontEnd, Parser parser, CommonTokenStream tokens,
+									 PredictionStrategy strategy, boolean buildTree) {
+		switch (strategy) {
+			case SLL:
+				parser.getInterpreter().setPredictionMode(PredictionMode.SLL);
+				parser.setErrorHandler(new BailErrorStrategy());
+				frontEnd.parseStartRule(parser);
+				break;
+			case LL:
+				parser.getInterpreter().setPredictionMode(PredictionMode.LL);
+				parser.setErrorHandler(new DefaultErrorStrategy());
+				frontEnd.parseStartRule(parser);
+				break;
+			case TWO_STAGE:
+				parser.getInterpreter().setPredictionMode(PredictionMode.SLL);
+				parser.setErrorHandler(new BailErrorStrategy());
+				try {
+					frontEnd.parseStartRule(parser);
+				}
+				catch (ParseCancellationException ex) {
+					tokens.seek(0);
+					parser.reset();
+					parser.setInputStream(tokens);
+					parser.setErrorHandler(new DefaultErrorStrategy());
+					parser.getInterpreter().setPredictionMode(PredictionMode.LL);
+					parser.setBuildParseTree(buildTree);
+					frontEnd.parseStartRule(parser);
+				}
+				break;
+			default:
+				throw new IllegalArgumentException(String.valueOf(strategy));
+		}
 	}
 
 	/** True if two-stage parse completes without throwing. */
 	public static boolean acceptsTwoStage(String text) {
+		return acceptsTwoStage(JAVA, text);
+	}
+
+	public static boolean acceptsTwoStage(FrontEnd frontEnd, String text) {
 		try {
-			parseFile(text, PredictionStrategy.TWO_STAGE, false, false);
+			parseFile(frontEnd, text, PredictionStrategy.TWO_STAGE, false, false);
 			return true;
 		}
 		catch (RuntimeException ex) {
@@ -185,6 +290,25 @@ public final class ParseWorkload {
 				errors++;
 			}
 		}
+		return new Stats(System.nanoTime() - t0, tokens, CorpusLoader.totalChars(files), files.size(), errors);
+	}
+
+	public static Stats parseSerial(FrontEnd frontEnd,
+									List<CorpusLoader.SourceFile> files,
+									PredictionStrategy strategy,
+									boolean clearDfaPerFile,
+									boolean buildTree) {
+		long tokens = 0;
+		int errors = 0;
+		long t0 = System.nanoTime();
+		for (CorpusLoader.SourceFile f : files) {
+			try {
+				tokens += parseFile(frontEnd, f.text, strategy, clearDfaPerFile, buildTree);
+			}
+			catch (RecognitionException | ParseCancellationException ex) {
+				errors++;
+			}
+		}
 		long dt = System.nanoTime() - t0;
 		return new Stats(dt, tokens, CorpusLoader.totalChars(files), files.size(), errors);
 	}
@@ -206,7 +330,7 @@ public final class ParseWorkload {
 									  int threads) throws InterruptedException, ExecutionException {
 		if (threads <= 1) {
 			if (clearDfaAtStart) {
-				clearSharedDfa();
+				JAVA.clearSharedDfa();
 			}
 			return parseSerial(files, strategy, false, buildTree);
 		}
@@ -223,7 +347,63 @@ public final class ParseWorkload {
 		});
 		try {
 			if (clearDfaAtStart) {
-				clearSharedDfa();
+				JAVA.clearSharedDfa();
+			}
+			List<Future<Integer>> futures = new ArrayList<Future<Integer>>(files.size());
+			long t0 = System.nanoTime();
+			for (final CorpusLoader.SourceFile f : files) {
+				final PredictionStrategy strat = strategy;
+				final boolean tree = buildTree;
+				futures.add(pool.submit(new Callable<Integer>() {
+					@Override
+					public Integer call() {
+						try {
+							return parseFile(f.text, strat, false, tree);
+						}
+						catch (RecognitionException | ParseCancellationException ex) {
+							errorCount.incrementAndGet();
+							return 0;
+						}
+					}
+				}));
+			}
+			for (Future<Integer> fut : futures) {
+				tokenCount.addAndGet(fut.get());
+			}
+			return new Stats(System.nanoTime() - t0, tokenCount.get(),
+				CorpusLoader.totalChars(files), files.size(), errorCount.get());
+		}
+		finally {
+			pool.shutdownNow();
+		}
+	}
+
+	public static Stats parseParallel(final FrontEnd frontEnd,
+									  List<CorpusLoader.SourceFile> files,
+									  final PredictionStrategy strategy,
+									  boolean clearDfaAtStart,
+									  final boolean buildTree,
+									  int threads) throws InterruptedException, ExecutionException {
+		if (threads <= 1) {
+			if (clearDfaAtStart) {
+				frontEnd.clearSharedDfa();
+			}
+			return parseSerial(frontEnd, files, strategy, false, buildTree);
+		}
+		final AtomicInteger errorCount = new AtomicInteger();
+		final AtomicInteger tokenCount = new AtomicInteger();
+		ExecutorService pool = Executors.newFixedThreadPool(threads, new ThreadFactory() {
+			private final AtomicInteger n = new AtomicInteger();
+			@Override
+			public Thread newThread(Runnable r) {
+				Thread t = new Thread(r, "antlr-parse-" + n.getAndIncrement());
+				t.setDaemon(true);
+				return t;
+			}
+		});
+		try {
+			if (clearDfaAtStart) {
+				frontEnd.clearSharedDfa();
 			}
 			List<Future<Integer>> futures = new ArrayList<Future<Integer>>(files.size());
 			long t0 = System.nanoTime();
@@ -232,8 +412,7 @@ public final class ParseWorkload {
 					@Override
 					public Integer call() {
 						try {
-							// Never clear per-file under parallel shared-ATN use.
-							return parseFile(f.text, strategy, false, buildTree);
+							return parseFile(frontEnd, f.text, strategy, false, buildTree);
 						}
 						catch (RecognitionException | ParseCancellationException ex) {
 							errorCount.incrementAndGet();

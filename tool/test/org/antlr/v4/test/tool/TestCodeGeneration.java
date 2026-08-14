@@ -106,10 +106,58 @@ public class TestCodeGeneration extends BaseTest {
 	}
 
 	/**
-	 * Class-init of generated recognizers must use
-	 * {@link org.antlr.v4.runtime.atn.ATNDeserializer#deserialize(String)} to
-	 * avoid the historical {@code toCharArray()+clone} double copy.
+	 * Generated parsers emit a private {@code _sync} helper so every decision
+	 * site shares one monomorphic call to the error strategy.
 	 */
+	@Test public void generatedParserUsesSyncHelper() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : A* B ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n";
+		String source = generateParserSource(g, true);
+		assertTrue("missing _sync helper",
+			source.contains("private void _sync()"));
+		assertTrue("helper must honor the cached errorSyncEnabled field",
+			source.contains("if (errorSyncEnabled)"));
+		assertTrue("helper must delegate to the error strategy",
+			source.contains("_errHandler.sync(this)"));
+		assertTrue("decision / loop sites must call _sync()",
+			source.contains("_sync();"));
+		int first = source.indexOf("_errHandler.sync(this)");
+		int second = source.indexOf("_errHandler.sync(this)", first + 1);
+		assertTrue("sync helper body must mention _errHandler.sync once", first >= 0);
+		assertTrue("decision sites must not call _errHandler.sync directly",
+			second < 0);
+	}
+
+	@Test public void generatedParserUsesGetStateForContext() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : A ;\n" +
+			"A : 'a' ;\n";
+		String source = generateParserSource(g, false);
+		assertTrue("rule prologues use getState()",
+			source.contains("new SContext(_ctx, getState())"));
+		assertFalse("must not reach into _stateNumber",
+			source.contains("new SContext(_ctx, _stateNumber)"));
+	}
+
+	@Test public void generatedSetMatchReusesLookaheadToken() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : (A | B) ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n";
+		String source = generateParserSource(g, false);
+		assertTrue("set match must fetch LT(1) once",
+			source.contains("Token _st = _input.LT(1)"));
+		assertTrue("set match must consume the already-fetched token",
+			source.contains("consume(_st)"));
+		assertFalse("must not consume() without the looked-up token",
+			source.contains("consume();"));
+	}
+
 	@Test public void generatedRecognizerDeserializesAtnFromString() throws Exception {
 		String g =
 			"grammar T;\n" +

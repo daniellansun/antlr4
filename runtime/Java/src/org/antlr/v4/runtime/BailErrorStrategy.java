@@ -69,4 +69,17 @@ public class BailErrorStrategy extends DefaultErrorStrategy {
     /** Make sure we don't attempt to recover from problems in subrules. */
     @Override
     public void sync(Parser recognizer) { }
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>{@link #sync} is empty. Generated parsers skip the virtual call for
+	 * the two-stage SLL / silent-validation path. Subclasses that override
+	 * {@link #sync} to do work must also override this method and return
+	 * {@code true}.</p>
+	 */
+	@Override
+	public boolean isSyncRequired() {
+		return false;
+	}
 }

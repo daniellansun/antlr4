@@ -105,6 +105,16 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	protected ANTLRErrorStrategy _errHandler = new DefaultErrorStrategy();
 
 	/**
+	 * Cached {@link ANTLRErrorStrategy#isSyncRequired()} for the installed
+	 * handler. Generated {@code _sync()} reads this via
+	 * {@link #errorSyncEnabled()} so the two-stage SLL path does not pay a
+	 * virtual call when {@link BailErrorStrategy} is installed. Updated only
+	 * by {@link #setErrorHandler}; do not assign {@code _errHandler} directly.
+	 * Generated {@code _sync()} reads the field (same load as a local boolean).
+	 */
+	protected boolean errorSyncEnabled = true;
+
+	/**
 	 * The input stream.
 	 *
 	 * @see #getInputStream
@@ -209,7 +219,7 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 				matchedEOF = true;
 			}
 			_errHandler.reportMatch(this);
-			consume();
+			consume(t);
 		}
 		else {
 			t = _errHandler.recoverInline(this);
@@ -245,7 +255,7 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 		Token t = _input.LT(1);
 		if (t.getType() > 0) {
 			_errHandler.reportMatch(this);
-			consume();
+			consume(t);
 		}
 		else {
 			t = _errHandler.recoverInline(this);
@@ -504,6 +514,16 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 
 	public void setErrorHandler(@NotNull ANTLRErrorStrategy handler) {
 		this._errHandler = handler;
+		this.errorSyncEnabled = handler.isSyncRequired();
+	}
+
+	/**
+	 * Whether generated decision/loop sites should call
+	 * {@link ANTLRErrorStrategy#sync}. {@code false} when the installed
+	 * handler reports {@link ANTLRErrorStrategy#isSyncRequired()} is false.
+	 */
+	protected final boolean errorSyncEnabled() {
+		return errorSyncEnabled;
 	}
 
 	@Override
@@ -567,7 +587,17 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	 * listeners.
 	 */
 	public Token consume() {
-		Token o = _input.LT(1);
+		return consume(_input.LT(1));
+	}
+
+	/**
+	 * Consume {@code current}, which must be the current {@code LT(1)} symbol.
+	 * Used by {@link #match} and generated set-match so the success path does
+	 * not look up the same token twice. Not a new public API: generated
+	 * parsers (subclasses) call this from the same compilation unit family.
+	 */
+	protected Token consume(@NotNull Token current) {
+		Token o = current;
 		if (o.getType() != EOF) {
 			_input.consume();
 		}

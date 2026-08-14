@@ -33,6 +33,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -543,5 +544,19 @@ public class TestDefaultErrorStrategyCoverage {
 		assertTrue(s.inErrorRecoveryMode(p));
 		s.sync(p);
 		assertTrue(s.inErrorRecoveryMode(p));
+	}
+
+	@Test
+	public void syncDoesNotRewriteAlreadyClearNextTokensContext() {
+		ATN atn = abRule();
+		SeqParser p = new SeqParser(atn, new String[] { "r" }, NAMES, 1, 2);
+		p.removeErrorListeners();
+		p.setState(atn.ruleToStartState[0].stateNumber);
+		DefaultErrorStrategy s = new DefaultErrorStrategy();
+		assertNull(s.nextTokensContext);
+		s.sync(p);
+		assertNull(s.nextTokensContext);
+		s.sync(p);
+		assertNull(s.nextTokensContext);
 	}
 }

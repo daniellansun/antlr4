@@ -101,6 +101,11 @@ public class ProfilingATNSimulator extends ParserATNSimulator {
 	}
 
 	@Override
+	protected boolean snapshotStartState() {
+		return true;
+	}
+
+	@Override
 	protected SimulatorState getStartState(DFA dfa, TokenStream input, ParserRuleContext outerContext, boolean useContext) {
 		SimulatorState state = super.getStartState(dfa, input, outerContext, useContext);
 		currentState = state;
