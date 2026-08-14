@@ -103,7 +103,9 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 		_mode = Lexer.DEFAULT_MODE;
 		_modeStack.clear();
 
-		_interp.reset();
+		if (_interp != null) {
+			_interp.reset();
+		}
 	}
 
 	/** Return a token from this source; i.e., match a token on the char

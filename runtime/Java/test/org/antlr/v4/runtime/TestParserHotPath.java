@@ -126,6 +126,28 @@ public class TestParserHotPath {
 	}
 
 	@Test
+	public void consumeInRecoveryAddsErrorNode() {
+		ParserInterpreter p = parser(1);
+		p.setBuildParseTree(true);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		InterpreterRuleContext ctx = new InterpreterRuleContext(null, -1, 0);
+		p.setContext(ctx);
+		class ArmingStrategy extends DefaultErrorStrategy {
+			void arm(Parser rec) {
+				beginErrorCondition(rec);
+			}
+		}
+		ArmingStrategy armed = new ArmingStrategy();
+		p.setErrorHandler(armed);
+		armed.arm(p);
+		Token t = p.getInputStream().LT(1);
+		assertSame(t, p.consume(t));
+		assertEquals(1, ctx.getChildCount());
+		assertTrue(ctx.getChild(0) instanceof ErrorNode);
+		assertSame(t, ((ErrorNode) ctx.getChild(0)).getSymbol());
+	}
+
+	@Test
 	public void consumeBuildsTreeAndNotifiesListeners() {
 		ParserInterpreter p = parser(1);
 		p.setBuildParseTree(true);

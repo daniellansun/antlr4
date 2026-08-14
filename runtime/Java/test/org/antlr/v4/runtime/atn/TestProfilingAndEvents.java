@@ -20,6 +20,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
@@ -191,6 +192,46 @@ public class TestProfilingAndEvents {
 		org.antlr.v4.runtime.ParserRuleContext tree = parser.parse(0);
 		assertNotNull(tree);
 		assertTrue(profiler.getDecisionInfo()[0].invocations >= 1);
+	}
+
+	@Test
+	public void retainedGetStartStateIsStableAcrossLaterPredict() {
+		ATN atn = ATNTestHelpers.buildParserAorB();
+		org.antlr.v4.runtime.ParserInterpreter parser = ATNTestHelpers.createParser(atn, 1);
+		parser.parse(0);
+		ParserATNSimulator sim = parser.getInterpreter();
+		org.antlr.v4.runtime.dfa.DFA dfa = atn.decisionToDFA[0];
+		assertNotNull(dfa);
+		assertNotNull(dfa.s0.get());
+		org.antlr.v4.runtime.ParserRuleContext ctx =
+			org.antlr.v4.runtime.ParserRuleContext.emptyContext();
+		SimulatorState held = sim.getStartState(dfa, parser.getInputStream(), ctx, false);
+		assertNotNull(held);
+		DFAState heldS0 = held.s0;
+		parser.getInputStream().seek(0);
+		parser.reset();
+		parser.parse(0);
+		assertSame(heldS0, held.s0);
+		assertFalse(held.useContext);
+	}
+
+	@Test
+	public void getStartStateReturnsFreshSnapshots() {
+		ATN atn = ATNTestHelpers.buildParserAorB();
+		org.antlr.v4.runtime.ParserInterpreter parser = ATNTestHelpers.createParser(atn, 1);
+		parser.parse(0);
+		ParserATNSimulator sim = parser.getInterpreter();
+		org.antlr.v4.runtime.dfa.DFA dfa = atn.decisionToDFA[0];
+		assertNotNull(dfa);
+		assertNotNull(dfa.s0.get());
+		org.antlr.v4.runtime.ParserRuleContext ctx =
+			org.antlr.v4.runtime.ParserRuleContext.emptyContext();
+		SimulatorState a = sim.getStartState(dfa, parser.getInputStream(), ctx, false);
+		SimulatorState b = sim.getStartState(dfa, parser.getInputStream(), ctx, false);
+		assertNotNull(a);
+		assertNotNull(b);
+		assertNotSame(a, b);
+		assertSame(a.s0, b.s0);
 	}
 
 	@Test

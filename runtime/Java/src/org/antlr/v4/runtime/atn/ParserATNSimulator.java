@@ -359,13 +359,6 @@ public class ParserATNSimulator extends ATNSimulator {
 		this(null, atn);
 	}
 
-	/**
-	 * Recycled start snapshot for {@link #getStartState}. One allocation per
-	 * simulator; subsequent predictions overwrite it. {@link #computeStartState}
-	 * still returns a fresh instance (cold / full-context).
-	 */
-	private SimulatorState startScratch;
-
 	public ParserATNSimulator(@Nullable Parser parser, @NotNull ATN atn) {
 		super(atn);
 		this.parser = parser;
@@ -497,6 +490,11 @@ public class ParserATNSimulator extends ATNSimulator {
 		return atn.ll1Cache.get((decision << 16) + ll_1);
 	}
 
+	/**
+	 * Local- or full-context DFA start, or {@code null} if it is not yet built.
+	 * Returns a new {@link SimulatorState} (or {@code null}); never a recycled
+	 * instance.
+	 */
 	protected SimulatorState getStartState(@NotNull DFA dfa,
 										@NotNull TokenStream input,
 										@NotNull ParserRuleContext outerContext,
@@ -511,7 +509,7 @@ public class ParserATNSimulator extends ATNSimulator {
 					return null;
 				}
 
-				return recycleStart(outerContext, state, false, outerContext);
+				return new SimulatorState(outerContext, state, false, outerContext);
 			}
 			else {
 				// PERF: Single atomic load — s0 is stable for the warm DFA path.
@@ -520,7 +518,7 @@ public class ParserATNSimulator extends ATNSimulator {
 					return null;
 				}
 
-				return recycleStart(outerContext, s0State, false, outerContext);
+				return new SimulatorState(outerContext, s0State, false, outerContext);
 			}
 		}
 
@@ -553,26 +551,16 @@ public class ParserATNSimulator extends ATNSimulator {
 			return null;
 		}
 
-		return recycleStart(outerContext, s0, useContext, remainingContext);
+		return new SimulatorState(outerContext, s0, useContext, remainingContext);
 	}
 
 	/**
-	 * Whether {@link #adaptivePredict} must obtain the start snapshot through
-	 * {@link #getStartState} so a subclass can observe it. Production returns
-	 * {@code false} and inlines the warm SLL DFA start.
+	 * Whether {@link #adaptivePredict} must call {@link #getStartState} so a
+	 * subclass can observe the start snapshot. Production returns {@code false}
+	 * and inlines the warm SLL DFA start.
 	 */
 	protected boolean snapshotStartState() {
 		return false;
-	}
-
-	private SimulatorState recycleStart(ParserRuleContext outerContext, @NotNull DFAState s0,
-										boolean useContext, ParserRuleContext remaining) {
-		if (startScratch == null) {
-			startScratch = new SimulatorState(outerContext, s0, useContext, remaining);
-			return startScratch;
-		}
-		startScratch.assign(outerContext, s0, useContext, remaining);
-		return startScratch;
 	}
 
 	protected int execDFA(@NotNull DFA dfa,
