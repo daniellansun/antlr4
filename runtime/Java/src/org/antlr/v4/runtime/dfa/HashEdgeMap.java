@@ -176,7 +176,7 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 			while (true) {
 				newSize *= 2;
 				if (newSize >= (maxIndex - minIndex + 1) / 2) {
-					ArrayEdgeMap<T> arrayMap = new ArrayEdgeMap<T>(minIndex, maxIndex);
+					ArrayEdgeMap<T> arrayMap = new ArrayEdgeMap<>(minIndex, maxIndex);
 					arrayMap = arrayMap.putAll(this);
 					arrayMap.put(key, value);
 					return arrayMap;
@@ -188,7 +188,7 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 				}
 			}
 
-			HashEdgeMap<T> resized = new HashEdgeMap<T>(this, newSize);
+			HashEdgeMap<T> resized = new HashEdgeMap<>(this, newSize);
 			resized.put(key, value);
 			return resized;
 		}
@@ -200,7 +200,7 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 			return this;
 		}
 
-		HashEdgeMap<T> result = new HashEdgeMap<T>(this, values.length);
+		HashEdgeMap<T> result = new HashEdgeMap<>(this, values.length);
 		int bucket = result.bucket(key);
 		if (result.values[bucket] != null) {
 			result.keys.set(bucket, 0);
@@ -216,7 +216,7 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 			return this;
 		}
 
-		return new EmptyEdgeMap<T>(minIndex, maxIndex);
+		return new EmptyEdgeMap<>(minIndex, maxIndex);
 	}
 
 	@Override
@@ -229,7 +229,7 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 		// This path is cold — never call toMap() from adaptivePredict hot paths
 		// (use isEmpty()/size() instead; see DFA.isEmpty).
 		synchronized (this) {
-			Map<Integer, T> result = new TreeMap<Integer, T>();
+			Map<Integer, T> result = new TreeMap<>();
 			for (int i = 0; i < values.length; i++) {
 				T value = values[i];
 				if (value != null) {

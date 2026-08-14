@@ -207,7 +207,7 @@ public abstract class SemanticContext {
 		@NotNull public final SemanticContext[] opnds;
 
 		public AND(@NotNull SemanticContext a, @NotNull SemanticContext b) {
-			Set<SemanticContext> operands = new HashSet<SemanticContext>();
+			Set<SemanticContext> operands = new HashSet<>();
 			if ( a instanceof AND ) operands.addAll(Arrays.asList(((AND)a).opnds));
 			else operands.add(a);
 			if ( b instanceof AND ) operands.addAll(Arrays.asList(((AND)b).opnds));
@@ -259,7 +259,7 @@ public abstract class SemanticContext {
 		@Override
 		public SemanticContext evalPrecedence(Recognizer<?, ?> parser, RuleContext parserCallStack) {
 			boolean differs = false;
-			List<SemanticContext> operands = new ArrayList<SemanticContext>();
+			List<SemanticContext> operands = new ArrayList<>();
 			for (SemanticContext context : opnds) {
 				SemanticContext evaluated = context.evalPrecedence(parser, parserCallStack);
 				differs |= (evaluated != context);
@@ -304,7 +304,7 @@ public abstract class SemanticContext {
 		@NotNull public final SemanticContext[] opnds;
 
 		public OR(@NotNull SemanticContext a, @NotNull SemanticContext b) {
-			Set<SemanticContext> operands = new HashSet<SemanticContext>();
+			Set<SemanticContext> operands = new HashSet<>();
 			if ( a instanceof OR ) operands.addAll(Arrays.asList(((OR)a).opnds));
 			else operands.add(a);
 			if ( b instanceof OR ) operands.addAll(Arrays.asList(((OR)b).opnds));
@@ -356,7 +356,7 @@ public abstract class SemanticContext {
 		@Override
 		public SemanticContext evalPrecedence(Recognizer<?, ?> parser, RuleContext parserCallStack) {
 			boolean differs = false;
-			List<SemanticContext> operands = new ArrayList<SemanticContext>();
+			List<SemanticContext> operands = new ArrayList<>();
 			for (SemanticContext context : opnds) {
 				SemanticContext evaluated = context.evalPrecedence(parser, parserCallStack);
 				differs |= (evaluated != context);
@@ -426,7 +426,7 @@ public abstract class SemanticContext {
 			SemanticContext context = iterator.next();
 			if (context instanceof PrecedencePredicate) {
 				if (result == null) {
-					result = new ArrayList<PrecedencePredicate>();
+					result = new ArrayList<>();
 				}
 
 				result.add((PrecedencePredicate)context);

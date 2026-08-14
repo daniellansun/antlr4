@@ -34,7 +34,7 @@ public final class SparseEdgeMap<T> extends AbstractEdgeMap<T> {
 	public SparseEdgeMap(int minIndex, int maxIndex, int maxSparseSize) {
 		super(minIndex, maxIndex);
 		this.keys = new int[maxSparseSize];
-		this.values = new ArrayList<T>(maxSparseSize);
+		this.values = new ArrayList<>(maxSparseSize);
 	}
 
 	private SparseEdgeMap(@NotNull SparseEdgeMap<T> map, int maxSparseSize) {
@@ -45,7 +45,7 @@ public final class SparseEdgeMap<T> extends AbstractEdgeMap<T> {
 			}
 
 			keys = Arrays.copyOf(map.keys, maxSparseSize);
-			values = new ArrayList<T>(maxSparseSize);
+			values = new ArrayList<>(maxSparseSize);
 			values.addAll(map.values);
 		}
 	}
@@ -121,13 +121,13 @@ public final class SparseEdgeMap<T> extends AbstractEdgeMap<T> {
 			int space = maxIndex - minIndex + 1;
 			// SparseEdgeMap only uses less memory than ArrayEdgeMap up to half the size of the symbol space
 			if (desiredSize >= space / 2) {
-				ArrayEdgeMap<T> arrayMap = new ArrayEdgeMap<T>(minIndex, maxIndex);
+				ArrayEdgeMap<T> arrayMap = new ArrayEdgeMap<>(minIndex, maxIndex);
 				arrayMap = arrayMap.putAll(this);
 				arrayMap.put(key, value);
 				return arrayMap;
 			}
 			else {
-				SparseEdgeMap<T> resized = new SparseEdgeMap<T>(this, desiredSize);
+				SparseEdgeMap<T> resized = new SparseEdgeMap<>(this, desiredSize);
 				System.arraycopy(resized.keys, insertIndex, resized.keys, insertIndex + 1, size() - insertIndex);
 				resized.keys[insertIndex] = key;
 				resized.values.add(insertIndex, value);
@@ -144,7 +144,7 @@ public final class SparseEdgeMap<T> extends AbstractEdgeMap<T> {
 				return this;
 			}
 
-			SparseEdgeMap<T> result = new SparseEdgeMap<T>(this, getMaxSparseSize());
+			SparseEdgeMap<T> result = new SparseEdgeMap<>(this, getMaxSparseSize());
 			System.arraycopy(result.keys, index + 1, result.keys, index, size() - index - 1);
 			result.values.remove(index);
 			return result;
@@ -157,7 +157,7 @@ public final class SparseEdgeMap<T> extends AbstractEdgeMap<T> {
 			return this;
 		}
 
-		return new EmptyEdgeMap<T>(minIndex, maxIndex);
+		return new EmptyEdgeMap<>(minIndex, maxIndex);
 	}
 
 	@Override
@@ -167,7 +167,7 @@ public final class SparseEdgeMap<T> extends AbstractEdgeMap<T> {
 		}
 
 		synchronized (this) {
-			Map<Integer, T> result = new LinkedHashMap<Integer, T>();
+			Map<Integer, T> result = new LinkedHashMap<>();
 			for (int i = 0; i < size(); i++) {
 				result.put(keys[i], values.get(i));
 			}

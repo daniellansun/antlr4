@@ -69,7 +69,7 @@ public class ParserInterpreter extends Parser {
 	 *  associated with left operand of an alt like "expr '*' expr".
 	 */
 	protected final Deque<Tuple2<ParserRuleContext, Integer>> _parentContextStack =
-		new ArrayDeque<Tuple2<ParserRuleContext, Integer>>();
+		new ArrayDeque<>();
 
 	/** We need a map from (decision,inputIndex)->forced alt for computing ambiguous
 	 *  parse trees. For now, we allow exactly one override.

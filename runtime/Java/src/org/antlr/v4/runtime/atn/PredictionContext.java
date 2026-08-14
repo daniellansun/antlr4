@@ -327,7 +327,7 @@ public abstract class PredictionContext {
 	}
 
 	public String[] toStrings(Recognizer<?, ?> recognizer, PredictionContext stop, int currentState) {
-		List<String> result = new ArrayList<String>();
+		List<String> result = new ArrayList<>();
 
 		outer:
 		for (int perm = 0; ; perm++) {

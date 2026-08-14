@@ -139,7 +139,7 @@ final class ReachComputation {
 						assert c.getContext().isEmpty();
 						if (useContext && !c.getReachesIntoOuterContext() || t == IntStream.EOF) {
 							if (skippedStopStates == null) {
-								skippedStopStates = new ArrayList<ATNConfig>(2);
+								skippedStopStates = new ArrayList<>(2);
 							}
 
 							skippedStopStates.add(c);

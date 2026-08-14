@@ -320,8 +320,8 @@ public class ATNConfig {
 			return false;
 		}
 
-		Deque<PredictionContext> leftWorkList = new ArrayDeque<PredictionContext>();
-		Deque<PredictionContext> rightWorkList = new ArrayDeque<PredictionContext>();
+		Deque<PredictionContext> leftWorkList = new ArrayDeque<>();
+		Deque<PredictionContext> rightWorkList = new ArrayDeque<>();
 		leftWorkList.add(getContext());
 		rightWorkList.add(subconfig.getContext());
 		while (!leftWorkList.isEmpty()) {
@@ -435,8 +435,8 @@ public class ATNConfig {
 		builder.append("digraph G {\n");
 		builder.append("rankdir=LR;\n");
 
-		Map<PredictionContext, PredictionContext> visited = new IdentityHashMap<PredictionContext, PredictionContext>();
-		Deque<PredictionContext> workList = new ArrayDeque<PredictionContext>();
+		Map<PredictionContext, PredictionContext> visited = new IdentityHashMap<>();
+		Deque<PredictionContext> workList = new ArrayDeque<>();
 		workList.add(getContext());
 		visited.put(getContext(), getContext());
 		while (!workList.isEmpty()) {

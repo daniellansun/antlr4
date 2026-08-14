@@ -571,7 +571,7 @@ public enum PredictionMode {
 	 */
 	@NotNull
 	public static Map<ATNState, BitSet> getStateToAltMap(@NotNull ATNConfigSet configs) {
-		Map<ATNState, BitSet> m = new HashMap<ATNState, BitSet>();
+		Map<ATNState, BitSet> m = new HashMap<>();
 		for (ATNConfig c : configs) {
 			BitSet alts = m.computeIfAbsent(c.getState(), k -> new BitSet());
 			alts.set(c.getAlt());

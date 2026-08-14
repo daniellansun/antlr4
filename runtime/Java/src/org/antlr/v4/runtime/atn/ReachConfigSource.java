@@ -106,7 +106,7 @@ final class ReachConfigSource {
 			int n = set.size();
 			ArrayList<ATNConfig> scratch = rewriteScratch;
 			if (scratch == null) {
-				scratch = new ArrayList<ATNConfig>(n);
+				scratch = new ArrayList<>(n);
 				rewriteScratch = scratch;
 			}
 			else {

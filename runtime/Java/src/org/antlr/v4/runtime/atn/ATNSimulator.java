@@ -45,7 +45,7 @@ public abstract class ATNSimulator {
 	public final ATN atn;
 
 	static {
-		ERROR = new DFAState(new EmptyEdgeMap<DFAState>(0, -1), new EmptyEdgeMap<DFAState>(0, -1), new ATNConfigSet());
+		ERROR = new DFAState(new EmptyEdgeMap<>(0, -1), new EmptyEdgeMap<>(0, -1), new ATNConfigSet());
 		ERROR.stateNumber = Integer.MAX_VALUE;
 	}
 

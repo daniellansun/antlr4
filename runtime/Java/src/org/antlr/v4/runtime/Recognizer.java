@@ -26,9 +26,9 @@ public abstract class Recognizer<Symbol, ATNInterpreter extends ATNSimulator> {
 	public static final int EOF=-1;
 
 	private static final Map<Vocabulary, Map<String, Integer>> tokenTypeMapCache =
-		new WeakHashMap<Vocabulary, Map<String, Integer>>();
+		new WeakHashMap<>();
 	private static final Map<String[], Map<String, Integer>> ruleIndexMapCache =
-		new WeakHashMap<String[], Map<String, Integer>>();
+		new WeakHashMap<>();
 
 	@SuppressWarnings("serial")
 	@NotNull
@@ -73,7 +73,7 @@ public abstract class Recognizer<Symbol, ATNInterpreter extends ATNSimulator> {
 		synchronized (tokenTypeMapCache) {
 			Map<String, Integer> result = tokenTypeMapCache.get(vocabulary);
 			if (result == null) {
-				result = new HashMap<String, Integer>();
+				result = new HashMap<>();
 				for (int i = 0; i <= getATN().maxTokenType; i++) {
 					String literalName = vocabulary.getLiteralName(i);
 					if (literalName != null) {
@@ -237,11 +237,11 @@ public abstract class Recognizer<Symbol, ATNInterpreter extends ATNSimulator> {
 
 	@NotNull
 	public List<? extends ANTLRErrorListener<? super Symbol>> getErrorListeners() {
-		return new ArrayList<ANTLRErrorListener<? super Symbol>>(_listeners);
+		return new ArrayList<>(_listeners);
 	}
 
 	public ANTLRErrorListener<? super Symbol> getErrorListenerDispatch() {
-		return new ProxyErrorListener<Symbol>(getErrorListeners());
+		return new ProxyErrorListener<>(getErrorListeners());
 	}
 
 	// subclass needs to override these if there are sempreds or actions

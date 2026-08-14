@@ -20,7 +20,7 @@ public class OrderedHashSet<T> extends LinkedHashSet<T> {
 	private static final long serialVersionUID = 5281944403755906761L;
 
     /** Track the elements as they are added to the set */
-    protected ArrayList<T> elements = new ArrayList<T>();
+    protected ArrayList<T> elements = new ArrayList<>();
 
     public T get(int i) {
         return elements.get(i);
@@ -99,7 +99,7 @@ public class OrderedHashSet<T> extends LinkedHashSet<T> {
     public Object clone() {
         @SuppressWarnings("unchecked") // safe (result of clone)
         OrderedHashSet<T> dup = (OrderedHashSet<T>)super.clone();
-        dup.elements = new ArrayList<T>(this.elements);
+        dup.elements = new ArrayList<>(this.elements);
         return dup;
     }
 

@@ -57,7 +57,7 @@ final class OpenAddressedHashSet<E> extends AbstractSet<E> {
 	 * {@link ObjectHashSet#ObjectHashSet(int)})
 	 */
 	OpenAddressedHashSet(int expectedElements) {
-		this.storage = new ObjectHashSet<E>(expectedElements);
+		this.storage = new ObjectHashSet<>(expectedElements);
 	}
 
 	@Override

@@ -28,7 +28,7 @@ public final class EmptyEdgeMap<T> extends AbstractEdgeMap<T> {
 			return this;
 		}
 
-		return new SingletonEdgeMap<T>(minIndex, maxIndex, key, value);
+		return new SingletonEdgeMap<>(minIndex, maxIndex, key, value);
 	}
 
 	@Override
