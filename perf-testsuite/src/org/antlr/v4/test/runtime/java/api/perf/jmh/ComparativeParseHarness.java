@@ -6,6 +6,8 @@
 
 package org.antlr.v4.test.runtime.java.api.perf.jmh;
 
+import org.antlr.v4.runtime.Lexer;
+
 import java.io.IOException;
 import java.io.PrintStream;
 import java.lang.management.ManagementFactory;
@@ -23,7 +25,8 @@ import java.util.Map;
  * <ul>
  *   <li>serial vs parallel multi-file parse (Groovy-style front ends)</li>
  *   <li>warm shared DFA vs cold (clear-per-file) ATN hot paths</li>
- *   <li>SLL / two-stage prediction strategies</li>
+ *   <li>SLL, LL, two-stage, and {@code ProfilingATNSimulator} strategies</li>
+ *   <li>lexer {@code reset}/{@code setInputStream} reuse</li>
  *   <li>trimmed-mean timing with explicit warmup passes</li>
  * </ul>
  *
@@ -170,6 +173,22 @@ public final class ComparativeParseHarness {
 				ParseWorkload.PredictionStrategy.LL, false, false, threads, warmup, iters));
 		}
 
+		// --- supplemental probes (after the 13 product cells so ProfilingATNSimulator
+		//     / reportAmbiguities cannot mutate the shared DFA those cells walk) ---
+		results.add(runLexReuse("lex_reset_reuse_warm", single, warmup, iters));
+		results.add(runParse("parse_single_sll_warm", single,
+			ParseWorkload.PredictionStrategy.SLL, false, warmup, iters));
+		results.add(runBatch("batch_serial_sll_warm", corpus,
+			ParseWorkload.PredictionStrategy.SLL, false, false, 1, warmup, iters));
+		if (!skipParallel) {
+			results.add(runBatch("batch_parallel_sll_warm", corpus,
+				ParseWorkload.PredictionStrategy.SLL, false, false, threads, warmup, iters));
+		}
+		results.add(runParse("parse_single_profiling_warm", single,
+			ParseWorkload.PredictionStrategy.PROFILING, false, warmup, iters));
+		results.add(runBatch("batch_serial_profiling_warm", corpus,
+			ParseWorkload.PredictionStrategy.PROFILING, false, false, 1, warmup, iters));
+
 		printTsv(System.out, label, results);
 		printSummary(System.err, label, results);
 	}
@@ -188,6 +207,27 @@ public final class ComparativeParseHarness {
 			ns[i] = System.nanoTime() - t0;
 		}
 		return toResult(name, 1, clearDfa, "LEX", 1, file.charCount, iters, ns, tokens, 0);
+	}
+
+	/**
+	 * Same source rebound onto one lexer via {@link Lexer#setInputStream}
+	 * (calls {@link Lexer#reset}). Isolates the reset / interp-reset path
+	 * from lexer construction.
+	 */
+	private static ScenarioResult runLexReuse(String name, CorpusLoader.SourceFile file,
+											  int warmup, int iters) {
+		Lexer lexer = ParseWorkload.JAVA.newLexer(file.text);
+		for (int i = 0; i < warmup; i++) {
+			ParseWorkload.lexReuse(lexer, file.text);
+		}
+		long[] ns = new long[iters];
+		long tokens = 0;
+		for (int i = 0; i < iters; i++) {
+			long t0 = System.nanoTime();
+			tokens = ParseWorkload.lexReuse(lexer, file.text);
+			ns[i] = System.nanoTime() - t0;
+		}
+		return toResult(name, 1, false, "LEX_REUSE", 1, file.charCount, iters, ns, tokens, 0);
 	}
 
 	private static ScenarioResult runParse(String name, CorpusLoader.SourceFile file,

@@ -70,4 +70,12 @@ public class TestGroovySerialParallelParse {
 		int sll = GroovyParseWorkload.parseFile(src, ParseWorkload.PredictionStrategy.SLL, false, false);
 		assertEquals(two, sll);
 	}
+
+	@Test
+	public void profilingAgreesWithTwoStageOnValidInput() {
+		String src = GroovyCorpus.fileText(2, 3);
+		int two = GroovyParseWorkload.parseFile(src, ParseWorkload.PredictionStrategy.TWO_STAGE, false, false);
+		int prof = GroovyParseWorkload.parseFile(src, ParseWorkload.PredictionStrategy.PROFILING, false, false);
+		assertEquals(two, prof);
+	}
 }
