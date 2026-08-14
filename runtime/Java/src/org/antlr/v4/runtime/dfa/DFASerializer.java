@@ -74,7 +74,7 @@ public class DFASerializer {
 		StringBuilder buf = new StringBuilder();
 
 		if ( dfa.states!=null ) {
-			List<DFAState> states = new ArrayList<DFAState>(dfa.states.values());
+			List<DFAState> states = new ArrayList<>(dfa.states.values());
 			states.sort(Comparator.comparingInt(o -> o.stateNumber));
 
 			for (DFAState s : states) {

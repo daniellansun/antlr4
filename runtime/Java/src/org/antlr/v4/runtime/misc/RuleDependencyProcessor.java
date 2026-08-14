@@ -81,11 +81,11 @@ public class RuleDependencyProcessor extends AbstractProcessor {
 
 		List<Tuple2<RuleDependency, Element>> dependencies = getDependencies(roundEnv);
 		Map<TypeMirror, List<Tuple2<RuleDependency, Element>>> recognizerDependencies
-			= new HashMap<TypeMirror, List<Tuple2<RuleDependency, Element>>>();
+			= new HashMap<>();
 		for (Tuple2<RuleDependency, Element> dependency : dependencies) {
 			TypeMirror recognizerType = getRecognizerType(dependency.getItem1());
 			List<Tuple2<RuleDependency, Element>> list =
-					recognizerDependencies.computeIfAbsent(recognizerType, k -> new ArrayList<Tuple2<RuleDependency, Element>>());
+					recognizerDependencies.computeIfAbsent(recognizerType, k -> new ArrayList<>());
 			list.add(dependency);
 		}
 
@@ -387,7 +387,7 @@ public class RuleDependencyProcessor extends AbstractProcessor {
 	}
 
 	private String[] getRuleNames(TypeMirror recognizerClass) {
-		List<String> result = new ArrayList<String>();
+		List<String> result = new ArrayList<>();
 
 		List<? extends Element> elements = processingEnv.getElementUtils().getAllMembers((TypeElement)processingEnv.getTypeUtils().asElement(recognizerClass));
 		for (Element element : elements) {
@@ -427,7 +427,7 @@ public class RuleDependencyProcessor extends AbstractProcessor {
 	}
 
 	public static List<Tuple2<RuleDependency, Element>> getDependencies(RoundEnvironment roundEnv) {
-		List<Tuple2<RuleDependency, Element>> result = new ArrayList<Tuple2<RuleDependency, Element>>();
+		List<Tuple2<RuleDependency, Element>> result = new ArrayList<>();
 		Set<? extends Element> elements = roundEnv.getElementsAnnotatedWith(RuleDependency.class);
 		for (Element element : elements) {
 			RuleDependency dependency = element.getAnnotation(RuleDependency.class);

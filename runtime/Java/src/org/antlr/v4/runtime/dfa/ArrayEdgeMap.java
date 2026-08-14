@@ -28,7 +28,7 @@ public final class ArrayEdgeMap<T> extends AbstractEdgeMap<T> {
 	@SuppressWarnings("unchecked")
 	public ArrayEdgeMap(int minIndex, int maxIndex) {
 		super(minIndex, maxIndex);
-		arrayData = new AtomicReferenceArray<T>(maxIndex - minIndex + 1);
+		arrayData = new AtomicReferenceArray<>(maxIndex - minIndex + 1);
 		size = new AtomicInteger();
 	}
 
@@ -127,7 +127,7 @@ public final class ArrayEdgeMap<T> extends AbstractEdgeMap<T> {
 
 	@Override
 	public EmptyEdgeMap<T> clear() {
-		return new EmptyEdgeMap<T>(minIndex, maxIndex);
+		return new EmptyEdgeMap<>(minIndex, maxIndex);
 	}
 
 	@Override
@@ -136,7 +136,7 @@ public final class ArrayEdgeMap<T> extends AbstractEdgeMap<T> {
 			return Collections.emptyMap();
 		}
 
-		Map<Integer, T> result = new LinkedHashMap<Integer, T>();
+		Map<Integer, T> result = new LinkedHashMap<>();
 		for (int i = 0; i < arrayData.length(); i++) {
 			T element = arrayData.get(i);
 			if (element == null) {

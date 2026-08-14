@@ -48,7 +48,7 @@ public class ParseInfo {
 	@NotNull
 	public List<Integer> getLLDecisions() {
 		DecisionInfo[] decisions = atnSimulator.getDecisionInfo();
-		List<Integer> LL = new ArrayList<Integer>();
+		List<Integer> LL = new ArrayList<>();
 		for (int i=0; i<decisions.length; i++) {
 			long fallBack = decisions[i].LL_Fallback;
 			if ( fallBack>0 ) LL.add(i);

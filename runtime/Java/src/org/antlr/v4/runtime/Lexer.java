@@ -360,7 +360,7 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 	 *  Forces load of all tokens. Does not include EOF token.
 	 */
 	public List<? extends Token> getAllTokens() {
-		List<Token> tokens = new ArrayList<Token>();
+		List<Token> tokens = new ArrayList<>();
 		Token t = nextToken();
 		while ( t.getType()!=Token.EOF ) {
 			tokens.add(t);

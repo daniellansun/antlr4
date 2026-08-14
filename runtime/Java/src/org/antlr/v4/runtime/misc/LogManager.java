@@ -46,7 +46,7 @@ public class LogManager {
 		r.component = component;
 		r.msg = msg;
 		if ( records==null ) {
-			records = new ArrayList<Record>();
+			records = new ArrayList<>();
 		}
 		records.add(r);
 	}

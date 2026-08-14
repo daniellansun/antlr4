@@ -16,14 +16,14 @@ public class MultiMap<K, V> extends LinkedHashMap<K, List<V>> {
 	public void map(K key, V value) {
 		List<V> elementsForKey = get(key);
 		if ( elementsForKey==null ) {
-			elementsForKey = new ArrayList<V>();
+			elementsForKey = new ArrayList<>();
 			super.put(key, elementsForKey);
 		}
 		elementsForKey.add(value);
 	}
 
 	public List<Tuple2<K, V>> getPairs() {
-		List<Tuple2<K, V>> pairs = new ArrayList<Tuple2<K, V>>();
+		List<Tuple2<K, V>> pairs = new ArrayList<>();
 		for (K key : keySet()) {
 			for (V value : get(key)) {
 				pairs.add(Tuple.create(key, value));

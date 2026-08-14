@@ -269,7 +269,7 @@ public class DFAState {
 					map.put(PredictionContext.EMPTY_FULL_STATE_KEY, map.remove(-1));
 				} catch (UnsupportedOperationException ex) {
 					// handles read only, non-singleton maps
-					map = new LinkedHashMap<Integer, DFAState>(map);
+					map = new LinkedHashMap<>(map);
 					map.put(PredictionContext.EMPTY_FULL_STATE_KEY, map.remove(-1));
 				}
 			}

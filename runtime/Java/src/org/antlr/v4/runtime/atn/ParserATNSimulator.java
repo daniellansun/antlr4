@@ -352,7 +352,7 @@ public class ParserATNSimulator extends ATNSimulator {
 	 * public/protected signature).
 	 */
 	private final ClearableIntObjectHashMap<PredictionContext> retainedPrecedenceAlt1 =
-		new ClearableIntObjectHashMap<PredictionContext>();
+		new ClearableIntObjectHashMap<>();
 
 	/** Testing only! */
 	public ParserATNSimulator(@NotNull ATN atn) {
@@ -1575,7 +1575,7 @@ public class ParserATNSimulator extends ATNSimulator {
 	}
 
 	protected DFAState.PredPrediction[] getPredicatePredictions(BitSet ambigAlts, SemanticContext[] altToPred) {
-		List<DFAState.PredPrediction> pairs = new ArrayList<DFAState.PredPrediction>();
+		List<DFAState.PredPrediction> pairs = new ArrayList<>();
 		boolean containsPredicate = false;
 		for (int i = 1; i < altToPred.length; i++) {
 			SemanticContext pred = altToPred[i];
@@ -1907,7 +1907,7 @@ public class ParserATNSimulator extends ATNSimulator {
 			return null;
 		}
 
-		List<ATNConfig> configs = new ArrayList<ATNConfig>(configset);
+		List<ATNConfig> configs = new ArrayList<>(configset);
 		configs.sort(STATE_ALT_SORT_COMPARATOR);
 
 		boolean exact = !configset.getDipsIntoOuterContext();

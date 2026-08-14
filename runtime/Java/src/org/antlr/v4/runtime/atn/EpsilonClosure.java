@@ -64,7 +64,7 @@ final class EpsilonClosure {
 	 * {@link ATNConfig#equals}.</p>
 	 */
 	private final Set<ATNConfig> closureBusy =
-		new OpenAddressedHashSet<ATNConfig>(ATNConfigSet.SCRATCH_CAPACITY_FLOOR);
+		new OpenAddressedHashSet<>(ATNConfigSet.SCRATCH_CAPACITY_FLOOR);
 
 	/**
 	 * Double-buffer scratch sets for BFS rule-transition layering when

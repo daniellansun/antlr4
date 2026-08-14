@@ -65,9 +65,9 @@ public class PredictionContextCache {
 	private PredictionContextCache(boolean enableCache) {
 		this.enableCache = enableCache;
 		if (enableCache) {
-			this.contexts = new HashMap<PredictionContext, PredictionContext>();
-			this.childContexts = new HashMap<PredictionContextAndInt, PredictionContext>();
-			this.joinContexts = new HashMap<IdentityCommutativePredictionContextOperands, PredictionContext>();
+			this.contexts = new HashMap<>();
+			this.childContexts = new HashMap<>();
+			this.joinContexts = new HashMap<>();
 			this.childProbe = new ChildKeyProbe();
 			this.joinProbe = new JoinKeyProbe();
 		}

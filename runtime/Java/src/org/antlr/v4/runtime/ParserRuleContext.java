@@ -107,7 +107,7 @@ public class ParserRuleContext extends RuleContext {
 
 		// copy any error nodes to alt label node
 		if ( ctx.children!=null ) {
-			this.children = new ArrayList<ParseTree>(Math.max(CHILDREN_INITIAL_CAPACITY, ctx.children.size()));
+			this.children = new ArrayList<>(Math.max(CHILDREN_INITIAL_CAPACITY, ctx.children.size()));
 			// reset parent pointer for any error nodes
 			for (ParseTree child : ctx.children) {
 				if (child instanceof ErrorNodeImpl) {
@@ -149,7 +149,7 @@ public class ParserRuleContext extends RuleContext {
 	public <T extends ParseTree> T addAnyChild(T t) {
 		assert t.getParent() == null || t.getParent() == this;
 
-		if ( children==null ) children = new ArrayList<ParseTree>(CHILDREN_INITIAL_CAPACITY);
+		if ( children==null ) children = new ArrayList<>(CHILDREN_INITIAL_CAPACITY);
 		children.add(t);
 		return t;
 	}
@@ -274,7 +274,7 @@ public class ParserRuleContext extends RuleContext {
 				Token symbol = tnode.getSymbol();
 				if ( symbol.getType()==ttype ) {
 					if ( tokens==null ) {
-						tokens = new ArrayList<TerminalNode>();
+						tokens = new ArrayList<>();
 					}
 					tokens.add(tnode);
 				}
@@ -301,7 +301,7 @@ public class ParserRuleContext extends RuleContext {
 		for (ParseTree o : children) {
 			if ( ctxType.isInstance(o) ) {
 				if ( contexts==null ) {
-					contexts = new ArrayList<T>();
+					contexts = new ArrayList<>();
 				}
 
 				contexts.add(ctxType.cast(o));
@@ -329,13 +329,13 @@ public class ParserRuleContext extends RuleContext {
 		return Interval.of(start.getTokenIndex(), stop.getTokenIndex());
 	}
 
-	/** 
-	 * Get the initial token in this context. 
+	/**
+	 * Get the initial token in this context.
 	 * Note that the range from start to stop is inclusive, so for rules that do not consume anything
 	 * (for example, zero length or error productions) this token may exceed stop.
 	 */
 	public Token getStart() { return start; }
-	/** 
+	/**
 	 * Get the final token in this context.
 	 * Note that the range from start to stop is inclusive, so for rules that do not consume anything
 	 * (for example, zero length or error productions) this token may precede start.

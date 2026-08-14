@@ -76,7 +76,7 @@ public class ATNDeserializer {
 		ADDED_LEXER_ACTIONS = UUID.fromString("AB35191A-1603-487E-B75A-479B831EAF6D");
 		ADDED_UNICODE_SMP = UUID.fromString("C23FEA89-0605-4f51-AFB8-058BCAB8C91B");
 
-		SUPPORTED_UUIDS = new ArrayList<UUID>();
+		SUPPORTED_UUIDS = new ArrayList<>();
 		SUPPORTED_UUIDS.add(BASE_SERIALIZED_UUID);
 		SUPPORTED_UUIDS.add(ADDED_LEXER_ACTIONS);
 		SUPPORTED_UUIDS.add(ADDED_UNICODE_SMP);
@@ -246,8 +246,8 @@ public class ATNDeserializer {
 		//
 		// STATES
 		//
-		List<Tuple2<LoopEndState, Integer>> loopBackStateNumbers = new ArrayList<Tuple2<LoopEndState, Integer>>();
-		List<Tuple2<BlockStartState, Integer>> endStateNumbers = new ArrayList<Tuple2<BlockStartState, Integer>>();
+		List<Tuple2<LoopEndState, Integer>> loopBackStateNumbers = new ArrayList<>();
+		List<Tuple2<BlockStartState, Integer>> endStateNumbers = new ArrayList<>();
 		int nstates = toInt(data[p++]);
 		for (int i=0; i<nstates; i++) {
 			int stype = toInt(data[p++]);
@@ -362,7 +362,7 @@ public class ATNDeserializer {
 		//
 		// SETS
 		//
-		List<IntervalSet> sets = new ArrayList<IntervalSet>();
+		List<IntervalSet> sets = new ArrayList<>();
 
 		// First, read all sets with 16-bit Unicode code points <= U+FFFF.
 		p = deserializeSets(data, p, sets, getUnicodeDeserializer(UnicodeDeserializingMode.UNICODE_BMP));
@@ -398,7 +398,7 @@ public class ATNDeserializer {
 
 		// edges for rule stop states can be derived, so they aren't serialized
 		// Map rule stop state -> return state -> outermost precedence return
-		Set<Tuple3<Integer, Integer, Integer>> returnTransitions = new LinkedHashSet<Tuple3<Integer, Integer, Integer>>();
+		Set<Tuple3<Integer, Integer, Integer>> returnTransitions = new LinkedHashSet<>();
 		for (ATNState state : atn.states) {
 			boolean returningToLeftFactored = state.ruleIndex >= 0 && atn.ruleToStartState[state.ruleIndex].leftFactored;
 			for (int i = 0; i < state.getNumberOfTransitions(); i++) {
@@ -503,7 +503,7 @@ public class ATNDeserializer {
 				// for compatibility with older serialized ATNs, convert the old
 				// serialized action index for action transitions to the new
 				// form, which is the index of a LexerCustomAction
-				List<LexerAction> legacyLexerActions = new ArrayList<LexerAction>();
+				List<LexerAction> legacyLexerActions = new ArrayList<>();
 				for (ATNState state : atn.states) {
 					for (int i = 0; i < state.getNumberOfTransitions(); i++) {
 						Transition transition = state.transition(i);
@@ -693,7 +693,7 @@ public class ATNDeserializer {
 		// deserialization). Keep JDK collections here; primitive maps are
 		// reserved for prediction hot paths.
 		Map<Integer, StarLoopEntryState> rulePrecedenceDecisions =
-			new HashMap<Integer, StarLoopEntryState>();
+			new HashMap<>();
 
 		for (ATNState state : atn.states) {
 			if (!(state instanceof StarLoopEntryState)) {
@@ -879,7 +879,7 @@ public class ATNDeserializer {
 				}
 
 				if (optimizedTransitions == null) {
-					optimizedTransitions = new ArrayList<Transition>();
+					optimizedTransitions = new ArrayList<>();
 					for (int j = 0; j < i; j++) {
 						optimizedTransitions.add(state.getOptimizedTransition(i));
 					}
@@ -970,7 +970,7 @@ public class ATNDeserializer {
 
 				removedEdges++;
 				if (optimizedTransitions == null) {
-					optimizedTransitions = new ArrayList<Transition>();
+					optimizedTransitions = new ArrayList<>();
 					for (int j = 0; j < i; j++) {
 						optimizedTransitions.add(state.getOptimizedTransition(j));
 					}
@@ -1044,7 +1044,7 @@ public class ATNDeserializer {
 				continue;
 			}
 
-			List<Transition> optimizedTransitions = new ArrayList<Transition>();
+			List<Transition> optimizedTransitions = new ArrayList<>();
 			for (int i = 0; i < decision.getNumberOfOptimizedTransitions(); i++) {
 				if (!setTransitions.contains(i)) {
 					optimizedTransitions.add(decision.getOptimizedTransition(i));
@@ -1141,7 +1141,7 @@ public class ATNDeserializer {
 		}
 
 		BitSet reachable = new BitSet(atn.states.size());
-		Deque<ATNState> worklist = new ArrayDeque<ATNState>();
+		Deque<ATNState> worklist = new ArrayDeque<>();
 		worklist.add(transition.followState);
 		while (!worklist.isEmpty()) {
 			ATNState state = worklist.pop();

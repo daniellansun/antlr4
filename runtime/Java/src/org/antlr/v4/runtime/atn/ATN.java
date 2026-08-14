@@ -28,14 +28,14 @@ public class ATN {
 	public static final int INVALID_ALT_NUMBER = 0;
 
 	@NotNull
-	public final List<ATNState> states = new ArrayList<ATNState>();
+	public final List<ATNState> states = new ArrayList<>();
 
 	/** Each subrule/rule is a decision point and we must track them so we
 	 *  can go back later and build DFA predictors for them.  This includes
 	 *  all the rules, subrules, optional blocks, ()+, ()* etc...
 	 */
 	@NotNull
-	public final List<DecisionState> decisionToState = new ArrayList<DecisionState>();
+	public final List<DecisionState> decisionToState = new ArrayList<>();
 
 	/**
 	 * Maps from rule index to starting state number.
@@ -49,7 +49,7 @@ public class ATN {
 
 	@NotNull
 	public final Map<String, TokensStartState> modeNameToStartState =
-		new LinkedHashMap<String, TokensStartState>();
+		new LinkedHashMap<>();
 
 	/**
 	 * The type of the ATN.
@@ -79,10 +79,10 @@ public class ATN {
 	public LexerAction[] lexerActions;
 
 	@NotNull
-	public final List<TokensStartState> modeToStartState = new ArrayList<TokensStartState>();
+	public final List<TokensStartState> modeToStartState = new ArrayList<>();
 
 	private final ConcurrentMap<PredictionContext, PredictionContext> contextCache =
-		new ConcurrentHashMap<PredictionContext, PredictionContext>();
+		new ConcurrentHashMap<>();
 
 	@NotNull
 	public DFA[] decisionToDFA = new DFA[0];
