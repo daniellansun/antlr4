@@ -248,6 +248,11 @@ public class ProfilingATNSimulator extends ParserATNSimulator {
 		return decisions;
 	}
 
+	/**
+	 * Simulator position for the prediction most recently in flight (or just
+	 * completed). The returned object is not reused; later predictions do not
+	 * mutate a previously returned instance.
+	 */
 	public SimulatorState getCurrentState() {
 		return currentState;
 	}

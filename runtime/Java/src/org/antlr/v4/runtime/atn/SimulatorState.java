@@ -9,29 +9,25 @@ import org.antlr.v4.runtime.dfa.DFAState;
 import org.antlr.v4.runtime.misc.NotNull;
 
 /**
- * Snapshot of DFA simulation position for {@link ParserATNSimulator#execDFA}
- * / {@link ParserATNSimulator#execATN}.
+ * Immutable snapshot of DFA simulation position for
+ * {@link ParserATNSimulator#execDFA} / {@link ParserATNSimulator#execATN}.
  *
- * <p>The simulator may recycle the instance returned by
- * {@link ParserATNSimulator#getStartState} for the next prediction. Treat
- * field values as valid only until the next {@code adaptivePredict} on the
- * same simulator.</p>
+ * <p>Each call to {@link ParserATNSimulator#getStartState} returns a fresh
+ * instance. Callers (including {@link ProfilingATNSimulator} and
+ * {@link DecisionEventInfo}) may retain the reference after prediction
+ * returns.</p>
  *
  * @author Sam Harwell
  */
 public class SimulatorState {
-	public ParserRuleContext outerContext;
+	public final ParserRuleContext outerContext;
 
-	public DFAState s0;
+	public final DFAState s0;
 
-	public boolean useContext;
-	public ParserRuleContext remainingOuterContext;
+	public final boolean useContext;
+	public final ParserRuleContext remainingOuterContext;
 
 	public SimulatorState(ParserRuleContext outerContext, @NotNull DFAState s0, boolean useContext, ParserRuleContext remainingOuterContext) {
-		assign(outerContext, s0, useContext, remainingOuterContext);
-	}
-
-	final void assign(ParserRuleContext outerContext, @NotNull DFAState s0, boolean useContext, ParserRuleContext remainingOuterContext) {
 		this.outerContext = outerContext != null ? outerContext : ParserRuleContext.emptyContext();
 		this.s0 = s0;
 		this.useContext = useContext;

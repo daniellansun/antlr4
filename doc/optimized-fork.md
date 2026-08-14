@@ -333,7 +333,7 @@ the hot path, without changing parse semantics.
 | Generated pattern | Before | After | Why |
 | --- | --- | --- | --- |
 | LL(\*) decisions | `getInterpreter().adaptivePredict(_input, d, _ctx)` | private `_adaptivePredict(d)` → `_interp.adaptivePredict(...)` | one monomorphic helper; no virtual `getInterpreter()` per decision |
-| Decision / loop resync | `_errHandler.sync(this)` at every site | private `_sync()` → `if (errorSyncEnabled()) _errHandler.sync(this)` | two-stage SLL skips the virtual call; flag is cached from `ANTLRErrorStrategy.isSyncRequired()` (not a `getClass()` test) |
+| Decision / loop resync | `_errHandler.sync(this)` at every site | private `_sync()` → `if (errorSyncEnabled) _errHandler.sync(this)` | two-stage SLL skips the virtual call; flag is the field cached by `setErrorHandler` from `ANTLRErrorStrategy.isSyncRequired()` (not a `getClass()` test) |
 | Rule context ctor | `new XContext(_ctx, getState())` | unchanged (`getState()` is `final` and inlines) | generated code does not reach into `_stateNumber` |
 | Set match | `_input.LA(1)` + `consume()` | `Token _st = _input.LT(1)` + `consume(_st)` | no second LT(1) on the success path |
 | Star/plus exit test | FQN `org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER` | unchanged (must stay FQN) | a token named `ATN` would shadow the type import |
@@ -351,7 +351,7 @@ Runtime counterparts used heavily by generated call sites:
 | `Parser.match` / `matchWildcard` / `consume(Token)` | reuse the already-fetched LT(1); no second lookup. `consume(Token)` is `protected` |
 | `Parser.setErrorHandler` | caches `handler.isSyncRequired()` (default `true`; `BailErrorStrategy` returns `false`) |
 | `Parser.enterRule` | `setState(state)` (`final`, inlines to the same field write) |
-| `ParserATNSimulator.adaptivePredict` | warm SLL start is an `s0` load then the private `execDFA` body with locals (no `SimulatorState`). Subclasses opt into `getStartState` via `snapshotStartState()` (not `getClass`). Skip `seek` when prediction did not consume |
+| `ParserATNSimulator.adaptivePredict` | warm SLL start is an `s0` load then the private `execDFA` body with locals (no `SimulatorState`). Subclasses opt into `getStartState` via `snapshotStartState()` (not `getClass`). `getStartState` always returns a **fresh** immutable `SimulatorState` so `ProfilingATNSimulator` / `DecisionEventInfo` can retain it. Skip `seek` when prediction did not consume |
 | `BufferedTokenStream.seek` | no-op (keep `cachedLT1`) when already at the target index |
 | `Lexer.nextToken` / `getLine` / `getCharPositionInLine` | use `_interp` directly (no `getInterpreter()`) |
 | `ParserRuleContext.addAnyChild` | children list starts at capacity 4 (not the JDK default of 10) |

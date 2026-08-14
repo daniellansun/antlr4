@@ -338,4 +338,11 @@ public class TestLexerCoverage {
 		// second call also EOF
 		assertEquals(Token.EOF, lexer.nextToken().getType());
 	}
+
+	@Test
+	public void resetWithoutInterpreterIsSafe() {
+		LexerInterpreter lexer = lex(buildSkipLexer(), "a", "A", "WS");
+		lexer.setInterpreter(null);
+		lexer.reset();
+	}
 }
