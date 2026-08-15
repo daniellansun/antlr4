@@ -1,29 +1,25 @@
-# https://docs.codecov.io/docs/codecov-yaml
-# https://github.com/codecov/support/wiki/Codecov-Yaml
+# https://docs.codecov.io/docs/ignoring-paths
 #
-# Product coverage is runtime/Java/src + tool/src only. After 7ca827345 the
-# v5 uploader started attaching runtime/Java/test (same packages as main)
-# as 0% files (~15k executable lines). That alone moved the headline from
-# ~81% to ~47%. Ignore test/benchmark/doc trees so they cannot be path-fixed
-# back into the total.
+# Patterns are regex *and* glob. A path without /**/* is only a prefix;
+# folder/* does not recurse. This repo names tests TestFoo.java (JUnit 3/4
+# prefix), not FooTest.java, so **/*Test.java matches nothing useful.
 
 ignore:
-  - "runtime/Java/test"
-  - "tool/test"
-  - "perf-testsuite"
-  - "doc"
-  - "runtime/CSharp"
-  - "runtime/Cpp"
-  - "runtime/Python2"
-  - "runtime/Python3"
-  - "runtime/JavaScript"
-  - "runtime/Go"
-  - "runtime/Swift"
-  - "runtime/PHP"
-  - "runtime/Dart"
-  - "runtime/ObjC"
-  - "**/*Test.java"
-  - "**/src/test/**"
+  - "runtime/Java/test/**/*"
+  - "tool/test/**/*"
+  - "perf-testsuite/**/*"
+  - "doc/**/*"
+  - "runtime/CSharp/**/*"
+  - "runtime/Cpp/**/*"
+  - "runtime/Python2/**/*"
+  - "runtime/Python3/**/*"
+  - "runtime/JavaScript/**/*"
+  - "runtime/Go/**/*"
+  - "runtime/Swift/**/*"
+  - "runtime/PHP/**/*"
+  - "runtime/Dart/**/*"
+  - "runtime/ObjC/**/*"
+  - "**/Test*.java"
 
 coverage:
   status:

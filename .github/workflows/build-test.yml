@@ -58,11 +58,10 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          # Only product JaCoCo reports. Searching the tree also picked up
-          # perf-testsuite / jacoco-aggregate XML (generated Java.g4 parser
-          # plus a thin runtime exec) which diluted the headline number.
+          # Comma-separated: v5 + disable_search treats a YAML block as one
+          # path (including the newline), finds nothing, exits 0, and Codecov
+          # keeps the previous 47% commit (8cfd017 is 404 on the API).
           disable_search: true
-          files: |
-            runtime/Java/target/site/jacoco/jacoco.xml
-            tool/target/site/jacoco/jacoco.xml
+          files: runtime/Java/target/site/jacoco/jacoco.xml,tool/target/site/jacoco/jacoco.xml
+          fail_ci_if_error: true
           verbose: true
