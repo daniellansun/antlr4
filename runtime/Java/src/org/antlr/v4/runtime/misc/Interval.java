@@ -11,7 +11,21 @@ public class Interval {
 
 	public static final Interval INVALID = new Interval(-1,-2);
 
-	private static final Interval[] cache = new Interval[INTERVAL_POOL_MAX_VALUE+1];
+	/**
+	 * Shared {@code n..n} instances for {@code 0..INTERVAL_POOL_MAX_VALUE}.
+	 * Filled during class initialization (JLS 12.4.2) so {@link #of} never
+	 * publishes a slot under a data race. Upstream #4902 deleted this table
+	 * because the previous lazy fill was not thread-safe and could hand
+	 * {@link org.antlr.v4.runtime.CommonToken#getText()} a wrong range; eager
+	 * init keeps the allocation win without that race.
+	 */
+	private static final Interval[] cache = new Interval[INTERVAL_POOL_MAX_VALUE + 1];
+
+	static {
+		for (int i = 0; i < cache.length; i++) {
+			cache[i] = new Interval(i, i);
+		}
+	}
 
 	/** The start of the interval. */
 	public final int a;
@@ -20,21 +34,16 @@ public class Interval {
 
 	public Interval(int a, int b) { this.a=a; this.b=b; }
 
-	/** Interval objects are used readonly so share all with the
-	 *  same single value a==b up to some max size.  Use an array as a perfect hash.
-	 *  Return shared object for 0..INTERVAL_POOL_MAX_VALUE or a new
-	 *  Interval object with a..a in it.  On Java.g4, 218623 IntervalSets
-	 *  have a..a (set with 1 element).
+	/**
+	 * Returns a shared instance when {@code a == b} and
+	 * {@code 0 <= a <= INTERVAL_POOL_MAX_VALUE}; otherwise a new interval.
+	 * Callers must treat the result as immutable.
 	 */
 	public static Interval of(int a, int b) {
-		// cache just a..a
-		if ( a!=b || a<0 || a>INTERVAL_POOL_MAX_VALUE ) {
-			return new Interval(a,b);
+		if (a == b && a >= 0 && a <= INTERVAL_POOL_MAX_VALUE) {
+			return cache[a];
 		}
-		if ( cache[a]==null ) {
-			cache[a] = new Interval(a,a);
-		}
-		return cache[a];
+		return new Interval(a, b);
 	}
 
 	/** return number of elements between a and b inclusively. x..x is length 1.
