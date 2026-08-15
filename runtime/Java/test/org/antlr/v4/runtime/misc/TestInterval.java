@@ -7,9 +7,18 @@ package org.antlr.v4.runtime.misc;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -29,19 +38,66 @@ public class TestInterval {
 		Interval range = Interval.of(1, 2);
 		assertEquals(1, range.a);
 		assertEquals(2, range.b);
+		assertNotSame(range, Interval.of(1, 2));
 
 		Interval negative = Interval.of(-1, -1);
 		assertEquals(-1, negative.a);
+		assertNotSame(negative, Interval.of(-1, -1));
 
 		Interval large = Interval.of(Interval.INTERVAL_POOL_MAX_VALUE + 1,
 			Interval.INTERVAL_POOL_MAX_VALUE + 1);
 		assertEquals(Interval.INTERVAL_POOL_MAX_VALUE + 1, large.a);
+		assertNotSame(large, Interval.of(Interval.INTERVAL_POOL_MAX_VALUE + 1,
+			Interval.INTERVAL_POOL_MAX_VALUE + 1));
 
 		Interval boundary = Interval.of(0, 0);
 		assertSame(boundary, Interval.of(0, 0));
 
 		Interval maxPooled = Interval.of(Interval.INTERVAL_POOL_MAX_VALUE, Interval.INTERVAL_POOL_MAX_VALUE);
 		assertSame(maxPooled, Interval.of(Interval.INTERVAL_POOL_MAX_VALUE, Interval.INTERVAL_POOL_MAX_VALUE));
+	}
+
+	/**
+	 * Upstream #4901: a lazy {@code cache[a] == null} fill could publish a
+	 * half-initialized interval; {@link org.antlr.v4.runtime.CommonToken#getText()}
+	 * then returned the first character or the whole stream. Eager class-init
+	 * fill plus {@code final} fields must stay correct under contention.
+	 */
+	@Test
+	public void ofReturnsCorrectBoundsUnderContention() throws Exception {
+		final int threads = 8;
+		final int iters = 4000;
+		ExecutorService pool = Executors.newFixedThreadPool(threads);
+		final AtomicInteger errors = new AtomicInteger();
+		List<Callable<Void>> tasks = new ArrayList<Callable<Void>>(threads);
+		for (int t = 0; t < threads; t++) {
+			tasks.add(new Callable<Void>() {
+				@Override
+				public Void call() {
+					for (int i = 0; i < iters; i++) {
+						int v = i % (Interval.INTERVAL_POOL_MAX_VALUE + 3) - 1;
+						Interval single = Interval.of(v, v);
+						if (single.a != v || single.b != v) {
+							errors.incrementAndGet();
+						}
+						if (v >= 0 && v <= Interval.INTERVAL_POOL_MAX_VALUE
+							&& single != Interval.of(v, v)) {
+							errors.incrementAndGet();
+						}
+						Interval range = Interval.of(v, v + 2);
+						if (range.a != v || range.b != v + 2) {
+							errors.incrementAndGet();
+						}
+					}
+					return null;
+				}
+			});
+		}
+		for (Future<Void> f : pool.invokeAll(tasks)) {
+			f.get();
+		}
+		pool.shutdown();
+		assertEquals(0, errors.get());
 	}
 
 	@Test
