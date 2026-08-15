@@ -58,4 +58,11 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          # Only product JaCoCo reports. Searching the tree also picked up
+          # perf-testsuite / jacoco-aggregate XML (generated Java.g4 parser
+          # plus a thin runtime exec) which diluted the headline number.
+          disable_search: true
+          files: |
+            runtime/Java/target/site/jacoco/jacoco.xml
+            tool/target/site/jacoco/jacoco.xml
           verbose: true
