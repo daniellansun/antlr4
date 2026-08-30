@@ -8,6 +8,7 @@ package org.antlr.v4.runtime.atn;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
@@ -66,5 +67,25 @@ public class TestATNStateFreeze {
 		assertEquals(1, state.getNumberOfOptimizedTransitions());
 		state.freezeOptimizedTransitions();
 		assertSame(t1, state.getOptimizedTransition(0).target);
+		assertSame(state.frozenOptimizedTransitions()[0], state.getOptimizedTransition(0));
+	}
+
+	@Test
+	public void freezeStatesSnapshotServesGetCachedState() {
+		ATN atn = new ATN(ATNType.PARSER, 4);
+		BasicState s0 = new BasicState();
+		BasicState s1 = new BasicState();
+		atn.addState(s0);
+		atn.addState(s1);
+		assertNull(atn.statesSnapshot);
+		assertSame(s0, atn.getCachedState(0));
+		atn.freezeStatesSnapshot();
+		assertEquals(2, atn.statesSnapshot.length);
+		assertSame(s0, atn.getCachedState(0));
+		assertSame(s1, atn.getCachedState(1));
+		BasicState s2 = new BasicState();
+		atn.addState(s2);
+		assertNull(atn.statesSnapshot);
+		assertSame(s2, atn.getCachedState(2));
 	}
 }

@@ -76,6 +76,16 @@ public class TestBufferedTokenStream {
 		assertEquals(Token.EOF, tokens.LA(1));
 	}
 
+	@Test(expected = IllegalStateException.class)
+	public void consumeEofViaCachedLt1Throws() {
+		BufferedTokenStream tokens = stream(tok(1, "x"));
+		tokens.fill();
+		tokens.consume(); // now on EOF
+		assertEquals(Token.EOF, tokens.LA(1));
+		assertEquals(Token.EOF, tokens.cachedLT1().getType());
+		tokens.consume();
+	}
+
 	/**
 	 * Setup remains on-demand (only first token), preserving historic lexer /
 	 * parser error interleaving. Explicit {@link BufferedTokenStream#fill()}

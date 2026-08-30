@@ -73,6 +73,7 @@ public class DefaultErrorStrategy implements ANTLRErrorStrategy {
 	 */
 	protected void beginErrorCondition(@NotNull Parser recognizer) {
 		errorRecoveryMode = true;
+		recognizer.errorRecoveryMode = true;
 	}
 
 	/**
@@ -91,6 +92,7 @@ public class DefaultErrorStrategy implements ANTLRErrorStrategy {
 	 */
 	protected void endErrorCondition(@NotNull Parser recognizer) {
 		errorRecoveryMode = false;
+		recognizer.errorRecoveryMode = false;
 		lastErrorStates = null;
 		lastErrorIndex = -1;
 	}

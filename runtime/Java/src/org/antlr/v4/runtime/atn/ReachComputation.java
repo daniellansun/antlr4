@@ -135,7 +135,7 @@ final class ReachComputation {
 					/*if ( debug ) System.out.println("testing "+getTokenName(t)+" at "+c.toString());*/
 
 					ATNState cState = c.getState();
-					if (cState instanceof RuleStopState) {
+					if (cState.getStateType() == ATNState.RULE_STOP) {
 						assert c.getContext().isEmpty();
 						if (useContext && !c.getReachesIntoOuterContext() || t == IntStream.EOF) {
 							if (skippedStopStates == null) {
@@ -148,9 +148,10 @@ final class ReachComputation {
 						continue;
 					}
 
-					int n = cState.getNumberOfOptimizedTransitions();
+					Transition[] frozen = cState.frozenOptimizedTransitions();
+					int n = frozen != null ? frozen.length : cState.getNumberOfOptimizedTransitions();
 					for (int ti = 0; ti < n; ti++) {               // for each optimized transition
-						Transition trans = cState.getOptimizedTransition(ti);
+						Transition trans = frozen != null ? frozen[ti] : cState.getOptimizedTransition(ti);
 						ATNState target = simulator.getReachableTarget(c, trans, t);
 						if (target != null) {
 							intermediate.add(c.transform(target, false), contextCache);

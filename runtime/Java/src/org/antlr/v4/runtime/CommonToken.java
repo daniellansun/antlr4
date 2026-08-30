@@ -103,6 +103,33 @@ public class CommonToken implements WritableToken, Serializable {
 	}
 
 	/**
+	 * Constructs a token with start coordinates already known to the caller.
+	 *
+	 * <p>Used by {@link CommonTokenFactory} so emit does not first copy
+	 * <em>current</em> lexer line/column from {@code source} (the position
+	 * after the token was matched) and then overwrite them with the captured
+	 * start coordinates.</p>
+	 *
+	 * @param source token source pair shared by tokens from the same lexer
+	 * @param type token type
+	 * @param channel channel
+	 * @param start start char index
+	 * @param stop stop char index
+	 * @param line 1-based line of the first character
+	 * @param charPositionInLine 0-based column of the first character
+	 */
+	public CommonToken(@NotNull Tuple2<? extends TokenSource, CharStream> source, int type, int channel,
+					   int start, int stop, int line, int charPositionInLine) {
+		this.source = source;
+		this.type = type;
+		this.channel = channel;
+		this.start = start;
+		this.stop = stop;
+		this.line = line;
+		this.charPositionInLine = charPositionInLine;
+	}
+
+	/**
 	 * Constructs a new {@link CommonToken} with the specified token type and
 	 * text.
 	 *

@@ -9,12 +9,20 @@ package org.antlr.v4.codegen.model;
 import org.antlr.v4.codegen.OutputModelFactory;
 import org.antlr.v4.codegen.model.decl.Decl;
 import org.antlr.v4.codegen.model.decl.TokenTypeDecl;
+import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.atn.SetTransition;
 import org.antlr.v4.tool.ast.GrammarAST;
 
 public class MatchSet extends MatchToken {
 	@ModelElement public TestSetInline expr;
 	@ModelElement public CaptureNextTokenType capture;
+
+	/**
+	 * {@code true} when the matched set includes {@link Token#EOF}. Generated
+	 * set-match skips the EOF {@code matchedEOF} store when this is false
+	 * (the common operator / {@code sep} case).
+	 */
+	public final boolean setContainsEOF;
 
 	public MatchSet(OutputModelFactory factory, GrammarAST ast) {
 		super(factory, ast);
@@ -24,5 +32,6 @@ public class MatchSet extends MatchToken {
 		Decl d = new TokenTypeDecl(factory, expr.varName);
 		factory.getCurrentRuleFunction().addLocalDecl(d);
 		capture = new CaptureNextTokenType(factory,expr.varName);
+		setContainsEOF = st.set.contains(Token.EOF);
 	}
 }

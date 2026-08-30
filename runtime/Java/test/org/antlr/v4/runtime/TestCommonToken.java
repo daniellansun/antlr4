@@ -46,6 +46,39 @@ public class TestCommonToken {
 	}
 
 	@Test
+	public void factoryCreateUsesExplicitLineAndColumnCtor() {
+		TokenSource src = new MockTokenSource();
+		CharStream input = CharStreams.fromString("abc");
+		CommonToken t = new CommonTokenFactory().create(
+			Tuple.create(src, input), 7, null, Token.DEFAULT_CHANNEL, 0, 2, 4, 9);
+		assertEquals(7, t.getType());
+		assertEquals(4, t.getLine());
+		assertEquals(9, t.getCharPositionInLine());
+		assertEquals(0, t.getStartIndex());
+		assertEquals(2, t.getStopIndex());
+		assertEquals("abc", t.getText());
+	}
+
+	@Test
+	public void explicitLineColumnConstructorDoesNotQueryTokenSource() {
+		final int[] lineQueries = new int[1];
+		TokenSource src = new TokenSource() {
+			@Override public Token nextToken() { return new CommonToken(Token.EOF); }
+			@Override public int getLine() { lineQueries[0]++; return 99; }
+			@Override public int getCharPositionInLine() { lineQueries[0]++; return 99; }
+			@Override public CharStream getInputStream() { return null; }
+			@Override public String getSourceName() { return "probe"; }
+			@Override public TokenFactory getTokenFactory() { return CommonTokenFactory.DEFAULT; }
+			@Override public void setTokenFactory(TokenFactory factory) { }
+		};
+		CharStream input = CharStreams.fromString("z");
+		CommonToken t = new CommonToken(Tuple.create(src, input), 1, Token.DEFAULT_CHANNEL, 0, 0, 12, 3);
+		assertEquals(12, t.getLine());
+		assertEquals(3, t.getCharPositionInLine());
+		assertEquals(0, lineQueries[0]);
+	}
+
+	@Test
 	public void sourceConstructorCopiesLineAndColumn() {
 		TokenSource src = new MockTokenSource();
 		CharStream input = CharStreams.fromString("abc");

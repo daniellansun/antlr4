@@ -18,6 +18,13 @@ public class Loop extends Choice {
 	public int loopBackStateNumber;
 	public final int exitAlt;
 
+	/**
+	 * Alternative number that continues the loop. Greedy {@code *}/{@code +}
+	 * continue on alt 1; nongreedy continue on alt 2. Generated star/plus
+	 * loops compare against this instead of {@code != exitAlt && != INVALID}.
+	 */
+	public final int continueAlt;
+
 	@ModelElement public List<SrcOp> iteration;
 
 	public Loop(OutputModelFactory factory,
@@ -27,6 +34,7 @@ public class Loop extends Choice {
 		super(factory, blkOrEbnfRootAST, alts);
 		boolean nongreedy = (blkOrEbnfRootAST instanceof QuantifierAST) && !((QuantifierAST)blkOrEbnfRootAST).isGreedy();
 		exitAlt = nongreedy ? 1 : alts.size() + 1;
+		continueAlt = nongreedy ? 2 : 1;
 	}
 
 	public void addIterationOp(SrcOp op) {

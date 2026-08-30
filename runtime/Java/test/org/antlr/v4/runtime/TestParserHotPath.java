@@ -224,4 +224,64 @@ public class TestParserHotPath {
 		assertSame(first, tokens.LT(1));
 	}
 
+	@Test
+	public void consumeRecordsLastConsumedForExitRule() {
+		ParserInterpreter p = parser(1, 2);
+		p.setBuildParseTree(false);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		InterpreterRuleContext ctx = new InterpreterRuleContext(null, -1, 0);
+		p.setContext(ctx);
+		Token first = p.getInputStream().LT(1);
+		p.consume(first);
+		assertSame(first, p.lastConsumed);
+		p.exitRule();
+		assertSame(first, ctx.stop);
+	}
+
+	@Test
+	public void matchDoesNotCallReportMatchWhenNotRecovering() {
+		ParserInterpreter p = parser(1);
+		p.setBuildParseTree(false);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		p.setContext(new InterpreterRuleContext(null, -1, 0));
+		final int[] reports = new int[1];
+		p.setErrorHandler(new DefaultErrorStrategy() {
+			@Override
+			public void reportMatch(Parser recognizer) {
+				reports[0]++;
+				super.reportMatch(recognizer);
+			}
+		});
+		assertFalse(p.errorRecoveryMode);
+		p.match(1);
+		assertEquals("success path must skip reportMatch", 0, reports[0]);
+	}
+
+	@Test
+	public void matchCallsReportMatchWhileRecovering() {
+		ParserInterpreter p = parser(1);
+		p.setBuildParseTree(false);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		p.setContext(new InterpreterRuleContext(null, -1, 0));
+		final int[] reports = new int[1];
+		class ArmingStrategy extends DefaultErrorStrategy {
+			void arm(Parser rec) {
+				beginErrorCondition(rec);
+			}
+
+			@Override
+			public void reportMatch(Parser recognizer) {
+				reports[0]++;
+				super.reportMatch(recognizer);
+			}
+		}
+		ArmingStrategy strategy = new ArmingStrategy();
+		p.setErrorHandler(strategy);
+		strategy.arm(p);
+		assertTrue(p.errorRecoveryMode);
+		p.match(1);
+		assertEquals(1, reports[0]);
+		assertFalse("reportMatch must leave recovery", p.errorRecoveryMode);
+	}
+
 }

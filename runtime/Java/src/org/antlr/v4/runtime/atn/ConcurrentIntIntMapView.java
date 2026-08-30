@@ -44,13 +44,35 @@ final class ConcurrentIntIntMapView extends AbstractMap<Integer, Integer>
 	private final ConcurrentIntIntMap delegate;
 
 	/**
+	 * Owning ATN when this view is {@link ATN#LL1Table}; {@code null} for
+	 * standalone test instances. Dense LL(1) writes go through
+	 * {@link ATN#syncLl1Dense}.
+	 */
+	private final ATN atn;
+
+	/**
 	 * Lazily created entry-set view. Stateless wrapper over {@link #delegate};
 	 * safe to publish once.
 	 */
 	private transient Set<Entry<Integer, Integer>> entrySet;
 
 	ConcurrentIntIntMapView(ConcurrentIntIntMap delegate) {
+		this(null, delegate);
+	}
+
+	ConcurrentIntIntMapView(ATN atn) {
+		this(atn, atn.ll1Cache);
+	}
+
+	private ConcurrentIntIntMapView(ATN atn, ConcurrentIntIntMap delegate) {
+		this.atn = atn;
 		this.delegate = delegate;
+	}
+
+	private void syncDense(int packedKey, int alt) {
+		if (atn != null) {
+			atn.syncLl1Dense(packedKey, alt);
+		}
 	}
 
 	@Override
@@ -65,7 +87,10 @@ final class ConcurrentIntIntMapView extends AbstractMap<Integer, Integer>
 	@Override
 	public Integer put(Integer key, Integer value) {
 		requireKeyValue(key, value);
-		int prev = delegate.put(key.intValue(), value.intValue());
+		int k = key.intValue();
+		int v = value.intValue();
+		int prev = delegate.put(k, v);
+		syncDense(k, v);
 		return prev == ConcurrentIntIntMap.MISSING ? null : Integer.valueOf(prev);
 	}
 
@@ -74,13 +99,20 @@ final class ConcurrentIntIntMapView extends AbstractMap<Integer, Integer>
 		if (!(key instanceof Integer)) {
 			return null;
 		}
-		int prev = delegate.remove(((Integer) key).intValue());
+		int k = ((Integer) key).intValue();
+		int prev = delegate.remove(k);
+		if (prev != ConcurrentIntIntMap.MISSING) {
+			syncDense(k, 0);
+		}
 		return prev == ConcurrentIntIntMap.MISSING ? null : Integer.valueOf(prev);
 	}
 
 	@Override
 	public void clear() {
 		delegate.clear();
+		if (atn != null && atn.ll1Dense != null) {
+			java.util.Arrays.fill(atn.ll1Dense, (short) 0);
+		}
 	}
 
 	@Override
@@ -112,7 +144,12 @@ final class ConcurrentIntIntMapView extends AbstractMap<Integer, Integer>
 	@Override
 	public Integer putIfAbsent(Integer key, Integer value) {
 		requireKeyValue(key, value);
-		int existing = delegate.putIfAbsent(key.intValue(), value.intValue());
+		int k = key.intValue();
+		int v = value.intValue();
+		int existing = delegate.putIfAbsent(k, v);
+		if (existing == ConcurrentIntIntMap.MISSING) {
+			syncDense(k, v);
+		}
 		return existing == ConcurrentIntIntMap.MISSING ? null : Integer.valueOf(existing);
 	}
 
@@ -132,13 +169,22 @@ final class ConcurrentIntIntMapView extends AbstractMap<Integer, Integer>
 		if (oldValue == null) {
 			throw new NullPointerException();
 		}
-		return delegate.replace(key.intValue(), oldValue.intValue(), newValue.intValue());
+		boolean replaced = delegate.replace(key.intValue(), oldValue.intValue(), newValue.intValue());
+		if (replaced) {
+			syncDense(key.intValue(), newValue.intValue());
+		}
+		return replaced;
 	}
 
 	@Override
 	public Integer replace(Integer key, Integer value) {
 		requireKeyValue(key, value);
-		int prev = delegate.replace(key.intValue(), value.intValue());
+		int k = key.intValue();
+		int v = value.intValue();
+		int prev = delegate.replace(k, v);
+		if (prev != ConcurrentIntIntMap.MISSING) {
+			syncDense(k, v);
+		}
 		return prev == ConcurrentIntIntMap.MISSING ? null : Integer.valueOf(prev);
 	}
 

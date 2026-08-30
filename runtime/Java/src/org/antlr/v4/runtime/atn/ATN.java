@@ -30,6 +30,14 @@ public class ATN {
 	@NotNull
 	public final List<ATNState> states = new ArrayList<>();
 
+	/**
+	 * Snapshot of {@link #states} taken after ATN deserialization. Closure
+	 * pop-return uses this array (plain load) instead of {@link List#get}.
+	 * Invalidated by {@link #addState}/{@link #removeState}; rebuilt by
+	 * {@link #freezeStatesSnapshot()}.
+	 */
+	ATNState[] statesSnapshot;
+
 	/** Each subrule/rule is a decision point and we must track them so we
 	 *  can go back later and build DFA predictors for them.  This includes
 	 *  all the rules, subrules, optional blocks, ()+, ()* etc...
@@ -96,6 +104,18 @@ public class ATN {
 	final ConcurrentIntIntMap ll1Cache = new ConcurrentIntIntMap();
 
 	/**
+	 * Dense LL(1) table: {@code decision * ll1Stride + token → alt}. Zero is a
+	 * miss ({@link #INVALID_ALT_NUMBER}). Package-private; the public
+	 * {@link #LL1Table} view still wraps {@link #ll1Cache}. Hot
+	 * {@link ParserATNSimulator#adaptivePredict} reads this array instead of
+	 * hashing the packed key.
+	 */
+	short[] ll1Dense;
+
+	/** Column count of {@link #ll1Dense} ({@code maxTokenType + 1}). */
+	int ll1Stride;
+
+	/**
 	 * LL(1) prediction cache exposed as a JDK {@link ConcurrentMap} so
 	 * subclasses and tests keep a stable {@code protected} surface. Backed by
 	 * {@link #ll1Cache} (single store): external boxed access pays boxing only
@@ -110,7 +130,7 @@ public class ATN {
 	 * of the published COW table.</p>
 	 */
 	protected final ConcurrentMap<Integer, Integer> LL1Table =
-		new ConcurrentIntIntMapView(ll1Cache);
+		new ConcurrentIntIntMapView(this);
 
 	/** Used for runtime deserialization of ATNs from strings */
 	public ATN(@NotNull ATNType grammarType, int maxTokenType) {
@@ -169,6 +189,70 @@ public class ATN {
 		contextCache.clear();
 		// Clears the single primitive store (LL1Table is a view over ll1Cache).
 		ll1Cache.clear();
+		ensureLl1Dense(decisionCount);
+	}
+
+	/**
+	 * Rebuilds {@link #statesSnapshot} from {@link #states}. Called after ATN
+	 * deserialization so prediction can index states without {@link List#get}.
+	 */
+	final void freezeStatesSnapshot() {
+		int n = states.size();
+		ATNState[] snap = new ATNState[n];
+		for (int i = 0; i < n; i++) {
+			snap[i] = states.get(i);
+		}
+		statesSnapshot = snap;
+	}
+
+	/**
+	 * State at {@code stateNumber}, preferring the frozen snapshot.
+	 *
+	 * @param stateNumber ATN state number
+	 * @return the state, or {@code null} if the slot is empty
+	 */
+	final ATNState getCachedState(int stateNumber) {
+		ATNState[] snap = statesSnapshot;
+		if (snap != null && stateNumber >= 0 && stateNumber < snap.length) {
+			return snap[stateNumber];
+		}
+		return states.get(stateNumber);
+	}
+
+	/**
+	 * Mirror a packed {@code (decision, token)} entry into {@link #ll1Dense}.
+	 * Used when subclasses/tests write {@link #LL1Table}. No-op before the
+	 * dense table is allocated.
+	 */
+	final void syncLl1Dense(int packedKey, int alt) {
+		short[] dense = ll1Dense;
+		if (dense == null || ll1Stride <= 0) {
+			return;
+		}
+		int token = packedKey & 0xFFFF;
+		int decision = packedKey >>> 16;
+		int idx = decision * ll1Stride + token;
+		if (idx >= 0 && idx < dense.length) {
+			dense[idx] = (alt <= 0 || alt > Short.MAX_VALUE) ? 0 : (short) alt;
+		}
+	}
+
+	final void ensureLl1Dense(int decisionCount) {
+		int stride = maxTokenType + 1;
+		if (stride < 1) {
+			stride = 1;
+		}
+		int need = decisionCount * stride;
+		if (need < 0) {
+			need = 0;
+		}
+		if (ll1Dense == null || ll1Dense.length != need || ll1Stride != stride) {
+			ll1Dense = need == 0 ? new short[0] : new short[need];
+			ll1Stride = stride;
+		}
+		else {
+			Arrays.fill(ll1Dense, (short) 0);
+		}
 	}
 
 	public int getContextCacheSize() {
@@ -217,10 +301,15 @@ public class ATN {
 		}
 
 		states.add(state);
+		statesSnapshot = null;
 	}
 
 	public void removeState(@NotNull ATNState state) {
 		states.set(state.stateNumber, null); // just free mem, don't shift states in list
+		ATNState[] snap = statesSnapshot;
+		if (snap != null && state.stateNumber >= 0 && state.stateNumber < snap.length) {
+			snap[state.stateNumber] = null;
+		}
 	}
 
 	public void defineMode(@NotNull String name, @NotNull TokensStartState s) {
