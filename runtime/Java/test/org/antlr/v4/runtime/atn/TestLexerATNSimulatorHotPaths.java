@@ -6,6 +6,7 @@
 
 package org.antlr.v4.runtime.atn;
 
+import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.Lexer;
 import org.antlr.v4.runtime.dfa.DFA;
@@ -73,6 +74,21 @@ public class TestLexerATNSimulatorHotPaths {
 		atn.ruleToTokenType = new int[] { 1, 2 };
 		atn.defineMode("DEFAULT_MODE", tokensStart);
 		return atn;
+	}
+
+	@Test
+	public void consumeUpdatesLineOnNewlineAndColumnOtherwise() {
+		ATN atn = buildTinyLexerAtn();
+		LexerATNSimulator sim = new LexerATNSimulator(atn);
+		CharStream input = CharStreams.fromString("\nab");
+		assertEquals(1, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		sim.consume(input, '\n');
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		sim.consume(input);
+		assertEquals(2, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
 	}
 
 	@Test

@@ -49,6 +49,24 @@ public class TestCodePointBuffer {
 	}
 
 	@Test
+	public void roundUpToNextPowerOfTwoCoversSmallAndSaturatingInputs() throws Exception {
+		java.lang.reflect.Method roundUp = CodePointBuffer.Builder.class
+			.getDeclaredMethod("roundUpToNextPowerOfTwo", int.class);
+		roundUp.setAccessible(true);
+		assertEquals(1, ((Integer) roundUp.invoke(null, Integer.valueOf(-3))).intValue());
+		assertEquals(1, ((Integer) roundUp.invoke(null, Integer.valueOf(0))).intValue());
+		assertEquals(1, ((Integer) roundUp.invoke(null, Integer.valueOf(1))).intValue());
+		assertEquals(2, ((Integer) roundUp.invoke(null, Integer.valueOf(2))).intValue());
+		assertEquals(8, ((Integer) roundUp.invoke(null, Integer.valueOf(5))).intValue());
+		assertEquals(Integer.MAX_VALUE,
+			((Integer) roundUp.invoke(null, Integer.valueOf((1 << 30) + 1))).intValue());
+		assertEquals(Integer.MAX_VALUE,
+			((Integer) roundUp.invoke(null, Integer.valueOf(Integer.MAX_VALUE))).intValue());
+		assertNotNull(CodePointBuffer.builder(0));
+		assertNotNull(CodePointBuffer.builder(1));
+	}
+
+	@Test
 	public void builderAsciiStaysByte() {
 		CodePointBuffer.Builder builder = CodePointBuffer.builder(8);
 		CharBuffer cb = CharBuffer.allocate(3);

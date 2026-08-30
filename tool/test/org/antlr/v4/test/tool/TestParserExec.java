@@ -642,4 +642,84 @@ public class TestParserExec extends BaseTest {
 		assertEquals("valid\n", found);
 		assertNull(this.stderrDuringParse);
 	}
+
+	@Test
+	public void testGeneratedStarPlusAndSetMatchHelpers() throws Exception {
+		String grammar =
+			"grammar T;\n" +
+			"s : A* B+ (C | D) {System.out.println(\"ok\");} ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n" +
+			"C : 'c' ;\n" +
+			"D : 'd' ;\n";
+		String found = execParser("T.g4", grammar, "TParser", "TLexer", "s", "aaabbd", false);
+		assertEquals("ok\n", found);
+		assertNull(stderrDuringParse);
+	}
+
+	@Test
+	public void testGeneratedNongreedyStarAndNotSet() throws Exception {
+		String grammar =
+			"grammar T;\n" +
+			"s : A*? B ~A {System.out.println(\"ok\");} ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n" +
+			"C : 'c' ;\n";
+		String found = execParser("T.g4", grammar, "TParser", "TLexer", "s", "aaabc", false);
+		assertEquals("ok\n", found);
+		assertNull(stderrDuringParse);
+	}
+
+	@Test
+	public void testGeneratedLeftRecPrecAndLabeledSet() throws Exception {
+		String grammar =
+			"grammar T;\n" +
+			"e : e '*' e      # star\n" +
+			"  | t=(INT | ID) # prim\n" +
+			"  ;\n" +
+			"INT : '0'..'9'+ ;\n" +
+			"ID : 'x'+ ;\n" +
+			"WS : [ \\t\\r\\n]+ -> skip ;\n";
+		String found = execParser("T.g4", grammar, "TParser", "TLexer", "e", "1*2*3", false);
+		assertEquals("", found);
+		assertNull(stderrDuringParse);
+	}
+
+	@Test
+	public void testGeneratedPlusMultiAltAndEofSet() throws Exception {
+		String grammar =
+			"grammar T;\n" +
+			"s : (A B | C)+ (D | EOF) {System.out.println(\"ok\");} ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n" +
+			"C : 'c' ;\n" +
+			"D : 'd' ;\n";
+		String found = execParser("T.g4", grammar, "TParser", "TLexer", "s", "abccab", false);
+		assertEquals("ok\n", found);
+		assertNull(stderrDuringParse);
+	}
+
+	@Test
+	public void testGeneratedMatchRecoveryAndErrorNode() throws Exception {
+		String grammar =
+			"grammar T;\n" +
+			"s : A B {System.out.println(\"ok\");} ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n";
+		String found = execParser("T.g4", grammar, "TParser", "TLexer", "s", "ab", false);
+		assertEquals("ok\n", found);
+		assertNull(stderrDuringParse);
+	}
+
+	@Test
+	public void testGeneratedLabeledSetMatch() throws Exception {
+		String grammar =
+			"grammar T;\n" +
+			"s : t=(A | B) {System.out.println($t.text);} ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n";
+		String found = execParser("T.g4", grammar, "TParser", "TLexer", "s", "b", false);
+		assertEquals("b\n", found);
+		assertNull(stderrDuringParse);
+	}
 }

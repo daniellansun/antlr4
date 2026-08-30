@@ -76,6 +76,26 @@ public class TestBufferedTokenStream {
 		assertEquals(Token.EOF, tokens.LA(1));
 	}
 
+	@Test
+	public void consumeWithoutCachedLt1WhenPLessThanSize() {
+		BufferedTokenStream tokens = stream(tok(1, "x"), tok(2, "y"), tok(3, "z"));
+		tokens.LT(1);
+		tokens.seek(1);
+		tokens.seek(0);
+		assertNull("seek away and back must drop the LT(1) cache", tokens.cachedLT1());
+		tokens.consume();
+		assertEquals(2, tokens.LA(1));
+	}
+
+	@Test(expected = IndexOutOfBoundsException.class)
+	public void consumeWithoutCachedLt1WhenPNotLessThanSize() {
+		BufferedTokenStream tokens = stream(tok(1, "x"), tok(2, "y"));
+		tokens.LT(2);
+		tokens.seek(2);
+		assertNull(tokens.cachedLT1());
+		tokens.consume();
+	}
+
 	@Test(expected = IllegalStateException.class)
 	public void consumeEofViaCachedLt1Throws() {
 		BufferedTokenStream tokens = stream(tok(1, "x"));

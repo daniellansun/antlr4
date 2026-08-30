@@ -25,6 +25,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
@@ -123,6 +124,96 @@ public class TestParserHotPath {
 		Token w = p.matchWildcard();
 		assertEquals(1, w.getType());
 		assertEquals(Token.EOF, p.getInputStream().LA(1));
+	}
+
+	@Test
+	public void matchWildcardCallsReportMatchWhileRecovering() {
+		ParserInterpreter p = parser(1);
+		p.setBuildParseTree(false);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		p.setContext(new InterpreterRuleContext(null, -1, 0));
+		final int[] reports = new int[1];
+		class ArmingStrategy extends DefaultErrorStrategy {
+			void arm(Parser rec) {
+				beginErrorCondition(rec);
+			}
+
+			@Override
+			public void reportMatch(Parser recognizer) {
+				reports[0]++;
+				super.reportMatch(recognizer);
+			}
+		}
+		ArmingStrategy strategy = new ArmingStrategy();
+		p.setErrorHandler(strategy);
+		strategy.arm(p);
+		assertTrue(p.errorRecoveryMode);
+		Token w = p.matchWildcard();
+		assertEquals(1, w.getType());
+		assertEquals(1, reports[0]);
+		assertFalse(p.errorRecoveryMode);
+	}
+
+	@Test
+	public void matchWildcardRecoversOnNonPositiveType() {
+		ParserInterpreter p = parser();
+		p.setBuildParseTree(true);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		InterpreterRuleContext ctx = new InterpreterRuleContext(null, -1, 0);
+		p.setContext(ctx);
+		p.setErrorHandler(new DefaultErrorStrategy() {
+			@Override
+			public Token recoverInline(Parser recognizer) {
+				CommonToken conjured = new CommonToken(1, "inserted");
+				conjured.setTokenIndex(-1);
+				return conjured;
+			}
+		});
+		Token recovered = p.matchWildcard();
+		assertEquals(1, recovered.getType());
+		assertEquals(-1, recovered.getTokenIndex());
+		assertTrue(ctx.getChildCount() >= 1);
+		assertTrue(ctx.getChild(0) instanceof ErrorNode);
+	}
+
+	@Test
+	public void consumeInRecoveryNotifiesErrorListeners() {
+		ParserInterpreter p = parser(1);
+		p.setBuildParseTree(true);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		InterpreterRuleContext ctx = new InterpreterRuleContext(null, -1, 0);
+		p.setContext(ctx);
+		final List<String> events = new ArrayList<String>();
+		p.addParseListener(new ParseTreeListener() {
+			@Override public void visitTerminal(TerminalNode node) { events.add("t"); }
+			@Override public void visitErrorNode(ErrorNode node) { events.add("e:" + node.getText()); }
+			@Override public void enterEveryRule(ParserRuleContext c) { }
+			@Override public void exitEveryRule(ParserRuleContext c) { }
+		});
+		class ArmingStrategy extends DefaultErrorStrategy {
+			void arm(Parser rec) {
+				beginErrorCondition(rec);
+			}
+		}
+		ArmingStrategy armed = new ArmingStrategy();
+		p.setErrorHandler(armed);
+		armed.arm(p);
+		p.consume();
+		assertEquals(Collections.singletonList("e:1"), events);
+		assertTrue(ctx.getChild(0) instanceof ErrorNode);
+	}
+
+	@Test
+	public void exitRuleFallsBackToLtMinusOneWhenNothingConsumed() {
+		ParserInterpreter p = parser(1, 2);
+		p.setBuildParseTree(false);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		InterpreterRuleContext ctx = new InterpreterRuleContext(null, -1, 0);
+		p.setContext(ctx);
+		p.getInputStream().consume();
+		assertNull(p.lastConsumed);
+		p.exitRule();
+		assertEquals(1, ctx.stop.getType());
 	}
 
 	@Test

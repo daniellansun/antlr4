@@ -175,6 +175,92 @@ public class TestCodeGeneration extends BaseTest {
 			source.contains("_match("));
 	}
 
+	@Test public void generatedNongreedyStarLoopUsesContinueAltTwo() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : A*? B ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n";
+		String source = generateParserSource(g, true);
+		assertTrue("nongreedy star continues on alt 2",
+			source.contains("while (_alt==2)"));
+		assertFalse(source.contains("INVALID_ALT_NUMBER"));
+	}
+
+	@Test public void generatedPlusSingleAltOmitsSwitch() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : A+ B ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n";
+		String source = generateParserSource(g, true);
+		assertTrue(source.contains("} while (_alt==1);"));
+		int loop = source.indexOf("} while (_alt==1);");
+		String plusBody = source.substring(Math.max(0, loop - 400), loop);
+		assertFalse("single-alt plus must not switch on _alt",
+			plusBody.contains("switch (_alt)"));
+	}
+
+	@Test public void generatedPlusMultiAltKeepsSwitch() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : (A B | C)+ D ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n" +
+			"C : 'c' ;\n" +
+			"D : 'd' ;\n";
+		String source = generateParserSource(g, true);
+		String compact = source.replaceAll("\\s+", " ");
+		assertTrue(compact.contains("while (_alt==1)"));
+		assertTrue("multi-alt plus body must keep both alternatives: " + compact,
+			compact.contains("case 2:"));
+	}
+
+	@Test public void generatedSetMatchWithEofStoresMatchedEof() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : (A | EOF) ;\n" +
+			"A : 'a' ;\n";
+		String source = generateParserSource(g, false);
+		assertTrue(source.contains("if (_la == Token.EOF)"));
+		assertTrue(source.contains("matchedEOF = true"));
+	}
+
+	@Test public void generatedNotSetMatchInvertsLaTest() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : ~A B ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n" +
+			"C : 'c' ;\n";
+		String source = generateParserSource(g, false);
+		assertTrue("MatchNotSet must reject non-positive lookahead",
+			source.contains("_la <= 0 ||") || source.contains("_la <= 0||"));
+	}
+
+	@Test public void generatedLabeledSetMatchAssignsLookaheadToken() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : t=(A | B) ;\n" +
+			"A : 'a' ;\n" +
+			"B : 'b' ;\n";
+		String source = generateParserSource(g, false);
+		assertTrue(source.contains("t = _st;"));
+		assertTrue(source.contains("Token _st = _input.LT(1)"));
+	}
+
+	@Test public void generatedLabeledRecAltDeclaresParentStateCtor() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"e : e '*' e # star\n" +
+			"  | INT     # prim\n" +
+			"  ;\n" +
+			"INT : '0'..'9'+ ;\n";
+		String source = generateParserSource(g, false);
+		assertTrue(source.contains("public StarContext(ParserRuleContext parent, int invokingState)"));
+		assertTrue(source.contains("super(parent, invokingState);"));
+	}
+
 	@Test public void generatedLeftRecursionUsesPrecHelperAndNoDummyContext() throws Exception {
 		String g =
 			"grammar T;\n" +

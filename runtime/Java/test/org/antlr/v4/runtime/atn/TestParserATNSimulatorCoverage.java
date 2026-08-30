@@ -249,6 +249,53 @@ public class TestParserATNSimulatorCoverage {
 	}
 
 	@Test
+	public void tryLl1PredictionFallsBackToPrimitiveCacheWhenDenseNull() {
+		ATN atn = ATNTestHelpers.buildParserAorB();
+		ParserInterpreter p = parser(atn, Collections.singletonList("s"), 1);
+		ParserATNSimulator sim = (ParserATNSimulator) p.getInterpreter();
+		sim.optimize_ll1 = true;
+		assertNotNull(p.parse(0));
+
+		atn.ll1Cache.clear();
+		atn.ll1Dense = null;
+		p.getInputStream().seek(0);
+		p.reset();
+		assertNotNull(p.parse(0));
+
+		p.getInputStream().seek(0);
+		p.reset();
+		assertNotNull(p.parse(0));
+	}
+
+	@Test
+	public void tryLl1PredictionTreatsDenseIndexOverflowAsMiss() {
+		ATN atn = ATNTestHelpers.buildParserAorB();
+		ParserInterpreter p = parser(atn, Collections.singletonList("s"), 1);
+		ParserATNSimulator sim = (ParserATNSimulator) p.getInterpreter();
+		sim.optimize_ll1 = true;
+		assertNotNull(p.parse(0));
+
+		atn.ll1Dense = new short[1];
+		atn.ll1Stride = 1000;
+		p.getInputStream().seek(0);
+		p.reset();
+		assertNotNull(p.parse(0));
+	}
+
+	@Test
+	public void ll1WriteSkipsDenseWhenIndexOutOfRange() {
+		ATN atn = ATNTestHelpers.buildParserAorB();
+		atn.ensureLl1Dense(Math.max(1, atn.decisionToState.size()));
+		ParserInterpreter p = parser(atn, Collections.singletonList("s"), 1);
+		ParserATNSimulator sim = (ParserATNSimulator) p.getInterpreter();
+		sim.optimize_ll1 = true;
+		sim.clearDFA();
+		atn.ll1Dense = new short[1];
+		atn.ll1Stride = 1000;
+		assertNotNull(p.parse(0));
+	}
+
+	@Test
 	public void noViableAltOnBadToken() {
 		ATN atn = ATNTestHelpers.buildParserAorB();
 		ParserInterpreter p = parser(atn, Collections.singletonList("s"), 3); // C not expected

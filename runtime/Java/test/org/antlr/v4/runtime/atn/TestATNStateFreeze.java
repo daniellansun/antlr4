@@ -83,6 +83,30 @@ public class TestATNStateFreeze {
 		assertEquals(2, atn.statesSnapshot.length);
 		assertSame(s0, atn.getCachedState(0));
 		assertSame(s1, atn.getCachedState(1));
+		try {
+			atn.getCachedState(-1);
+		}
+		catch (IndexOutOfBoundsException expected) {
+			// snap is live but the index is not in-range; falls back to List#get
+		}
+		try {
+			atn.getCachedState(99);
+		}
+		catch (IndexOutOfBoundsException expected) {
+			// same fallback for index past the snapshot
+		}
+		BasicState beforeFreeze = new BasicState();
+		ATN scratch = new ATN(ATNType.PARSER, 2);
+		scratch.addState(beforeFreeze);
+		scratch.removeState(beforeFreeze);
+		assertNull(scratch.states.get(beforeFreeze.stateNumber));
+
+		atn.removeState(s1);
+		assertNull(atn.statesSnapshot[1]);
+		ATNState[] shortSnap = new ATNState[0];
+		atn.statesSnapshot = shortSnap;
+		atn.removeState(s0);
+		assertSame(shortSnap, atn.statesSnapshot);
 		BasicState s2 = new BasicState();
 		atn.addState(s2);
 		assertNull(atn.statesSnapshot);

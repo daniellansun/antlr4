@@ -413,4 +413,59 @@ public class TestATNConfigSet {
 		assertTrue(set.add(c));
 		assertFalse(set.hasSemanticContext());
 	}
+
+	@Test
+	public void equalButNotIdenticalNoneDoesNotMarkSemanticContext() {
+		ATNConfigSet set = new ATNConfigSet(4);
+		BasicState state = new BasicState();
+		state.stateNumber = 4;
+		SemanticContext.Predicate cloneOfNone = new SemanticContext.Predicate();
+		assertTrue(cloneOfNone != SemanticContext.NONE);
+		assertEquals(SemanticContext.NONE, cloneOfNone);
+		ATNConfig c = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL, cloneOfNone);
+		assertTrue(set.add(c));
+		assertFalse(set.hasSemanticContext());
+	}
+
+	@Test
+	public void canMergeUsesEqualsWhenSemanticContextNotIdentical() {
+		ATNConfigSet set = new ATNConfigSet(4);
+		BasicState state = new BasicState();
+		state.stateNumber = 7;
+		SemanticContext.Predicate p1 = new SemanticContext.Predicate(1, 2, false);
+		SemanticContext.Predicate p2 = new SemanticContext.Predicate(1, 2, false);
+		assertTrue(p1 != p2);
+		assertEquals(p1, p2);
+		ATNConfig c1 = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL, p1);
+		ATNConfig c2 = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL, p2);
+		assertTrue(set.add(c1));
+		set.add(c2);
+		assertEquals(1, set.size());
+	}
+
+	@Test
+	public void hashCodeZeroIsStoredAsOne() throws Exception {
+		ATNConfigSet set = new ATNConfigSet(1);
+		BasicState state = new BasicState();
+		state.stateNumber = 0;
+		set.add(ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL));
+
+		java.lang.reflect.Field configs = ATNConfigSet.class.getDeclaredField("configs");
+		configs.setAccessible(true);
+		@SuppressWarnings("unchecked")
+		final java.util.ArrayList<ATNConfig> original =
+			(java.util.ArrayList<ATNConfig>) configs.get(set);
+		java.util.ArrayList<ATNConfig> forced = new java.util.ArrayList<ATNConfig>(original) {
+			@Override
+			public int hashCode() {
+				return 25;
+			}
+		};
+		configs.set(set, forced);
+		java.lang.reflect.Field cached = ATNConfigSet.class.getDeclaredField("cachedHashCode");
+		cached.setAccessible(true);
+		cached.setInt(set, 0);
+		assertEquals(1, set.hashCode());
+		assertEquals(1, set.hashCode());
+	}
 }

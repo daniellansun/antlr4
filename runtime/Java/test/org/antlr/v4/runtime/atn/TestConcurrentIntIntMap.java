@@ -359,6 +359,62 @@ public class TestConcurrentIntIntMap {
 	}
 
 	@Test
+	public void viewMutationsSyncAndClearDenseTable() {
+		ATN atn = new ATN(ATNType.PARSER, 4);
+		assertNull(atn.ll1Dense);
+		atn.LL1Table.put((0 << 16) + 1, 2); // no dense yet
+		atn.ensureLl1Dense(2);
+		assertNotNull(atn.ll1Dense);
+		assertEquals(5, atn.ll1Stride);
+
+		atn.LL1Table.put((0 << 16) + 1, 3);
+		assertEquals(3, atn.ll1Dense[1]);
+		atn.LL1Table.put((0 << 16) + 1, 0);
+		assertEquals(0, atn.ll1Dense[1]);
+		atn.LL1Table.put((0 << 16) + 2, Short.MAX_VALUE + 1);
+		assertEquals(0, atn.ll1Dense[2]);
+		assertNull(atn.LL1Table.putIfAbsent((0 << 16) + 3, 4));
+		assertEquals(4, atn.ll1Dense[3]);
+		assertEquals(Integer.valueOf(4), atn.LL1Table.putIfAbsent((0 << 16) + 3, 9));
+		assertTrue(atn.LL1Table.replace((0 << 16) + 3, 4, 5));
+		assertEquals(5, atn.ll1Dense[3]);
+		assertFalse(atn.LL1Table.replace((0 << 16) + 3, 4, 6));
+		assertEquals(Integer.valueOf(5), atn.LL1Table.replace((0 << 16) + 3, 7));
+		assertEquals(7, atn.ll1Dense[3]);
+		assertNull(atn.LL1Table.replace(99 << 16, 1));
+		assertEquals(Integer.valueOf(7), atn.LL1Table.remove((0 << 16) + 3));
+		assertEquals(0, atn.ll1Dense[3]);
+		assertNull(atn.LL1Table.remove((0 << 16) + 3));
+
+		atn.LL1Table.put((0 << 16) + 1, 9);
+		atn.LL1Table.clear();
+		assertEquals(0, atn.ll1Dense[1]);
+		assertTrue(atn.LL1Table.isEmpty());
+	}
+
+	@Test
+	public void ensureLl1DenseCoversStrideOverflowAndFill() {
+		ATN negativeMax = new ATN(ATNType.PARSER, -1);
+		negativeMax.ensureLl1Dense(3);
+		assertEquals(1, negativeMax.ll1Stride);
+		assertEquals(3, negativeMax.ll1Dense.length);
+
+		ATN overflow = new ATN(ATNType.PARSER, Integer.MAX_VALUE - 1);
+		overflow.ensureLl1Dense(4);
+		assertEquals(0, overflow.ll1Dense.length);
+
+		ATN atn = new ATN(ATNType.PARSER, 2);
+		atn.ensureLl1Dense(1);
+		int stride = atn.ll1Stride;
+		atn.ll1Dense[0] = 11;
+		atn.ensureLl1Dense(1);
+		assertEquals(stride, atn.ll1Stride);
+		assertEquals(0, atn.ll1Dense[0]);
+		atn.ensureLl1Dense(4);
+		assertEquals(4 * stride, atn.ll1Dense.length);
+	}
+
+	@Test
 	public void viewConcurrentPutIfAbsent() throws Exception {
 		final ConcurrentMap<Integer, Integer> table =
 			new ConcurrentIntIntMapView(new ConcurrentIntIntMap());
