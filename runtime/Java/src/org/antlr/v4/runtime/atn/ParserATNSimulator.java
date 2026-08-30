@@ -475,18 +475,26 @@ public class ParserATNSimulator extends ATNSimulator {
 	}
 
 	/**
-	 * Single-token LL(1) cache probe against the package-private primitive
-	 * {@link ATN#ll1Cache} (no {@link Integer} boxing). Subclass writes through
-	 * {@link ATN#LL1Table} update the same store via {@link ConcurrentIntIntMapView}.
+	 * Single-token LL(1) cache probe against the dense {@link ATN#ll1Dense}
+	 * table (no hash, no boxing). Subclass writes through {@link ATN#LL1Table}
+	 * still update {@link ATN#ll1Cache}; the hot path never touches it.
 	 *
 	 * @return predicted alternative, or {@link ATN#INVALID_ALT_NUMBER} on miss
 	 */
 	private int tryLL1Prediction(TokenStream input, int decision) {
 		int ll_1 = input.LA(1);
-		if (ll_1 < 0 || ll_1 > Short.MAX_VALUE) {
+		if (ll_1 < 0 || ll_1 > atn.maxTokenType) {
 			return ATN.INVALID_ALT_NUMBER;
 		}
-		return atn.ll1Cache.get((decision << 16) + ll_1);
+		short[] dense = atn.ll1Dense;
+		if (dense == null) {
+			return atn.ll1Cache.get((decision << 16) + ll_1);
+		}
+		int idx = decision * atn.ll1Stride + ll_1;
+		if (idx < 0 || idx >= dense.length) {
+			return ATN.INVALID_ALT_NUMBER;
+		}
+		return dense[idx];
 	}
 
 	/**
@@ -872,10 +880,17 @@ public class ParserATNSimulator extends ATNSimulator {
 						&& dfa.decision >= 0
 						&& !D.configs.hasSemanticContext())
 					{
-						if (t >= 0 && t <= Short.MAX_VALUE) {
+						if (t >= 0 && t <= atn.maxTokenType && predictedAlt > 0 && predictedAlt <= Short.MAX_VALUE) {
 							int key = (dfa.decision << 16) + t;
-							// Single primitive store; LL1Table is a boxed view.
+							// Keep the ConcurrentMap view in sync for subclasses/tests.
 							atn.ll1Cache.put(key, predictedAlt);
+							short[] dense = atn.ll1Dense;
+							if (dense != null) {
+								int idx = dfa.decision * atn.ll1Stride + t;
+								if (idx >= 0 && idx < dense.length) {
+									dense[idx] = (short) predictedAlt;
+								}
+							}
 						}
 					}
 

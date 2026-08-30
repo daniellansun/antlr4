@@ -529,6 +529,7 @@ public class ATNDeserializer {
 		for (int i = 0; i < ndecisions; i++) {
 			atn.decisionToDFA[i] = new DFA(atn.decisionToState.get(i), i);
 		}
+		atn.ensureLl1Dense(ndecisions);
 
 		if (deserializationOptions.isVerifyATN()) {
 			verifyATN(atn);
@@ -653,6 +654,7 @@ public class ATNDeserializer {
 				state.freezeOptimizedTransitions();
 			}
 		}
+		atn.freezeStatesSnapshot();
 
 		return atn;
 	}

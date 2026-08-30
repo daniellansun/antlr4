@@ -278,6 +278,38 @@ public <if(parser.abstractRecognizer)>abstract <endif>class <parser.name> extend
 		}
 	}
 
+	/**
+	 * Monomorphic match used by generated token sites. Public
+	 * {@link #match(int)} remains for handwritten callers and subclasses.
+	 * Skips {@code reportMatch} on the success path while not recovering.
+	 */
+	private Token _match(int ttype) {
+		Token t = _input.LT(1);
+		if ( t.getType()==ttype ) {
+			if ( ttype==Token.EOF ) {
+				matchedEOF = true;
+			}
+			if (errorRecoveryMode) {
+				_errHandler.reportMatch(this);
+			}
+			consume(t);
+			return t;
+		}
+		t = _errHandler.recoverInline(this);
+		if ( _buildParseTrees && t.getTokenIndex()==-1 ) {
+			_ctx.addErrorNode(createErrorNode(_ctx,t));
+		}
+		return t;
+	}
+
+	/**
+	 * Monomorphic precedence test for left-recursive operator alts.
+	 * Equivalent to {@link #precpred} without a virtual call or unused context.
+	 */
+	private boolean _prec(int p) {
+		return p \>= _precedenceStack.peek();
+	}
+
 	<namedActions.members>
 	<parser:(ctor)()>
 	<funcs; separator="\n">
@@ -652,11 +684,9 @@ StarBlock(choice, alts, sync, iteration) ::= <<
 setState(<choice.stateNumber>);
 _sync();
 _alt = _adaptivePredict(<choice.decision>);
-while ( _alt!=<choice.exitAlt> && _alt!=org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER ) {
-	if ( _alt==1<if(!choice.ast.greedy)>+1<endif> ) {
-		<iteration>
-		<alts> <! should only be one !>
-	}
+while (_alt==<choice.continueAlt>) {
+	<iteration>
+	<alts>
 	setState(<choice.loopBackStateNumber>);
 	_sync();
 	_alt = _adaptivePredict(<choice.decision>);
@@ -666,8 +696,9 @@ while ( _alt!=<choice.exitAlt> && _alt!=org.antlr.v4.runtime.atn.ATN.INVALID_ALT
 PlusBlock(choice, alts, error) ::= <<
 setState(<choice.blockStartStateNumber>); <! alt block decision !>
 _sync();
-_alt = 1<if(!choice.ast.greedy)>+1<endif>;
+_alt = <choice.continueAlt>;
 do {
+<if(rest(alts))>
 	switch (_alt) {
 	<alts:{alt|
 case <i><if(!choice.ast.greedy)>+1<endif>:
@@ -676,10 +707,13 @@ case <i><if(!choice.ast.greedy)>+1<endif>:
 	default:
 		<error>
 	}
+<else>
+	<alts>
+<endif>
 	setState(<choice.loopBackStateNumber>); <! loopback/exit decision !>
 	_sync();
 	_alt = _adaptivePredict(<choice.decision>);
-} while ( _alt!=<choice.exitAlt> && _alt!=org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER );
+} while (_alt==<choice.continueAlt>);
 >>
 
 Sync(s) ::= "sync(<s.expecting.name>);"
@@ -725,7 +759,7 @@ setState(<r.stateNumber>);
 
 MatchToken(m) ::= <<
 setState(<m.stateNumber>);
-<if(m.labels)><m.labels:{l | <labelref(l)> = }><endif>match(<m.name>);
+<if(m.labels)><m.labels:{l | <labelref(l)> = }><endif>_match(<m.name>);
 >>
 
 MatchSet(m, expr, capture) ::= "<CommonSetStuff(m, expr, capture, false)>"
@@ -734,18 +768,22 @@ MatchNotSet(m, expr, capture) ::= "<CommonSetStuff(m, expr, capture, true)>"
 
 CommonSetStuff(m, expr, capture, invert) ::= <<
 setState(<m.stateNumber>);
-<if(m.labels)><m.labels:{l | <labelref(l)> = }>_input.LT(1);<endif>
-<capture>
-if ( <if(invert)><m.varName> \<= 0 || <else>!<endif>(<expr>) ) {
-	<if(m.labels)><m.labels:{l | <labelref(l)> = }><endif>_errHandler.recoverInline(this);
-} else {
+{
 	Token _st = _input.LT(1);
-	if (_st.getType() == Token.EOF) {
-		matchedEOF = true;
+	_la = _st.getType();
+	<if(m.labels)><m.labels:{l | <labelref(l)> = _st;}><endif>
+	if ( <if(invert)>_la \<= 0 || <else>!<endif>(<expr>) ) {
+		<if(m.labels)><m.labels:{l | <labelref(l)> = }><endif>_errHandler.recoverInline(this);
+	} else {
+		<if(m.setContainsEOF)>if (_la == Token.EOF) {
+			matchedEOF = true;
+		}
+		<endif>
+		if (errorRecoveryMode) {
+			_errHandler.reportMatch(this);
+		}
+		consume(_st);
 	}
-
-	_errHandler.reportMatch(this);
-	consume(_st);
 }
 >>
 
@@ -896,6 +934,9 @@ AltLabelStructDecl(struct,attrs,getters,dispatchMethods) ::= <<
 public static class <struct.name> extends <currentRule.name; format="cap">Context {
 	<attrs:{a | public <a>;}; separator="\n">
 	<getters:{g | <g>}; separator="\n">
+	public <struct.name>(ParserRuleContext parent, int invokingState) {
+		super(parent, invokingState);
+	}
 	public <struct.name>(<currentRule.name; format="cap">Context ctx) { copyFrom(ctx); }
 	<dispatchMethods; separator="\n">
 }
@@ -928,7 +969,7 @@ ctx(actionChunk) ::= "<typedContext(actionChunk.ctx)>"
 typedContext(ctx) ::= "<if(ctx.provideCopyFrom)>((<ctx.name>)_localctx)<else>_localctx<endif>"
 
 // used for left-recursive rules
-recRuleAltPredicate(ruleName,opPrec)  ::= "precpred(_ctx, <opPrec>)"
+recRuleAltPredicate(ruleName,opPrec)  ::= "_prec(<opPrec>)"
 recRuleSetReturnAction(src,name)	  ::= "$<name>=$<src>.<name>;"
 recRuleSetStopToken()                 ::= "_ctx.stop = _input.LT(-1);"
 
@@ -945,7 +986,7 @@ pushNewRecursionContext(_localctx, _startState, RULE_<ruleName>);
 >>
 
 recRuleLabeledAltStartAction(ruleName, ctxName, currentAltLabel, label, isListLabel) ::= <<
-_localctx = new <currentAltLabel; format="cap">Context(new <ctxName>(_parentctx, _parentState));
+_localctx = new <currentAltLabel; format="cap">Context(_parentctx, _parentState);
 <if(label)>
 <if(isListLabel)>
 ((<currentAltLabel; format="cap">Context)_localctx).<label>.add(_prevctx);

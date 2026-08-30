@@ -79,6 +79,32 @@ public class TestCodePointCharStream {
 	}
 
 	@Test
+	public void la1FastPathAfterConsumeAndAtEof() {
+		CodePointCharStream s = CharStreams.fromString("AB");
+		assertEquals('A', s.LA(1));
+		s.consume();
+		assertEquals('B', s.LA(1));
+		s.consume();
+		assertEquals(IntStream.EOF, s.LA(1));
+		assertEquals('B', s.LA(-1));
+	}
+
+	@Test
+	public void la1FastPathOnBmpAndSmpStreams() {
+		CodePointCharStream bmp = CharStreams.fromString("\u611B\u597D");
+		assertEquals(0x611B, bmp.LA(1));
+		bmp.consume();
+		assertEquals(0x597D, bmp.LA(1));
+		bmp.consume();
+		assertEquals(IntStream.EOF, bmp.LA(1));
+
+		CodePointCharStream smp = CharStreams.fromString("\uD83D\uDE00"); // U+1F600
+		assertEquals(0x1F600, smp.LA(1));
+		smp.consume();
+		assertEquals(IntStream.EOF, smp.LA(1));
+	}
+
+	@Test
 	public void multipleLatinCodePointsLookAheadShouldReturnCodePoints() {
 		CodePointCharStream s = CharStreams.fromString("XYZ");
 		assertEquals('X', s.LA(1));

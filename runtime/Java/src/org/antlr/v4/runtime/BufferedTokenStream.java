@@ -148,25 +148,33 @@ public class BufferedTokenStream implements TokenStream {
 
     @Override
     public void consume() {
-		boolean skipEofCheck;
-		if (p >= 0) {
-			if (fetchedEOF) {
-				// the last token in tokens is EOF. skip check if p indexes any
-				// fetched token except the last.
-				skipEofCheck = p < tokens.size() - 1;
-			}
-			else {
-				// no EOF token in tokens. skip check if p indexes a fetched token.
-				skipEofCheck = p < tokens.size();
+		Token current = cachedLT1;
+		if (current != null) {
+			if (current.getType() == EOF) {
+				throw new IllegalStateException("cannot consume EOF");
 			}
 		}
 		else {
-			// not yet initialized
-			skipEofCheck = false;
-		}
+			boolean skipEofCheck;
+			if (p >= 0) {
+				if (fetchedEOF) {
+					// the last token in tokens is EOF. skip check if p indexes any
+					// fetched token except the last.
+					skipEofCheck = p < tokens.size() - 1;
+				}
+				else {
+					// no EOF token in tokens. skip check if p indexes a fetched token.
+					skipEofCheck = p < tokens.size();
+				}
+			}
+			else {
+				// not yet initialized
+				skipEofCheck = false;
+			}
 
-		if (!skipEofCheck && LA(1) == EOF) {
-			throw new IllegalStateException("cannot consume EOF");
+			if (!skipEofCheck && LA(1) == EOF) {
+				throw new IllegalStateException("cannot consume EOF");
+			}
 		}
 
 		if (sync(p + 1)) {

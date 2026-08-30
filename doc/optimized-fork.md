@@ -336,7 +336,11 @@ the hot path, without changing parse semantics.
 | Decision / loop resync | `_errHandler.sync(this)` at every site | private `_sync()` → `if (errorSyncEnabled) _errHandler.sync(this)` | two-stage SLL skips the virtual call; flag is the field cached by `setErrorHandler` from `ANTLRErrorStrategy.isSyncRequired()` (not a `getClass()` test) |
 | Rule context ctor | `new XContext(_ctx, getState())` | unchanged (`getState()` is `final` and inlines) | generated code does not reach into `_stateNumber` |
 | Set match | `_input.LA(1)` + `consume()` | `Token _st = _input.LT(1)` + `consume(_st)` | no second LT(1) on the success path |
-| Star/plus exit test | FQN `org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER` | unchanged (must stay FQN) | a token named `ATN` would shadow the type import |
+| Star/plus exit test | FQN `org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER` | `while (_alt==continueAlt)` | no `ATN` token-name shadowing; one compare per iteration |
+| Token match | `match(T)` | private `_match(T)` | monomorphic; skips `reportMatch` when not recovering |
+| Left-rec `precpred` | `precpred(_ctx, n)` | private `_prec(n)` | no virtual call; unused context dropped |
+| Labeled rec alt start | `new FooContext(new BarContext(parent, state))` | `new FooContext(parent, state)` | no dummy parent context allocation |
+| Set match | extra `LA`/`LT` + always-EOF test | one `LT(1)`; `matchedEOF` only if the set contains EOF | `sep` and operator sets |
 | ATN class init | `deserialize(_serializedATN.toCharArray())` | `deserialize(_serializedATN)` | single buffer (see below); no `toCharArray`+`clone` double copy |
 | Imports | `java.util.Iterator` always imported | omitted when unused | cleaner generated sources |
 
@@ -351,7 +355,15 @@ Runtime counterparts used heavily by generated call sites:
 | `Parser.match` / `matchWildcard` / `consume(Token)` | reuse the already-fetched LT(1); no second lookup. `consume(Token)` is `protected` |
 | `Parser.setErrorHandler` | caches `handler.isSyncRequired()` (default `true`; `BailErrorStrategy` returns `false`) |
 | `Parser.enterRule` | `setState(state)` (`final`, inlines to the same field write) |
-| `ParserATNSimulator.adaptivePredict` | warm SLL start is an `s0` load then the private `execDFA` body with locals (no `SimulatorState`). Subclasses opt into `getStartState` via `snapshotStartState()` (not `getClass`). `getStartState` always returns a **fresh** immutable `SimulatorState` so `ProfilingATNSimulator` / `DecisionEventInfo` can retain it. Skip `seek` when prediction did not consume |
+| `ParserATNSimulator.adaptivePredict` | warm SLL start is an `s0` load then the private `execDFA` body with locals (no `SimulatorState`). Subclasses opt into `getStartState` via `snapshotStartState()` (not `getClass`). `getStartState` always returns a **fresh** immutable `SimulatorState` so `ProfilingATNSimulator` / `DecisionEventInfo` can retain it. Skip `seek` when prediction did not consume. LL(1) cache probe is a dense `short[]` (`ATN.ll1Dense`) indexed by `decision * stride + token` (zero = miss); `LL1Table` remains the JDK `ConcurrentMap` view |
+| `Parser.match` / generated `_match` / set-match | skip virtual `reportMatch` unless `errorRecoveryMode` (set by `DefaultErrorStrategy.beginErrorCondition` / `endErrorCondition`) |
+| `Parser.consume(Token)` | success path uses the cached `errorRecoveryMode` field (no virtual `inErrorRecoveryMode`); records `lastConsumed` for `exitRule` |
+| `Parser.exitRule` | assigns `_ctx.stop` from `lastConsumed` instead of `LT(-1)` |
+| `CodePointCharStream.LA` | `LA(1)` is a position/size compare + array load (no `Integer.signum` switch) |
+| `CommonTokenFactory` | constructs via the 7-arg `CommonToken` ctor (start line/column); does not query `TokenSource.getLine` after the token is matched |
+| `LexerATNSimulator.execATN` | `consume(input, t)` uses the already-fetched code point (no second `LA(1)`) |
+| `ATNConfigSet.hashCode` | cached for writable scratch as well as readonly DFA sets; readonly `clone(true)` `trimToSize`s the config list |
+| `ATN.statesSnapshot` | array snapshot after deserialize; closure pop-return uses `getCachedState` |
 | `BufferedTokenStream.seek` | no-op (keep `cachedLT1`) when already at the target index |
 | `Lexer.nextToken` / `getLine` / `getCharPositionInLine` | use `_interp` directly (no `getInterpreter()`) |
 | `ParserRuleContext.addAnyChild` | children list starts at capacity 4 (not the JDK default of 10) |

@@ -237,7 +237,7 @@ final class EpsilonClosure {
 		// for precedence suppression and tail-call decisions (existing semantics).
 		final PredictionContext predictionContext = config.getContext();
 		ATNState configState = config.getState();
-		if (configState instanceof RuleStopState) {
+		if (configState.getStateType() == ATNState.RULE_STOP) {
 			// We hit rule end. If we have context info, use it
 			if (!predictionContext.isEmpty()) {
 				boolean hasEmpty = predictionContext.hasEmpty();
@@ -248,7 +248,7 @@ final class EpsilonClosure {
 				final boolean precedenceFilterSuppressed = config.isPrecedenceFilterSuppressed();
 				for (int i = 0; i < nonEmptySize; i++) {
 					PredictionContext newContext = predictionContext.getParent(i); // "pop" return state
-					ATNState returnState = atn.states.get(predictionContext.getReturnState(i));
+					ATNState returnState = atn.getCachedState(predictionContext.getReturnState(i));
 					ATNConfig c = ATNConfig.create(returnState, alt, newContext, semanticContext);
 					// While we have context to pop back from, we may have
 					// gotten that context AFTER having fallen off a rule.
@@ -292,9 +292,10 @@ final class EpsilonClosure {
 			// both epsilon transitions and non-epsilon transitions.
 		}
 
-		final int n = p.getNumberOfOptimizedTransitions();
+		final Transition[] frozen = p.frozenOptimizedTransitions();
+		final int n = frozen != null ? frozen.length : p.getNumberOfOptimizedTransitions();
 		final boolean inContext = depth == 0;
-		final boolean configAtRuleStop = p instanceof RuleStopState;
+		final boolean configAtRuleStop = p.getStateType() == ATNState.RULE_STOP;
 		// Hoist precedence-DFA suppress check operands; the suppress block only
 		// applies to the first outgoing edge of a precedence star-loop entry.
 		final boolean maybeSuppressPrecedenceEdge = n > 0
@@ -326,10 +327,11 @@ final class EpsilonClosure {
 				}
 			}
 
-			Transition t = p.getOptimizedTransition(i);
+			Transition t = frozen != null ? frozen[i] : p.getOptimizedTransition(i);
 			// PERF: When EOF is not treated as epsilon, non-epsilon edges can
-			// never produce a closure target — skip the virtual getEpsilonTarget
-			// dispatch (common on mixed epsilon/consume states).
+			// never produce a closure target — skip getEpsilonTarget
+			// (common on mixed epsilon/consume states). Use the frozen
+			// {@link Transition#epsilon} flag on production ATNs.
 			if (!treatEofAsEpsilon && !t.isEpsilon()) {
 				continue;
 			}

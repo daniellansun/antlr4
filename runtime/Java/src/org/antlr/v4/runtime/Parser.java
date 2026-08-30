@@ -115,6 +115,25 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	protected boolean errorSyncEnabled = true;
 
 	/**
+	 * Cached {@link ANTLRErrorStrategy#inErrorRecoveryMode} flag. Updated by
+	 * {@link DefaultErrorStrategy#beginErrorCondition} /
+	 * {@link DefaultErrorStrategy#endErrorCondition} (and {@link #reset}).
+	 * Generated match / {@link #consume(Token)} read this field so the success
+	 * path does not pay a virtual recovery check or {@code reportMatch} per
+	 * token.
+	 */
+	protected boolean errorRecoveryMode;
+
+	/**
+	 * Last symbol actually consumed by {@link #consume(Token)}. Used by
+	 * {@link #exitRule} so rule-stop assignment does not walk
+	 * {@link TokenStream#LT LT(-1)} (off-channel scan on
+	 * {@link CommonTokenStream}). Prediction consumes the token stream
+	 * directly and does not update this field.
+	 */
+	protected Token lastConsumed;
+
+	/**
 	 * The input stream.
 	 *
 	 * @see #getInputStream
@@ -181,6 +200,8 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 		_ctx = null;
 		_syntaxErrors = 0;
 		matchedEOF = false;
+		errorRecoveryMode = false;
+		lastConsumed = null;
 		setTrace(false);
 		_precedenceStack.clear();
 		_precedenceStack.push(0);
@@ -218,7 +239,9 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 			if ( ttype==Token.EOF ) {
 				matchedEOF = true;
 			}
-			_errHandler.reportMatch(this);
+			if (errorRecoveryMode) {
+				_errHandler.reportMatch(this);
+			}
 			consume(t);
 		}
 		else {
@@ -254,7 +277,9 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	public Token matchWildcard() throws RecognitionException {
 		Token t = _input.LT(1);
 		if (t.getType() > 0) {
-			_errHandler.reportMatch(this);
+			if (errorRecoveryMode) {
+				_errHandler.reportMatch(this);
+			}
 			consume(t);
 		}
 		else {
@@ -601,13 +626,14 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 		if (o.getType() != EOF) {
 			_input.consume();
 		}
+		lastConsumed = o;
 		// Common path: build parse trees with no listeners. Empty listener lists
 		// are normalized to null by removeParseListener(s), so a non-null
-		// reference means "notify". Recovery mode is still queried below when
-		// trees or listeners require attaching terminal/error nodes.
+		// reference means "notify". Recovery uses the cached
+		// {@link #errorRecoveryMode} field so the success path is a boolean load.
 		List<ParseTreeListener> listeners = _parseListeners;
 		if (_buildParseTrees || listeners != null) {
-			if ( _errHandler.inErrorRecoveryMode(this) ) {
+			if ( errorRecoveryMode ) {
 				ErrorNode node = _ctx.addErrorNode(createErrorNode(_ctx,o));
 				if (listeners != null) {
 					for (ParseTreeListener listener : listeners) {
@@ -694,6 +720,9 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 		if ( matchedEOF ) {
 			// if we have matched EOF, it cannot consume past EOF so we use LT(1) here
 			_ctx.stop = _input.LT(1); // LT(1) will be end of file
+		}
+		else if ( lastConsumed != null ) {
+			_ctx.stop = lastConsumed;
 		}
 		else {
 			_ctx.stop = _input.LT(-1); // stop node is what we just matched

@@ -67,9 +67,7 @@ public class CommonTokenFactory implements TokenFactory {
 							  int channel, int start, int stop,
 							  int line, int charPositionInLine)
 	{
-		CommonToken t = new CommonToken(source, type, channel, start, stop);
-		t.setLine(line);
-		t.setCharPositionInLine(charPositionInLine);
+		CommonToken t = new CommonToken(source, type, channel, start, stop, line, charPositionInLine);
 		if ( text!=null ) {
 			t.setText(text);
 		}

@@ -369,4 +369,48 @@ public class TestATNConfigSet {
 		assertEquals(1, intermediate.size());
 		assertTrue(current.get(0).getAlt() != intermediate.get(0).getAlt());
 	}
+
+	@Test
+	public void writableAndReadonlyHashCodesAreStableUntilMutation() {
+		ATNConfigSet set = new ATNConfigSet(4);
+		BasicState state = new BasicState();
+		state.stateNumber = 3;
+		set.add(ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL));
+		int h1 = set.hashCode();
+		int h2 = set.hashCode();
+		assertEquals(h1, h2);
+
+		ATNConfigSet readonly = set.clone(true);
+		assertTrue(readonly.isReadOnly());
+		assertEquals(set.hashCode(), readonly.hashCode());
+		assertEquals(readonly.hashCode(), readonly.hashCode());
+
+		BasicState extra = new BasicState();
+		extra.stateNumber = 4;
+		set.add(ATNConfig.create(extra, 2, PredictionContext.EMPTY_LOCAL));
+		assertTrue(set.hashCode() != h1);
+	}
+
+	@Test
+	public void readonlyCloneTrimsConfigListCapacity() {
+		ATNConfigSet set = new ATNConfigSet(64);
+		BasicState state = new BasicState();
+		state.stateNumber = 1;
+		set.add(ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL));
+		ATNConfigSet readonly = set.clone(true);
+		assertEquals(1, readonly.size());
+		assertEquals(set.hashCode(), readonly.hashCode());
+		assertTrue(readonly.contains(set.get(0)));
+	}
+
+	@Test
+	public void noneSemanticContextIsIdentityFastOnAdd() {
+		ATNConfigSet set = new ATNConfigSet(4);
+		BasicState state = new BasicState();
+		state.stateNumber = 8;
+		ATNConfig c = ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL);
+		assertSame(SemanticContext.NONE, c.getSemanticContext());
+		assertTrue(set.add(c));
+		assertFalse(set.hasSemanticContext());
+	}
 }

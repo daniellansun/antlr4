@@ -89,11 +89,10 @@ public class TestCodeGeneration extends BaseTest {
 			source.contains("getInterpreter().adaptivePredict(_input,"));
 	}
 
-	@Test public void generatedStarLoopUsesFullyQualifiedInvalidAltConstant() throws Exception {
+	@Test public void generatedStarLoopComparesContinueAltWithoutInvalidConstant() throws Exception {
 		// force_atn disables LL(1) specialization so StarBlock/PlusBlock templates
-		// emit adaptivePredict loops that compare against INVALID_ALT_NUMBER.
-		// The constant MUST be fully qualified: a grammar may define a token
-		// named ATN (see testReferenceToATN), which would shadow the type import.
+		// emit adaptivePredict loops. Comparing the continue-alt avoids
+		// ATN.INVALID_ALT_NUMBER (a grammar token named ATN would shadow the type).
 		String g =
 			"grammar T;\n" +
 			"s : A* B ;\n" +
@@ -101,8 +100,10 @@ public class TestCodeGeneration extends BaseTest {
 			"B : 'b' ;\n";
 		String source = generateParserSource(g, true);
 		assertTrue(source.contains("_adaptivePredict("));
-		assertTrue("INVALID_ALT_NUMBER must be FQN to avoid token-name shadowing",
-			source.contains("org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER"));
+		assertTrue("star loop must test the continue alternative",
+			source.contains("while (_alt==1)"));
+		assertFalse("must not mention INVALID_ALT_NUMBER (FQN or otherwise)",
+			source.contains("INVALID_ALT_NUMBER"));
 	}
 
 	/**
@@ -156,6 +157,40 @@ public class TestCodeGeneration extends BaseTest {
 			source.contains("consume(_st)"));
 		assertFalse("must not consume() without the looked-up token",
 			source.contains("consume();"));
+		assertTrue("success path must gate reportMatch on errorRecoveryMode",
+			source.contains("if (errorRecoveryMode)"));
+		assertFalse("set without EOF must not store matchedEOF",
+			source.contains("matchedEOF = true") && source.contains("_st.getType() == Token.EOF"));
+	}
+
+	@Test public void generatedTokenMatchUsesPrivateHelper() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"s : A ;\n" +
+			"A : 'a' ;\n";
+		String source = generateParserSource(g, false);
+		assertTrue("missing _match helper",
+			source.contains("private Token _match(int ttype)"));
+		assertTrue("token sites must call _match",
+			source.contains("_match("));
+	}
+
+	@Test public void generatedLeftRecursionUsesPrecHelperAndNoDummyContext() throws Exception {
+		String g =
+			"grammar T;\n" +
+			"e : e '*' e # star\n" +
+			"  | INT     # prim\n" +
+			"  ;\n" +
+			"INT : '0'..'9'+ ;\n";
+		String source = generateParserSource(g, false);
+		assertTrue("missing _prec helper",
+			source.contains("private boolean _prec(int p)"));
+		assertTrue("operator alts must call _prec",
+			source.contains("_prec("));
+		assertFalse("must not wrap a dummy parent context for labeled rec alts",
+			source.contains("Context(new EContext("));
+		assertTrue("labeled rec alt uses parent/state ctor",
+			source.contains("new StarContext(_parentctx, _parentState)"));
 	}
 
 	@Test public void generatedRecognizerDeserializesAtnFromString() throws Exception {

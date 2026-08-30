@@ -139,6 +139,15 @@ public abstract class ATNState {
 	 */
 	private Transition[] optimizedTransitionsArray;
 
+	/**
+	 * Frozen optimized-transition array after {@link #freezeOptimizedTransitions()},
+	 * else {@code null}. Package-private so reach/closure can hoist the
+	 * snapshot once per state.
+	 */
+	final Transition[] frozenOptimizedTransitions() {
+		return optimizedTransitionsArray;
+	}
+
 	/** Used to cache lookahead during parsing, not used during construction */
     public IntervalSet nextTokenWithinRule;
 

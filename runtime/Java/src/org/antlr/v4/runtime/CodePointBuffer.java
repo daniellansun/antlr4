@@ -177,8 +177,14 @@ public class CodePointBuffer {
 		}
 
 		private static int roundUpToNextPowerOfTwo(int i) {
-			int nextPowerOfTwo = 32 - Integer.numberOfLeadingZeros(i - 1);
-			return (int) Math.pow(2, nextPowerOfTwo);
+			if (i <= 1) {
+				return 1;
+			}
+			int bits = 32 - Integer.numberOfLeadingZeros(i - 1);
+			if (bits >= 31) {
+				return Integer.MAX_VALUE;
+			}
+			return 1 << bits;
 		}
 
 		public void ensureRemaining(int remainingNeeded) {

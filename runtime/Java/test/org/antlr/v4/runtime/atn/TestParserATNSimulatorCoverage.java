@@ -224,9 +224,13 @@ public class TestParserATNSimulatorCoverage {
 	@Test
 	public void ll1TableFastPath() {
 		ATN atn = ATNTestHelpers.buildParserAorB();
+		atn.ensureLl1Dense(Math.max(1, atn.decisionToState.size()));
 		// decision 0, LA=1 => alt 1; LA=2 => alt 2
 		atn.LL1Table.put((0 << 16) + 1, 1);
 		atn.LL1Table.put((0 << 16) + 2, 2);
+		assertTrue(atn.ll1Dense != null);
+		assertEquals(1, atn.ll1Dense[0 * atn.ll1Stride + 1]);
+		assertEquals(2, atn.ll1Dense[0 * atn.ll1Stride + 2]);
 
 		ParserInterpreter p = parser(atn, Collections.singletonList("s"), 1);
 		ParserATNSimulator sim = (ParserATNSimulator) p.getInterpreter();

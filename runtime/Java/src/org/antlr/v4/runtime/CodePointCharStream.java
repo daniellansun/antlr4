@@ -166,6 +166,10 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 
 		@Override
 		public int LA(int i) {
+			// PERF: lexer/parser hot path is almost exclusively LA(1).
+			if (i == 1) {
+				return position < size ? byteArray[position] & 0xFF : IntStream.EOF;
+			}
 			int offset;
 			switch (Integer.signum(i)) {
 				case -1:
@@ -221,6 +225,9 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 
 		@Override
 		public int LA(int i) {
+			if (i == 1) {
+				return position < size ? charArray[position] & 0xFFFF : IntStream.EOF;
+			}
 			int offset;
 			switch (Integer.signum(i)) {
 				case -1:
@@ -272,6 +279,9 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 
 		@Override
 		public int LA(int i) {
+			if (i == 1) {
+				return position < size ? intArray[position] : IntStream.EOF;
+			}
 			int offset;
 			switch (Integer.signum(i)) {
 				case -1:

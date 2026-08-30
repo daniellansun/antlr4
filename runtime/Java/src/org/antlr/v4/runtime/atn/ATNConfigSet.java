@@ -136,7 +136,13 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	 */
 	private boolean outermostConfigSet;
 
-	private int cachedHashCode = -1;
+	/**
+	 * Cached {@link #hashCode()} for both writable scratch sets and readonly
+	 * DFA sets. {@code 0} means uncomputed (zero is reserved; a raw hash of
+	 * zero is stored as {@code 1}). Invalidated on every mutating operation
+	 * that participates in {@link #hashCode()}.
+	 */
+	private int cachedHashCode;
 
 	public ATNConfigSet() {
 		this(0);
@@ -204,6 +210,9 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		}
 
 		this.configs = (ArrayList<ATNConfig>)set.configs.clone();
+		if (readonly) {
+			this.configs.trimToSize();
+		}
 
 		this.dipsIntoOuterContext = set.dipsIntoOuterContext;
 		this.hasSemanticContext = set.hasSemanticContext;
@@ -212,6 +221,10 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		if (readonly || !set.isReadOnly()) {
 			this.uniqueAlt = set.uniqueAlt;
 			this.conflictInfo = set.conflictInfo;
+		}
+
+		if (readonly) {
+			this.cachedHashCode = set.hashCode();
 		}
 
 		// if (!readonly && set.isReadOnly()) -> addAll is called from clone()
@@ -250,6 +263,7 @@ public class ATNConfigSet implements Set<ATNConfig> {
 
 		assert !outermostConfigSet || !dipsIntoOuterContext;
 		this.outermostConfigSet = outermostConfigSet;
+		invalidateHash();
 	}
 
 	public Set<ATNState> getStates() {
@@ -269,6 +283,7 @@ public class ATNConfigSet implements Set<ATNConfig> {
         for (ATNConfig config : configs) {
             config.setContext(interpreter.atn.getCachedContext(config.getContext()));
         }
+		invalidateHash();
 	}
 
 	public ATNConfigSet clone(boolean readonly) {
@@ -386,6 +401,7 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		}
 
 		updatePropertiesForAddedConfig(e);
+		invalidateHash();
 		return true;
 	}
 
@@ -402,6 +418,7 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		}
 
 		unmergedConfig.setContext(joined);
+		invalidateHash();
 		return false;
 	}
 
@@ -418,7 +435,8 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			uniqueAlt = ATN.INVALID_ALT_NUMBER;
 		}
 
-		hasSemanticContext |= !SemanticContext.NONE.equals(config.getSemanticContext());
+		SemanticContext sem = config.getSemanticContext();
+		hasSemanticContext |= sem != SemanticContext.NONE && !SemanticContext.NONE.equals(sem);
 		dipsIntoOuterContext |= config.getReachesIntoOuterContext();
 		assert !outermostConfigSet || !dipsIntoOuterContext;
 	}
@@ -436,7 +454,9 @@ public class ATNConfigSet implements Set<ATNConfig> {
 			return false;
 		}
 
-		return left.getSemanticContext().equals(right.getSemanticContext());
+		SemanticContext ls = left.getSemanticContext();
+		SemanticContext rs = right.getSemanticContext();
+		return ls == rs || (ls != null && ls.equals(rs));
 	}
 
 	protected long getKey(ATNConfig e) {
@@ -565,8 +585,11 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		outermostConfigSet = false;
 		uniqueAlt = ATN.INVALID_ALT_NUMBER;
 		conflictInfo = null;
-		// Writable sets do not cache hashCode; leave cachedHashCode alone for
-		// any future readonly path that might share logic.
+		invalidateHash();
+	}
+
+	private void invalidateHash() {
+		cachedHashCode = 0;
 	}
 
 	@Override
@@ -587,18 +610,18 @@ public class ATNConfigSet implements Set<ATNConfig> {
 
 	@Override
 	public int hashCode() {
-		if (isReadOnly() && cachedHashCode != -1) {
-			return cachedHashCode;
+		int hashCode = cachedHashCode;
+		if (hashCode != 0) {
+			return hashCode;
 		}
 
-		int hashCode = 1;
+		hashCode = 1;
 		hashCode = 5 * hashCode ^ (outermostConfigSet ? 1 : 0);
 		hashCode = 5 * hashCode ^ configs.hashCode();
-
-		if (isReadOnly()) {
-			cachedHashCode = hashCode;
+		if (hashCode == 0) {
+			hashCode = 1;
 		}
-
+		cachedHashCode = hashCode;
 		return hashCode;
 	}
 

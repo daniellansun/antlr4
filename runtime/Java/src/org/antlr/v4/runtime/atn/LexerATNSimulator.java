@@ -234,7 +234,7 @@ public class LexerATNSimulator extends ATNSimulator {
 			// position accurately reflect the state of the interpreter at the
 			// end of the token.
 			if (t != IntStream.EOF) {
-				consume(input);
+				consume(input, t);
 			}
 
 			if (target.isAcceptState()) {
@@ -271,6 +271,24 @@ public class LexerATNSimulator extends ATNSimulator {
 		}
 
 		return target;
+	}
+
+	/**
+	 * Consume {@code curChar} (already {@code input.LA(1)}) and update
+	 * line/column. Avoids a second {@link CharStream#LA} on the per-character
+	 * DFA walk.
+	 *
+	 * @param input character stream
+	 * @param curChar the code point just matched; must not be EOF
+	 */
+	final void consume(@NotNull CharStream input, int curChar) {
+		if ( curChar=='\n' ) {
+			line++;
+			charPositionInLine=0;
+		} else {
+			charPositionInLine++;
+		}
+		input.consume();
 	}
 
 	/**
@@ -441,7 +459,7 @@ public class LexerATNSimulator extends ATNSimulator {
 		}*/
 
 		final ATNState configState = config.getState();
-		if ( configState instanceof RuleStopState ) {
+		if ( configState.getStateType() == ATNState.RULE_STOP ) {
 			/*if ( debug ) {
 				if ( recog!=null ) {
 					System.out.format(Locale.getDefault(), "closure at %s rule stop %s\n", recog.getRuleNames()[configState.ruleIndex], config);
@@ -708,8 +726,9 @@ public class LexerATNSimulator extends ATNSimulator {
 		DFAState newState = new DFAState(atn.modeToDFA[mode], configs.clone(true));
 
 		ATNConfig firstConfigWithRuleStopState = null;
-		for (ATNConfig c : configs) {
-			if ( c.getState() instanceof RuleStopState )	{
+		for (int i = 0, n = configs.size(); i < n; i++) {
+			ATNConfig c = configs.get(i);
+			if ( c.getState().getStateType() == ATNState.RULE_STOP )	{
 				firstConfigWithRuleStopState = c;
 				break;
 			}
@@ -754,15 +773,7 @@ public class LexerATNSimulator extends ATNSimulator {
 	}
 
 	public void consume(@NotNull CharStream input) {
-		int curChar = input.LA(1);
-		if ( curChar=='\n' ) {
-			line++;
-			charPositionInLine=0;
-		}
-		else {
-			charPositionInLine++;
-		}
-		input.consume();
+		consume(input, input.LA(1));
 	}
 
 	@NotNull
