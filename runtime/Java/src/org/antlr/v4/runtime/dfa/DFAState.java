@@ -57,6 +57,28 @@ public class DFAState {
 	@NotNull
 	private volatile AbstractEdgeMap<DFAState> edges;
 
+	/**
+	 * ASCII lexer edges ({@code 0..127}), or {@code null} until the first such
+	 * edge is installed. Lexer source is overwhelmingly in this range
+	 * (identifiers, whitespace, operators). A hit is a volatile read plus one
+	 * array load — no hash probe and no second volatile key check.
+	 *
+	 * <p>Only lexer maps ({@code maxIndex > 0xFFFF}) publish this. Parser maps
+	 * and precedence-start maps stay {@code null}, so {@link #getTarget} is
+	 * unchanged. Slot writes happen-before the volatile store of this
+	 * reference; {@link #getLexerTarget} re-reads it on every character.</p>
+	 */
+	@Nullable
+	private volatile DFAState[] asciiEdges;
+
+	/**
+	 * Identity-indexed lexer edges for code points outside the ASCII table, or
+	 * {@code null} when {@link #edges} is not that layout. Parser states leave
+	 * it {@code null} and {@link #getTarget} never reads it.
+	 */
+	@Nullable
+	private volatile Object[] directValues;
+
 	private AcceptStateInfo acceptStateInfo;
 
 	/** These keys for these edges are the top level element of the global context. */
@@ -203,8 +225,62 @@ public class DFAState {
 		return edges.get(symbol);
 	}
 
+	/**
+	 * Lexer edge lookup. ASCII symbols hit {@link #asciiEdges} (one volatile
+	 * read and an array load). Wider code points use an identity table when
+	 * one has been published, otherwise {@link AbstractEdgeMap#get}.
+	 * {@link HashEdgeMap#get} stays branch-free so parser edge walks do not
+	 * pay a layout test.
+	 */
+	public final DFAState getLexerTarget(int symbol) {
+		DFAState[] ascii = asciiEdges;
+		// Unsigned compare: symbol is a code point, so values above 127 and
+		// negatives (EOF) both fail this test.
+		if (ascii != null && (symbol & ~0x7F) == 0) {
+			return ascii[symbol];
+		}
+		Object[] direct = directValues;
+		if (direct != null) {
+			if (symbol >= 0 && symbol < direct.length) {
+				return (DFAState) direct[symbol];
+			}
+			return null;
+		}
+		return edges.get(symbol);
+	}
+
 	public final void setTarget(int symbol, DFAState target) {
-		edges = edges.put(symbol, target);
+		AbstractEdgeMap<DFAState> next = edges.put(symbol, target);
+		// Lexer vocabulary reaches U+10FFFF. Parser token maps and the
+		// precedence-start map (0..200) must not allocate an ASCII table.
+		if (next.minIndex >= 0 && next.maxIndex > 0xFFFF) {
+			synchronized (this) {
+				if ((symbol & ~0x7F) == 0) {
+					DFAState[] ascii = asciiEdges;
+					if (ascii == null) {
+						ascii = new DFAState[128];
+					}
+					ascii[symbol] = target;
+					// Volatile store releases the slot write. Same reference on
+					// later edges; the store is still a release barrier.
+					asciiEdges = ascii;
+				}
+				directValues = directValuesOf(next);
+			}
+		}
+		else {
+			directValues = null;
+		}
+		edges = next;
+	}
+
+	private static Object[] directValuesOf(AbstractEdgeMap<DFAState> edgeMap) {
+		if (edgeMap.getClass() == HashEdgeMap.class) {
+			@SuppressWarnings("unchecked")
+			HashEdgeMap<DFAState> hash = (HashEdgeMap<DFAState>) edgeMap;
+			return hash.directArray();
+		}
+		return null;
 	}
 
 	/**

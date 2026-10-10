@@ -411,6 +411,26 @@ public class ParserATNSimulator extends ATNSimulator {
 		// (s0 / s0full) instead of isEmpty()+isPrecedenceDfa() double dispatch.
 		// Precedence DFAs still use isEmpty() (edge occupancy on synthetic s0).
 		final boolean precedence = dfa.isPrecedenceDfa();
+		// Resolve context mode before any LL(1) hit. The precedence table stores
+		// SLL answers only. force_global_context and a context-sensitive DFA
+		// (when always_try_local_context is off) must not be answered from it.
+		// Defaults are force_global_context=false and always_try_local_context=true,
+		// so the warm path is two predictable field loads and then the probe.
+		if (force_global_context) {
+			useContext = true;
+		}
+		else if (!always_try_local_context) {
+			useContext |= dfa.isContextSensitive();
+		}
+		// Left-recursive operator/stop decisions are a pure function of the
+		// current precedence and LA(1) once learned. Answer those before the
+		// emptiness check, the precedence-start edge walk, and execDFA.
+		if (optimize_ll1 && precedence && !useContext && parser != null) {
+			int precAlt = tryPrecedenceLL1(input, dfa);
+			if (precAlt != ATN.INVALID_ALT_NUMBER) {
+				return precAlt;
+			}
+		}
 		final boolean dfaEmpty = precedence
 			? dfa.isEmpty()
 			: (dfa.s0.get() == null && dfa.s0full.get() == null);
@@ -423,13 +443,6 @@ public class ParserATNSimulator extends ATNSimulator {
 		}
 
 		this.dfa = dfa;
-
-		if (force_global_context) {
-			useContext = true;
-		}
-		else if (!always_try_local_context) {
-			useContext |= dfa.isContextSensitive();
-		}
 
 		userWantsCtxSensitive = useContext || (predictionMode != PredictionMode.SLL && outerContext != null && !atn.decisionToState.get(decision).sll);
 		if (outerContext == null) {
@@ -495,6 +508,24 @@ public class ParserATNSimulator extends ATNSimulator {
 			return ATN.INVALID_ALT_NUMBER;
 		}
 		return dense[idx];
+	}
+
+	/**
+	 * Precedence LL(1) probe. The alternative depends on the parser's current
+	 * precedence as well as LA(1), so it does not share {@link ATN#ll1Dense}.
+	 *
+	 * @return predicted alternative, or {@link ATN#INVALID_ALT_NUMBER} on miss
+	 */
+	private int tryPrecedenceLL1(TokenStream input, DFA dfa) {
+		int la = input.LA(1);
+		if (la < 0) {
+			return ATN.INVALID_ALT_NUMBER;
+		}
+		int prec = parser.getPrecedence();
+		if (prec < 0) {
+			return ATN.INVALID_ALT_NUMBER;
+		}
+		return atn.cachedPrecedenceAlt(dfa.decision, prec, la);
 	}
 
 	/**
@@ -875,20 +906,27 @@ public class ParserATNSimulator extends ATNSimulator {
 				if ( predictedAlt!=ATN.INVALID_ALT_NUMBER ) {
 					if (optimize_ll1
 						&& input.index() == startIndex
-						&& !dfa.isPrecedenceDfa()
 						&& nextState.outerContext == nextState.remainingOuterContext
 						&& dfa.decision >= 0
 						&& !D.configs.hasSemanticContext())
 					{
 						if (t >= 0 && t <= atn.maxTokenType && predictedAlt > 0 && predictedAlt <= Short.MAX_VALUE) {
-							int key = (dfa.decision << 16) + t;
-							// Keep the ConcurrentMap view in sync for subclasses/tests.
-							atn.ll1Cache.put(key, predictedAlt);
-							short[] dense = atn.ll1Dense;
-							if (dense != null) {
-								int idx = dfa.decision * atn.ll1Stride + t;
-								if (idx >= 0 && idx < dense.length) {
-									dense[idx] = (short) predictedAlt;
+							if (dfa.isPrecedenceDfa()) {
+								// Full-context answers are not reused for the SLL probe.
+								if (!useContext && parser != null) {
+									atn.cachePrecedenceAlt(dfa.decision, parser.getPrecedence(), t, predictedAlt);
+								}
+							}
+							else {
+								int key = (dfa.decision << 16) + t;
+								// Keep the ConcurrentMap view in sync for subclasses/tests.
+								atn.ll1Cache.put(key, predictedAlt);
+								short[] dense = atn.ll1Dense;
+								if (dense != null) {
+									int idx = dfa.decision * atn.ll1Stride + t;
+									if (idx >= 0 && idx < dense.length) {
+										dense[idx] = (short) predictedAlt;
+									}
 								}
 							}
 						}
