@@ -26,6 +26,11 @@ import java.util.concurrent.atomic.AtomicIntegerArray;
  * checks must use {@link #isEmpty()} directly rather than
  * {@code toMap().isEmpty()}.</p>
  *
+ * <p>Lexer maps whose keys all lie in {@code [0, tableLength)} may be stored
+ * identity-indexed ({@link #isDirectIndex()}). {@link #get} does not branch
+ * on that layout — parser maps stay on the hashed probe. {@link DFAState}
+ * publishes {@link #directArray()} for the lexer hot path.</p>
+ *
  * @author Sam Harwell
  */
 public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
@@ -47,6 +52,15 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 	 */
 	private final AtomicInteger size;
 
+	/**
+	 * When {@code true}, slot {@code i} holds key {@code i} and {@link #getDirect}
+	 * is a plain array load. Final: an out-of-range {@link #put} publishes a new
+	 * hashed map rather than flipping this flag. Public constructors stay hashed
+	 * so the first inserts mutate in place. Parser maps ({@code minIndex < 0},
+	 * EOF is a key) never set this.
+	 */
+	private final boolean directIndex;
+
 	public HashEdgeMap(int minIndex, int maxIndex) {
 		this(minIndex, maxIndex, DEFAULT_MAX_SIZE);
 	}
@@ -57,10 +71,15 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 		this.keys = new AtomicIntegerArray(maxSparseSize);
 		this.values = (T[])new Object[maxSparseSize];
 		this.size = new AtomicInteger();
+		this.directIndex = false;
+	}
+
+	private HashEdgeMap(@NotNull HashEdgeMap<T> map, int maxSparseSize) {
+		this(map, maxSparseSize, true);
 	}
 
 	@SuppressWarnings("unchecked")
-	private HashEdgeMap(@NotNull HashEdgeMap<T> map, int maxSparseSize) {
+	private HashEdgeMap(@NotNull HashEdgeMap<T> map, int maxSparseSize, boolean allowDirect) {
 		super(map.minIndex, map.maxIndex);
 		synchronized (map) {
 			if (maxSparseSize < map.values.length) {
@@ -81,7 +100,53 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 				}
 			}
 			this.size = new AtomicInteger(occupied);
+			this.directIndex = allowDirect && minIndex >= 0 && keysFit(map, maxSparseSize);
 		}
+	}
+
+	/** Identity-indexed lexer layout. Package-private; not part of the public API. */
+	boolean isDirectIndex() {
+		return directIndex;
+	}
+
+	/** Table length. Package-private; used by tests and {@link #getDirect}. */
+	int tableLength() {
+		return values.length;
+	}
+
+	/**
+	 * Values array for an identity-indexed map, or {@code null} when this map
+	 * is hashed. Slot {@code i} holds key {@code i}. Package-private.
+	 */
+	Object[] directArray() {
+		return directIndex ? values : null;
+	}
+
+	/**
+	 * Identity lookup. Valid only when {@link #isDirectIndex()} is true.
+	 * Keys outside {@code [0, tableLength)} miss. Does not read the key word,
+	 * so a hashed map must not be queried through this method.
+	 */
+	final T getDirect(int key) {
+		final T[] vals = values;
+		if (key >= 0 && key < vals.length) {
+			return vals[key];
+		}
+		return null;
+	}
+
+	private static boolean keysFit(HashEdgeMap<?> src, int length) {
+		Object[] vals = src.values;
+		for (int i = 0; i < vals.length; i++) {
+			if (vals[i] == null) {
+				continue;
+			}
+			int key = src.keys.get(i);
+			if (key < 0 || key >= length) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static int bucket(int length, int key) {
@@ -152,17 +217,23 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 		}
 
 		synchronized (this) {
+			// Identity layout cannot hold this key. Publish a hashed map of the
+			// same length and insert there (that insert may resize further).
+			if (directIndex && (key < 0 || key >= values.length)) {
+				HashEdgeMap<T> hashed = new HashEdgeMap<T>(this, values.length, false);
+				return hashed.put(key, value);
+			}
+
 			int bucket = bucket(key);
 			int currentKey = keys.get(bucket);
-			if (currentKey == key) {
-				// Same key: replace value only. Keys are written only when a
-				// slot is first occupied, so a matching key is always live —
-				// occupancy is unchanged (no size update).
+			T currentValue = values[bucket];
+			// Empty slots keep key word 0. A live replace requires a stored value,
+			// otherwise put(0) into an empty slot would skip the size update.
+			if (currentValue != null && currentKey == key) {
 				values[bucket] = value;
 				return this;
 			}
 
-			T currentValue = values[bucket];
 			if (currentValue == null) {
 				// Write the key first
 				keys.set(bucket, key);
@@ -188,9 +259,8 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 				}
 			}
 
-			HashEdgeMap<T> resized = new HashEdgeMap<>(this, newSize);
-			resized.put(key, value);
-			return resized;
+			HashEdgeMap<T> resized = new HashEdgeMap<T>(this, newSize);
+			return resized.put(key, value);
 		}
 	}
 

@@ -264,7 +264,7 @@ public class LexerATNSimulator extends ATNSimulator {
 	 */
 	@Nullable
 	protected DFAState getExistingTargetState(@NotNull DFAState s, int t) {
-		DFAState target = s.getTarget(t);
+		DFAState target = s.getLexerTarget(t);
 		if (debug && target != null) {
 			System.out.println("reuse state "+s.stateNumber+
 							   " edge to "+target.stateNumber);

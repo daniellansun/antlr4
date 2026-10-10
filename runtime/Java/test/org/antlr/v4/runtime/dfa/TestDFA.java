@@ -60,6 +60,56 @@ public class TestDFA {
 	}
 
 	@Test
+	public void lexerTargetMatchesGetTarget() {
+		ATN atn = lexerAtn(0);
+		BasicState start = addBasic(atn);
+		DFA dfa = new DFA(start);
+		DFAState state = new DFAState(dfa, new ATNConfigSet());
+		DFAState dest = new DFAState(dfa, new ATNConfigSet());
+		assertNull(state.getLexerTarget(1));
+		assertNull(state.getTarget(1));
+		state.setTarget(1, dest);
+		assertSame(dest, state.getLexerTarget(1));
+		for (int i = 1; i <= 40; i++) {
+			state.setTarget(i, dest);
+			assertSame(state.getTarget(i), state.getLexerTarget(i));
+		}
+		assertNull(state.getLexerTarget(-1));
+		assertSame(state.getTarget(3), state.getLexerTarget(3));
+		DFAState replaced = new DFAState(dfa, new ATNConfigSet());
+		state.setTarget(3, replaced);
+		assertSame(replaced, state.getLexerTarget(3));
+		assertSame(state.getTarget(1), state.getLexerTarget(1));
+		// A key past the identity table must keep every previously installed edge.
+		state.setTarget(10_000, dest);
+		assertSame(state.getTarget(10_000), state.getLexerTarget(10_000));
+		assertSame(replaced, state.getLexerTarget(3));
+		assertSame(state.getTarget(40), state.getLexerTarget(40));
+		assertNull(state.getLexerTarget(-1));
+		// ASCII table covers 0..127 inclusive; 128 falls through to the map.
+		DFAState asciiEdge = new DFAState(dfa, new ATNConfigSet());
+		DFAState wideEdge = new DFAState(dfa, new ATNConfigSet());
+		state.setTarget(0, asciiEdge);
+		state.setTarget(127, asciiEdge);
+		state.setTarget(128, wideEdge);
+		assertSame(asciiEdge, state.getLexerTarget(0));
+		assertSame(asciiEdge, state.getLexerTarget(127));
+		assertSame(wideEdge, state.getLexerTarget(128));
+		assertSame(state.getTarget(0), state.getLexerTarget(0));
+		assertSame(state.getTarget(128), state.getLexerTarget(128));
+
+		ATN parserAtn = parserAtn(20);
+		BasicState pstart = addBasic(parserAtn);
+		DFA parserDfa = new DFA(pstart, 0);
+		DFAState parserState = new DFAState(parserDfa, new ATNConfigSet());
+		DFAState parserDest = new DFAState(parserDfa, new ATNConfigSet());
+		parserState.setTarget(Token.EOF, parserDest);
+		parserState.setTarget(4, parserDest);
+		assertSame(parserState.getTarget(Token.EOF), parserState.getLexerTarget(Token.EOF));
+		assertSame(parserState.getTarget(4), parserState.getLexerTarget(4));
+	}
+
+	@Test
 	public void parserDfaEmptyAndEdges() {
 		ATN atn = parserAtn(10);
 		BasicState start = addBasic(atn);

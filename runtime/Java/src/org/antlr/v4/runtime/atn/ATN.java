@@ -116,6 +116,39 @@ public class ATN {
 	int ll1Stride;
 
 	/**
+	 * Highest precedence stored in {@link #precedenceLL1}. The precedence
+	 * edge map uses the same closed range {@code 0..200}.
+	 */
+	static final int MAX_PRECEDENCE_LL1 = 200;
+
+	/**
+	 * Skip precedence tables wider than this many token types. {@code 201}
+	 * rows times this stride is about 1.6MB of shorts; real Java and Groovy
+	 * vocabularies sit far under it.
+	 */
+	private static final int MAX_PRECEDENCE_LL1_STRIDE = 4096;
+
+	/**
+	 * Per-decision precedence LL(1) answers. For decision {@code d},
+	 * {@code precedenceLL1[d][precedence * stride + token]} is the
+	 * alternative, and zero is a miss. {@code stride} is
+	 * {@code table.length / (MAX_PRECEDENCE_LL1 + 1)} so a lookup does not
+	 * re-read {@link #ll1Stride}.
+	 *
+	 * <p>Filled only when a precedence decision accepts without consuming
+	 * input and without semantic context, which is the steady state of
+	 * left-recursive expression loops (the operator-or-stop decision).
+	 * Shared by every parser that uses this ATN, including parallel
+	 * file-granularity parses. Element stores are plain shorts (atomic on
+	 * the JVM); a racing reader may still observe zero and take the DFA.
+	 * Cleared by {@link #clearDFA()}.</p>
+	 */
+	volatile short[][] precedenceLL1;
+
+	/** Publish guard for {@link #precedenceLL1}. Lookups do not take it. */
+	private final Object precedenceLL1Lock = new Object();
+
+	/**
 	 * LL(1) prediction cache exposed as a JDK {@link ConcurrentMap} so
 	 * subclasses and tests keep a stable {@code protected} surface. Backed by
 	 * {@link #ll1Cache} (single store): external boxed access pays boxing only
@@ -189,7 +222,75 @@ public class ATN {
 		contextCache.clear();
 		// Clears the single primitive store (LL1Table is a view over ll1Cache).
 		ll1Cache.clear();
+		precedenceLL1 = null;
 		ensureLl1Dense(decisionCount);
+	}
+
+	/**
+	 * Precedence LL(1) answer learned for {@code (decision, precedence, token)},
+	 * or {@link #INVALID_ALT_NUMBER} on a miss.
+	 */
+	final int cachedPrecedenceAlt(int decision, int precedence, int token) {
+		short[][] tables = precedenceLL1;
+		if (tables == null || decision < 0 || decision >= tables.length) {
+			return INVALID_ALT_NUMBER;
+		}
+		short[] table = tables[decision];
+		if (table == null || precedence < 0 || precedence > MAX_PRECEDENCE_LL1 || token < 0) {
+			return INVALID_ALT_NUMBER;
+		}
+		int stride = table.length / (MAX_PRECEDENCE_LL1 + 1);
+		if (stride <= 0 || token >= stride) {
+			return INVALID_ALT_NUMBER;
+		}
+		int idx = precedence * stride + token;
+		if (idx >= table.length) {
+			return INVALID_ALT_NUMBER;
+		}
+		return table[idx];
+	}
+
+	/**
+	 * Record a precedence LL(1) answer. No-op for out-of-range keys, a
+	 * non-positive alternative, or a stride this table will not hold. The
+	 * first alternative stored for a pair sticks.
+	 */
+	final void cachePrecedenceAlt(int decision, int precedence, int token, int alt) {
+		if (decision < 0 || precedence < 0 || precedence > MAX_PRECEDENCE_LL1 || token < 0) {
+			return;
+		}
+		if (alt <= 0 || alt > Short.MAX_VALUE) {
+			return;
+		}
+		int stride = ll1Stride;
+		if (stride <= 0 || stride > MAX_PRECEDENCE_LL1_STRIDE || token >= stride) {
+			return;
+		}
+		int slots = (MAX_PRECEDENCE_LL1 + 1) * stride;
+		synchronized (precedenceLL1Lock) {
+			short[][] tables = precedenceLL1;
+			int width = decisionToDFA == null ? 0 : decisionToDFA.length;
+			if (tables == null || decision >= tables.length) {
+				int n = Math.max(decision + 1, width);
+				short[][] grow = new short[n][];
+				if (tables != null) {
+					System.arraycopy(tables, 0, grow, 0, tables.length);
+				}
+				tables = grow;
+			}
+			short[] table = tables[decision];
+			if (table == null || table.length != slots) {
+				table = new short[slots];
+				tables[decision] = table;
+			}
+			int idx = precedence * stride + token;
+			if (table[idx] == 0) {
+				table[idx] = (short) alt;
+			}
+			// Volatile store after the short write. A lookup that sees this
+			// reference also sees the table and the alternative.
+			precedenceLL1 = tables;
+		}
 	}
 
 	/**

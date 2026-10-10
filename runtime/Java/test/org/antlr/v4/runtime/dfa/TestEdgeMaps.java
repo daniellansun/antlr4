@@ -410,6 +410,100 @@ public class TestEdgeMaps {
 	}
 
 	@Test
+	public void hashEdgeMapDirectIndexForLexerKeysOnly() {
+		HashEdgeMap<String> lexer = new HashEdgeMap<String>(0, 100000);
+		assertFalse(lexer.isDirectIndex());
+		assertNull(lexer.directArray());
+		AbstractEdgeMap<String> current = lexer;
+		for (int i = 1; i <= 40; i++) {
+			current = current.put(i, "v" + i);
+		}
+		assertTrue(current instanceof HashEdgeMap);
+		HashEdgeMap<String> direct = (HashEdgeMap<String>) current;
+		assertTrue(direct.isDirectIndex());
+		assertTrue(direct.tableLength() > 40);
+		assertSame(direct.directArray(), direct.directArray());
+		assertEquals(direct.tableLength(), direct.directArray().length);
+		for (int i = 1; i <= 40; i++) {
+			assertEquals("v" + i, direct.get(i));
+			assertEquals(direct.get(i), direct.getDirect(i));
+		}
+		assertNull(direct.getDirect(-1));
+		assertNull(direct.get(-1));
+		assertNull(direct.getDirect(direct.tableLength()));
+		// key 0 occupies an empty slot whose key word is already 0
+		HashEdgeMap<String> zero = new HashEdgeMap<String>(0, 50);
+		zero = (HashEdgeMap<String>) zero.put(0, "z");
+		assertEquals(1, zero.size());
+		assertEquals("z", zero.get(0));
+
+		HashEdgeMap<String> parser = new HashEdgeMap<String>(-1, 100000);
+		AbstractEdgeMap<String> p = parser.put(-1, "eof");
+		for (int i = 0; i <= 30; i++) {
+			p = p.put(i, "t" + i);
+		}
+		assertTrue(p instanceof HashEdgeMap);
+		assertFalse(((HashEdgeMap<String>) p).isDirectIndex());
+		assertNull(((HashEdgeMap<String>) p).directArray());
+		assertEquals("eof", p.get(-1));
+		assertEquals("t0", p.get(0));
+	}
+
+	@Test
+	public void hashEdgeMapDirectIndexDemotesAndRemoves() {
+		HashEdgeMap<String> seed = new HashEdgeMap<String>(0, 100000);
+		AbstractEdgeMap<String> current = seed;
+		for (int i = 1; i <= 40; i++) {
+			current = current.put(i, "v" + i);
+		}
+		HashEdgeMap<String> direct = (HashEdgeMap<String>) current;
+		assertTrue(direct.isDirectIndex());
+		int length = direct.tableLength();
+
+		// Same key replaces in place and does not change occupancy.
+		AbstractEdgeMap<String> replaced = direct.put(3, "replaced");
+		assertSame(direct, replaced);
+		assertEquals("replaced", direct.get(3));
+		assertEquals("replaced", direct.getDirect(3));
+		assertEquals(40, direct.size());
+
+		// A key past the table cannot stay identity-indexed. The original map
+		// keeps its layout; the published map holds every previous edge.
+		AbstractEdgeMap<String> demoted = direct.put(length, "wide");
+		assertTrue(demoted instanceof HashEdgeMap);
+		assertTrue(demoted != direct);
+		assertTrue(direct.isDirectIndex());
+		assertFalse(((HashEdgeMap<String>) demoted).isDirectIndex());
+		assertNull(((HashEdgeMap<String>) demoted).directArray());
+		assertEquals("wide", demoted.get(length));
+		assertEquals("replaced", demoted.get(3));
+		assertEquals("v1", demoted.get(1));
+		assertEquals("v40", demoted.get(40));
+		assertEquals(41, demoted.size());
+
+		HashEdgeMap<String> removed = direct.remove(3);
+		assertTrue(removed.isDirectIndex());
+		assertNull(removed.get(3));
+		assertNull(removed.getDirect(3));
+		assertEquals("v1", removed.get(1));
+		assertEquals(39, removed.size());
+		assertEquals("replaced", direct.get(3));
+
+		// A non-direct table can hold a key at or past its length (slot 0).
+		// Copying that table at the same length must stay hashed.
+		HashEdgeMap<String> hashed = new HashEdgeMap<String>(0, 100000);
+		hashed = (HashEdgeMap<String>) hashed.put(8, "eight");
+		hashed = (HashEdgeMap<String>) hashed.put(1, "one");
+		assertFalse(hashed.isDirectIndex());
+		assertEquals(8, hashed.tableLength());
+		HashEdgeMap<String> copied = hashed.remove(1);
+		assertFalse(copied.isDirectIndex());
+		assertNull(copied.get(1));
+		assertEquals("eight", copied.get(8));
+		assertEquals(1, copied.size());
+	}
+
+	@Test
 	public void hashEdgeMapEntrySet() {
 		HashEdgeMap<String> map = new HashEdgeMap<String>(0, 20);
 		map = (HashEdgeMap<String>) map.put(2, "two");
