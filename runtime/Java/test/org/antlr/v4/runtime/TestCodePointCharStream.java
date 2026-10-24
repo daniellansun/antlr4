@@ -15,6 +15,23 @@ import static org.junit.Assert.assertTrue;
 
 public class TestCodePointCharStream {
 	@Test
+	public void seekRejectsNegativeAndClampsPastEnd() {
+		final CodePointCharStream s = CharStreams.fromString("ab");
+		Throwable t = assertThrows(IllegalArgumentException.class, new ThrowingRunnable() {
+			@Override
+			public void run() {
+				s.seek(-1);
+			}
+		});
+		assertTrue(t.getMessage().contains("negative"));
+		s.seek(10);
+		assertEquals(2, s.index());
+		assertEquals(IntStream.EOF, s.LA(1));
+		s.seek(1);
+		assertEquals('b', s.LA(1));
+	}
+
+	@Test
 	public void emptyBytesHasSize0() {
 		CodePointCharStream s = CharStreams.fromString("");
 		assertEquals(0, s.size());

@@ -281,7 +281,10 @@ public <if(parser.abstractRecognizer)>abstract <endif>class <parser.name> extend
 	/**
 	 * Monomorphic match used by generated token sites. Public
 	 * {@link #match(int)} remains for handwritten callers and subclasses.
-	 * Skips {@code reportMatch} on the success path while not recovering.
+	 * {@code reportMatchRequired} is false for {@link DefaultErrorStrategy},
+	 * so the success path is a field check. A custom strategy that returns
+	 * true from {@link ANTLRErrorStrategy#isReportMatchRequired()} is notified
+	 * on every successful match.
 	 */
 	private Token _match(int ttype) {
 		Token t = _input.LT(1);
@@ -289,7 +292,7 @@ public <if(parser.abstractRecognizer)>abstract <endif>class <parser.name> extend
 			if ( ttype==Token.EOF ) {
 				matchedEOF = true;
 			}
-			if (errorRecoveryMode) {
+			if (reportMatchRequired || errorRecoveryMode) {
 				_errHandler.reportMatch(this);
 			}
 			consume(t);
@@ -779,7 +782,7 @@ setState(<m.stateNumber>);
 			matchedEOF = true;
 		}
 		<endif>
-		if (errorRecoveryMode) {
+		if (reportMatchRequired || errorRecoveryMode) {
 			_errHandler.reportMatch(this);
 		}
 		consume(_st);

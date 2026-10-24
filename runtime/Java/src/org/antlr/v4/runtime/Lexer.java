@@ -421,10 +421,15 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 	 *  it all works out.  You can instead use the rule invocation stack
 	 *  to do sophisticated error recovery if you are in a fragment rule.
 	 */
+	/**
+	 * Consume one character and resync. Uses
+	 * {@link LexerATNSimulator#consume(CharStream)} so line and column advance
+	 * the same way as {@link #recover(LexerNoViableAltException)}. Does not
+	 * consume EOF.
+	 */
 	public void recover(RecognitionException re) {
-		//System.out.println("consuming char "+(char)input.LA(1)+" during recovery");
-		//re.printStackTrace();
-		// TODO: Do we lose character or line position information?
-		_input.consume();
+		if (_input.LA(1) != IntStream.EOF) {
+			getInterpreter().consume(_input);
+		}
 	}
 }

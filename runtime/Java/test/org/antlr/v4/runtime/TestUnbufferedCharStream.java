@@ -21,6 +21,20 @@ import static org.junit.Assert.fail;
 
 public class TestUnbufferedCharStream {
 	@Test
+	public void unicodeNonCharacterIsNotEof() {
+		UnbufferedCharStream s = new UnbufferedCharStream(new StringReader("\uFFFFX"));
+		assertEquals(0xFFFF, s.LA(1));
+		assertEquals('X', s.LA(2));
+		int mark = s.mark();
+		assertEquals("\uFFFFX", s.getText(Interval.of(0, 1)));
+		s.release(mark);
+		s.consume();
+		assertEquals('X', s.LA(1));
+		s.consume();
+		assertEquals(IntStream.EOF, s.LA(1));
+	}
+
+	@Test
 	public void laAndConsume() {
 		UnbufferedCharStream s = new UnbufferedCharStream(new StringReader("abc"));
 		assertEquals('a', s.LA(1));

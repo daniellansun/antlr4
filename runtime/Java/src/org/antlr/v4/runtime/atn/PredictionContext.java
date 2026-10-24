@@ -274,8 +274,10 @@ public abstract class PredictionContext {
 
 		if (!changed) {
 			existing = contextCache.putIfAbsent(context, context);
-			visited.put(context, existing != null ? existing : context);
-			return context;
+			PredictionContext canonical = existing != null ? existing : context;
+			visited.put(context, canonical);
+			// Return the cache winner so later identity checks see one node.
+			return canonical;
 		}
 
 		// We know parents.length>0 because context.isEmpty() is checked at the beginning of the method.
@@ -289,10 +291,11 @@ public abstract class PredictionContext {
 		}
 
 		existing = contextCache.putIfAbsent(updated, updated);
-		visited.put(updated, existing != null ? existing : updated);
-		visited.put(context, existing != null ? existing : updated);
+		PredictionContext canonical = existing != null ? existing : updated;
+		visited.put(updated, canonical);
+		visited.put(context, canonical);
 
-		return updated;
+		return canonical;
 	}
 
 	public PredictionContext appendContext(int returnContext, PredictionContextCache contextCache) {

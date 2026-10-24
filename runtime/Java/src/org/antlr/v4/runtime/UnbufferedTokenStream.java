@@ -289,7 +289,8 @@ public class UnbufferedTokenStream implements TokenStream {
 	@Override
 	public String getText(Interval interval) {
 		int bufferStartIndex = getBufferStartIndex();
-		int bufferStopIndex = bufferStartIndex + tokens.length - 1;
+		// Window is the filled count, not the array capacity. Slack slots are null.
+		int bufferStopIndex = bufferStartIndex + n - 1;
 
 		int start = interval.a;
 		int stop = interval.b;
@@ -304,6 +305,9 @@ public class UnbufferedTokenStream implements TokenStream {
 		StringBuilder buf = new StringBuilder();
 		for (int i = a; i <= b; i++) {
 			Token t = tokens[i];
+			if (t.getType() == Token.EOF) {
+				break;
+			}
 			buf.append(t.getText());
 		}
 

@@ -191,6 +191,9 @@ public class ANTLRInputStream implements UnicodeCharStream, CharStream {
 	 */
 	@Override
 	public void seek(int index) {
+		if ( index < 0 ) {
+			throw new IllegalArgumentException("cannot seek to negative index " + index);
+		}
 		if ( index<=p ) {
 			p = index; // just jump; don't update stream state (line, ...)
 			return;

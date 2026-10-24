@@ -287,6 +287,16 @@ public class TestLexerCoverage {
 		int before = lexer.getInputStream().index();
 		lexer.recover(new RecognitionException(lexer, lexer.getInputStream()));
 		assertEquals(before + 1, lexer.getInputStream().index());
+		assertEquals(1, lexer.getInterpreter().getCharPositionInLine());
+	}
+
+	@Test
+	public void recoverRecognitionExceptionAdvancesLineOnNewline() {
+		LexerInterpreter lexer = lex(buildSkipLexer(), "\n", "A", "WS");
+		assertEquals(1, lexer.getInterpreter().getLine());
+		lexer.recover(new RecognitionException(lexer, lexer.getInputStream()));
+		assertEquals(2, lexer.getInterpreter().getLine());
+		assertEquals(0, lexer.getInterpreter().getCharPositionInLine());
 	}
 
 	@Test

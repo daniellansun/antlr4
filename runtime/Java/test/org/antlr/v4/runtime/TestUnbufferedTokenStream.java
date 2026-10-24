@@ -34,6 +34,22 @@ public class TestUnbufferedTokenStream {
 		assertEquals(Token.EOF, tokens.LA(1));
 	}
 
+	@Test
+	public void getTextUsesFilledCountAndStopsBeforeEof() {
+		UnbufferedTokenStream tokens = new UnbufferedTokenStream(new MockTokenSource(t(1, "a"), t(2, "b")), 8);
+		assertEquals("a", tokens.getText(Interval.of(0, 0)));
+		try {
+			tokens.getText(Interval.of(0, 7));
+			fail("unfilled capacity is not part of the window");
+		}
+		catch (UnsupportedOperationException expected) {
+			assertTrue(expected.getMessage().contains("not in token buffer"));
+		}
+		tokens.LT(3);
+		String text = tokens.getText(Interval.of(0, 2));
+		assertEquals("ab", text);
+	}
+
 	@Test(expected = IllegalStateException.class)
 	public void consumeEofThrows() {
 		UnbufferedTokenStream tokens = new UnbufferedTokenStream(new MockTokenSource());

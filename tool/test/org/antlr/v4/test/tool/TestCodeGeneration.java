@@ -157,8 +157,8 @@ public class TestCodeGeneration extends BaseTest {
 			source.contains("consume(_st)"));
 		assertFalse("must not consume() without the looked-up token",
 			source.contains("consume();"));
-		assertTrue("success path must gate reportMatch on errorRecoveryMode",
-			source.contains("if (errorRecoveryMode)"));
+		assertTrue("success path calls reportMatch for a custom strategy or while recovering",
+			source.contains("if (reportMatchRequired || errorRecoveryMode)"));
 		assertFalse("set without EOF must not store matchedEOF",
 			source.contains("matchedEOF = true") && source.contains("_st.getType() == Token.EOF"));
 	}

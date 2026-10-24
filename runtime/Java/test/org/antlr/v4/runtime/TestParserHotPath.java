@@ -375,4 +375,88 @@ public class TestParserHotPath {
 		assertFalse("reportMatch must leave recovery", p.errorRecoveryMode);
 	}
 
+	@Test
+	public void customStrategyIsNotifiedOnEverySuccessfulMatch() {
+		ParserInterpreter p = parser(1);
+		p.setBuildParseTree(true);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		InterpreterRuleContext ctx = new InterpreterRuleContext(null, -1, 0);
+		p.setContext(ctx);
+		final int[] reports = new int[1];
+		p.setErrorHandler(new DefaultErrorStrategy() {
+			@Override
+			public boolean isReportMatchRequired() {
+				return true;
+			}
+
+			@Override
+			public boolean inErrorRecoveryMode(Parser recognizer) {
+				return true;
+			}
+
+			@Override
+			public void reportMatch(Parser recognizer) {
+				reports[0]++;
+			}
+		});
+		assertFalse(p.errorRecoveryMode);
+		assertTrue(p.reportMatchRequired);
+		Token matched = p.match(1);
+		assertEquals(1, reports[0]);
+		assertTrue(ctx.getChild(0) instanceof ErrorNode);
+		assertSame(matched, ((ErrorNode) ctx.getChild(0)).getSymbol());
+	}
+
+	/**
+	 * A strategy that does not override {@link ANTLRErrorStrategy#isReportMatchRequired}
+	 * keeps the interface default, which is to report every successful match.
+	 */
+	@Test
+	public void interfaceDefaultReportsEverySuccessfulMatch() {
+		ParserInterpreter p = parser(1);
+		p.setBuildParseTree(false);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		p.setContext(new InterpreterRuleContext(null, -1, 0));
+		final int[] reports = new int[1];
+		final DefaultErrorStrategy delegate = new DefaultErrorStrategy();
+		p.setErrorHandler(new ANTLRErrorStrategy() {
+			@Override
+			public void reset(Parser recognizer) {
+				delegate.reset(recognizer);
+			}
+
+			@Override
+			public Token recoverInline(Parser recognizer) throws RecognitionException {
+				return delegate.recoverInline(recognizer);
+			}
+
+			@Override
+			public void recover(Parser recognizer, RecognitionException e) {
+				delegate.recover(recognizer, e);
+			}
+
+			@Override
+			public void sync(Parser recognizer) {
+				delegate.sync(recognizer);
+			}
+
+			@Override
+			public boolean inErrorRecoveryMode(Parser recognizer) {
+				return false;
+			}
+
+			@Override
+			public void reportMatch(Parser recognizer) {
+				reports[0]++;
+			}
+
+			@Override
+			public void reportError(Parser recognizer, RecognitionException e) {
+			}
+		});
+		assertTrue(p.reportMatchRequired);
+		p.match(1);
+		assertEquals(1, reports[0]);
+	}
+
 }

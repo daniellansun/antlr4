@@ -290,9 +290,11 @@ public class TestEdgeMaps {
 		ArrayEdgeMap<String> other = new ArrayEdgeMap<String>(3, 10);
 		other.put(3, "three");
 		other.put(5, "FIVE");
+		target.put(1, "one");
 		target.putAll(other);
 		assertEquals("three", target.get(3));
 		assertEquals("FIVE", target.get(5));
+		assertEquals("holes in the source must not delete destination keys", "one", target.get(1));
 
 		// sparse
 		@SuppressWarnings("deprecation")
@@ -327,6 +329,20 @@ public class TestEdgeMaps {
 			count++;
 		}
 		assertEquals(2, count);
+
+		ArrayEdgeMap<String> sparse = new ArrayEdgeMap<String>(0, 5);
+		sparse.put(0, "only");
+		Iterator<Map.Entry<Integer, String>> sparseIt = sparse.entrySet().iterator();
+		assertTrue(sparseIt.hasNext());
+		assertEquals(Integer.valueOf(0), sparseIt.next().getKey());
+		assertFalse(sparseIt.hasNext());
+		try {
+			sparseIt.next();
+			fail("trailing holes are not another entry");
+		}
+		catch (java.util.NoSuchElementException expected) {
+			// ok
+		}
 
 		Iterator<Map.Entry<Integer, String>> it = entries.iterator();
 		it.next();

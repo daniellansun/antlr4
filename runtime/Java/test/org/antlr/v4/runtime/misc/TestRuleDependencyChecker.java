@@ -285,6 +285,47 @@ public class TestRuleDependencyChecker {
 		}
 	}
 
+	@Test
+	public void nestedMismatchIsReportedAgainOnRetry() {
+		assertThrows(IllegalStateException.class, new ThrowingRunnable() {
+			@Override
+			public void run() {
+				RuleDependencyChecker.checkDependencies(OuterThenBadNested.class);
+			}
+		});
+		assertThrows(IllegalStateException.class, new ThrowingRunnable() {
+			@Override
+			public void run() {
+				RuleDependencyChecker.checkDependencies(OuterThenBadNested.class);
+			}
+		});
+	}
+
+	/** Outer class has no dependency. The nested mismatch must stay visible. */
+	static class OuterThenBadNested {
+		static class BadNested {
+			@RuleDependency(recognizer = FakeRecognizer.class, rule = 0, version = 0)
+			int bad;
+		}
+	}
+
+	@Test
+	public void secondRecognizerMismatchIsReported() {
+		assertThrows(IllegalStateException.class, new ThrowingRunnable() {
+			@Override
+			public void run() {
+				RuleDependencyChecker.checkDependencies(SecondRecognizerMismatch.class);
+			}
+		});
+	}
+
+	static class SecondRecognizerMismatch {
+		@RuleDependency(recognizer = FakeRecognizer.class, rule = 0, version = 1)
+		int left;
+		@RuleDependency(recognizer = OddRecognizer.class, rule = 0, version = 99)
+		int right;
+	}
+
 	static class MixedRecognizers {
 		@RuleDependency(recognizer = FakeRecognizer.class, rule = 0, version = 1)
 		int left;

@@ -172,6 +172,13 @@ public class TestANTLRInputStream {
 		// seek past end clamps
 		s.seek(100);
 		assertEquals(s.size(), s.index());
+		try {
+			s.seek(-1);
+			throw new AssertionError("negative seek");
+		}
+		catch (IllegalArgumentException expected) {
+			assertTrue(expected.getMessage().contains("negative"));
+		}
 	}
 
 	@Test

@@ -158,9 +158,12 @@ final class ConcurrentIntIntMapView extends AbstractMap<Integer, Integer>
 		if (!(key instanceof Integer) || !(value instanceof Integer)) {
 			return false;
 		}
-		return delegate.remove(
-			((Integer) key).intValue(),
-			((Integer) value).intValue());
+		int k = ((Integer) key).intValue();
+		boolean removed = delegate.remove(k, ((Integer) value).intValue());
+		if (removed) {
+			syncDense(k, 0);
+		}
+		return removed;
 	}
 
 	@Override
@@ -221,7 +224,8 @@ final class ConcurrentIntIntMapView extends AbstractMap<Integer, Integer>
 
 		@Override
 		public void clear() {
-			delegate.clear();
+			// Same mirror as ConcurrentIntIntMapView.clear: wipe ll1Dense too.
+			ConcurrentIntIntMapView.this.clear();
 		}
 
 		@Override
@@ -251,9 +255,12 @@ final class ConcurrentIntIntMapView extends AbstractMap<Integer, Integer>
 			if (!(key instanceof Integer) || !(value instanceof Integer)) {
 				return false;
 			}
-			return delegate.remove(
-				((Integer) key).intValue(),
-				((Integer) value).intValue());
+			int k = ((Integer) key).intValue();
+			boolean removed = delegate.remove(k, ((Integer) value).intValue());
+			if (removed) {
+				syncDense(k, 0);
+			}
+			return removed;
 		}
 
 		@Override
@@ -300,6 +307,7 @@ final class ConcurrentIntIntMapView extends AbstractMap<Integer, Integer>
 				throw new IllegalStateException();
 			}
 			delegate.remove(lastKey);
+			syncDense(lastKey, 0);
 			canRemove = false;
 		}
 	}
@@ -333,8 +341,10 @@ final class ConcurrentIntIntMapView extends AbstractMap<Integer, Integer>
 				throw new NullPointerException();
 			}
 			int prev = value;
-			delegate.put(key, newValue.intValue());
-			value = newValue.intValue();
+			int next = newValue.intValue();
+			delegate.put(key, next);
+			syncDense(key, next);
+			value = next;
 			return Integer.valueOf(prev);
 		}
 

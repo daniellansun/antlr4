@@ -88,24 +88,12 @@ public class InterpreterDataReader {
 				result.ruleNames.add(line);
 			}
 
-			// Blank lines separate sections. The rule-name loop stops on the
-			// separator, so the following header is still unread. Peek it:
-			// lexer files continue with "channel names:", parser files with
-			// "atn:". Reset unless this really is the lexer section, so the
-			// "atn:" read below still sees the parser header.
-			if (line != null && line.isEmpty()) {
-				br.mark(8192);
-				String header = br.readLine();
-				if ("channel names:".equals(header)) {
-					line = header;
-				}
-				else {
-					br.reset();
-				}
-			}
-
-			if (line != null && line.equals("channel names:")) { // Additional lexer data.
-				result.channels = new ArrayList<>();
+			// The rule-name loop consumed the separating blank. Tool.generateInterpreterData
+			// then writes "channel names:" for a lexer, or one more blank and "atn:"
+			// for a parser (the extra blank is outside the lexer-only block).
+			line = br.readLine();
+			if ("channel names:".equals(line)) {
+				result.channels = new ArrayList<String>();
 				while ((line = br.readLine()) != null) {
 					if (line.isEmpty())
 						break;
@@ -113,33 +101,34 @@ public class InterpreterDataReader {
 				}
 
 				line = br.readLine();
-				if (!line.equals("mode names:"))
+				if (line == null || !line.equals("mode names:"))
 					throw new RuntimeException("Unexpected data entry");
-				result.modes = new ArrayList<>();
+				result.modes = new ArrayList<String>();
 				while ((line = br.readLine()) != null) {
 					if (line.isEmpty())
 						break;
 					result.modes.add(line);
 				}
+				line = br.readLine();
+			}
+			else if (line != null && line.isEmpty()) {
+				line = br.readLine();
 			}
 
-			line = br.readLine();
-			if (!line.equals("atn:"))
+			if (line == null || !line.equals("atn:"))
 				throw new RuntimeException("Unexpected data entry");
 			line = br.readLine();
-			String[] elements = line.split(",");
+			if (line == null)
+				throw new RuntimeException("Unexpected data entry");
+			String payload = line.trim();
+			if (payload.startsWith("[") && payload.endsWith("]") && payload.length() >= 2) {
+				payload = payload.substring(1, payload.length() - 1).trim();
+			}
+			String[] elements = payload.isEmpty() ? new String[0] : payload.split(",");
 			char[] serializedATN = new char[elements.length];
 
 			for (int i = 0; i < elements.length; ++i) {
-				int value;
-				String element = elements[i];
-				if (element.startsWith("["))
-					value = Integer.parseInt(element.substring(1).trim());
-				else if (element.endsWith("]"))
-					value = Integer.parseInt(element.substring(0, element.length() - 1).trim());
-				else
-					value = Integer.parseInt(element.trim());
-				serializedATN[i] = (char) value;
+				serializedATN[i] = (char) Integer.parseInt(elements[i].trim());
 			}
 
 			ATNDeserializer deserializer = new ATNDeserializer();

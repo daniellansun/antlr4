@@ -213,12 +213,14 @@ public class TokenStreamRewriter {
 
 	/** Rollback the instruction stream for a program so that
 	 *  the indicated instruction (via instructionIndex) is no
-	 *  longer in the stream. UNTESTED!
+	 *  longer in the stream. The retained prefix is a copy; later inserts
+	 *  do not mutate the discarded tail.
 	 */
 	public void rollback(String programName, int instructionIndex) {
 		List<RewriteOperation> is = programs.get(programName);
 		if ( is!=null ) {
-			programs.put(programName, is.subList(MIN_TOKEN_INDEX,instructionIndex));
+			int end = instructionIndex < 0 ? 0 : Math.min(instructionIndex, is.size());
+			programs.put(programName, new ArrayList<RewriteOperation>(is.subList(0, end)));
 		}
 	}
 
@@ -522,7 +524,6 @@ public class TokenStreamRewriter {
 					rewrites.set(prevRop.instructionIndex, null); // kill first delete
 					rop.index = Math.min(prevRop.index, rop.index);
 					rop.lastIndex = Math.max(prevRop.lastIndex, rop.lastIndex);
-					System.out.println("new rop "+rop);
 				}
 				else if ( !disjoint ) {
 					throw new IllegalArgumentException("replace op boundaries of "+rop+" overlap with previous "+prevRop);

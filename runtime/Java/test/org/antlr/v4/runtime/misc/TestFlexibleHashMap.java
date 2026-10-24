@@ -36,10 +36,10 @@ public class TestFlexibleHashMap {
 	public void putReplacesValue() {
 		FlexibleHashMap<String, Integer> map = new FlexibleHashMap<String, Integer>();
 		map.put("a", 1);
-		// implementation increments n on replace as well
 		Integer prev = map.put("a", 2);
 		assertEquals(Integer.valueOf(1), prev);
 		assertEquals(Integer.valueOf(2), map.get("a"));
+		assertEquals(1, map.size());
 	}
 
 	@Test

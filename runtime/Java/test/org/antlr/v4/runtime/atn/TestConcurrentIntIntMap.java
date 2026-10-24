@@ -393,6 +393,36 @@ public class TestConcurrentIntIntMap {
 	}
 
 	@Test
+	public void viewConditionalRemoveAndEntryWritesClearDense() {
+		ATN atn = new ATN(ATNType.PARSER, 4);
+		atn.ensureLl1Dense(1);
+		int key = (0 << 16) + 1;
+		atn.LL1Table.put(key, 3);
+		assertEquals(3, atn.ll1Dense[1]);
+		assertTrue(atn.LL1Table.remove(key, 3));
+		assertEquals(0, atn.ll1Dense[1]);
+		assertNull(atn.LL1Table.get(key));
+
+		atn.LL1Table.put(key, 4);
+		Map.Entry<Integer, Integer> entry = atn.LL1Table.entrySet().iterator().next();
+		assertEquals(Integer.valueOf(4), entry.setValue(6));
+		assertEquals(6, atn.ll1Dense[1]);
+
+		Iterator<Map.Entry<Integer, Integer>> it = atn.LL1Table.entrySet().iterator();
+		assertTrue(it.hasNext());
+		it.next();
+		it.remove();
+		assertEquals(0, atn.ll1Dense[1]);
+		assertTrue(atn.LL1Table.isEmpty());
+
+		atn.LL1Table.put(key, 8);
+		assertEquals(8, atn.ll1Dense[1]);
+		atn.LL1Table.entrySet().clear();
+		assertEquals(0, atn.ll1Dense[1]);
+		assertTrue(atn.LL1Table.isEmpty());
+	}
+
+	@Test
 	public void ensureLl1DenseCoversStrideOverflowAndFill() {
 		ATN negativeMax = new ATN(ATNType.PARSER, -1);
 		negativeMax.ensureLl1Dense(3);

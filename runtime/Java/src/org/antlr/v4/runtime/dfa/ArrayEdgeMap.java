@@ -101,7 +101,12 @@ public final class ArrayEdgeMap<T> extends AbstractEdgeMap<T> {
 			int maxOverlap = Math.min(maxIndex, other.maxIndex);
 			ArrayEdgeMap<T> result = this;
 			for (int i = minOverlap; i <= maxOverlap; i++) {
-				result = result.put(i, m.get(i));
+				T value = m.get(i);
+				// put(key, null) clears the slot. Holes in the source must not
+				// delete keys the destination already holds.
+				if (value != null) {
+					result = result.put(i, value);
+				}
 			}
 
 			return result;
@@ -121,7 +126,7 @@ public final class ArrayEdgeMap<T> extends AbstractEdgeMap<T> {
 				return result;
 			}
 		} else {
-			throw new UnsupportedOperationException(String.format("EdgeMap of type %s is supported yet.", m.getClass().getName()));
+			throw new UnsupportedOperationException(String.format("EdgeMap of type %s is not supported.", m.getClass().getName()));
 		}
 	}
 
@@ -162,29 +167,39 @@ public final class ArrayEdgeMap<T> extends AbstractEdgeMap<T> {
 	}
 
 	private class EntryIterator implements Iterator<Map.Entry<Integer, T>> {
-		private int currentIndex = -1;
+		/** Index of the next occupied slot, or {@code -1} when exhausted. */
+		private int nextIndex;
+
+		EntryIterator() {
+			nextIndex = advance(0);
+		}
+
+		private int advance(int start) {
+			int length = arrayData.length();
+			for (int i = start; i < length; i++) {
+				if (arrayData.get(i) != null) {
+					return i;
+				}
+			}
+			return -1;
+		}
 
 		@Override
 		public boolean hasNext() {
-			return currentIndex < arrayData.length() - 1;
+			return nextIndex >= 0;
 		}
 
 		@Override
 		public Map.Entry<Integer, T> next() {
-			T element = null;
-			while (element == null && currentIndex < arrayData.length() - 1) {
-				currentIndex++;
-				element = arrayData.get(currentIndex);
-			}
-
-			if (element == null) {
+			if (nextIndex < 0) {
 				throw new NoSuchElementException();
 			}
 
-			currentIndex++;
-			final T currentElement = element;
+			final int index = nextIndex;
+			final T currentElement = arrayData.get(index);
+			nextIndex = advance(index + 1);
 			return new Map.Entry<Integer, T>() {
-				private final int key = minIndex + currentIndex - 1;
+				private final int key = minIndex + index;
 				private final T value = currentElement;
 
 				@Override

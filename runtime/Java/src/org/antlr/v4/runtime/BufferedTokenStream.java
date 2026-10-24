@@ -127,8 +127,24 @@ public class BufferedTokenStream implements TokenStream {
 
     @Override
     public void seek(int index) {
+		if (index < 0) {
+			throw new IllegalArgumentException("cannot seek to negative index " + index);
+		}
         lazyInit();
-		int adjusted = adjustSeekIndex(index);
+		// Inside the fetched buffer this is one compare plus adjustSeekIndex.
+		// adaptivePredict rewinds stay on that path. Past the buffer, sync
+		// until EOF and clamp so index() lands on EOF and LA(1) is EOF.
+		int target = index;
+		if (target >= tokens.size()) {
+			sync(target);
+			if (tokens.isEmpty()) {
+				throw new IllegalStateException("seek on an empty token stream");
+			}
+			if (target >= tokens.size()) {
+				target = tokens.size() - 1;
+			}
+		}
+		int adjusted = adjustSeekIndex(target);
 		if (p == adjusted) {
 			// Already at the target. Keep cachedLT1 so adaptivePredict's
 			// rewind after a no-consume decision does not evict the LA(1)
@@ -297,9 +313,20 @@ public class BufferedTokenStream implements TokenStream {
         if ( k==0 ) return null;
         if ( k < 0 ) return LB(-k);
 		if ( k == 1 ) {
-			Token t = tokens.get(p);
-			cachedLT1 = t;
-			return t;
+			// Miss path: p was outside the fetched buffer. sync/clamp instead
+			// of indexing blindly (seek past the buffer used to throw
+			// IndexOutOfBoundsException here while LT(k>1) returned EOF).
+			if (p < 0 || p >= tokens.size()) {
+				sync(p < 0 ? 0 : p);
+				if (p >= tokens.size() && !tokens.isEmpty()) {
+					p = tokens.size() - 1;
+				}
+			}
+			if (p >= 0 && p < tokens.size()) {
+				Token t = tokens.get(p);
+				cachedLT1 = t;
+				return t;
+			}
 		}
 
 		int i = p + k - 1;
@@ -424,9 +451,32 @@ public class BufferedTokenStream implements TokenStream {
     }
 
     public List<Token> getTokens(int start, int stop, int ttype) {
-		BitSet s = new BitSet(ttype);
-		s.set(ttype);
-		return getTokens(start,stop, s);
+		// BitSet(int) rejects a negative size, so Token.EOF (-1) cannot be
+		// stored as a bit. Compare the type directly. A positive type also
+		// stays a one-slot check instead of a bit set sized to the type.
+		if (ttype < Token.EOF) {
+			throw new IllegalArgumentException("invalid token type " + ttype);
+		}
+		lazyInit();
+		if ( start<0 || stop>=tokens.size() ||
+			 stop<0  || start>=tokens.size() )
+		{
+			throw new IndexOutOfBoundsException("start "+start+" or stop "+stop+
+												" not in 0.."+(tokens.size()-1));
+		}
+		if ( start>stop ) return null;
+
+		List<Token> filteredTokens = new ArrayList<Token>();
+		for (int i = start; i <= stop; i++) {
+			Token t = tokens.get(i);
+			if ( t.getType()==ttype ) {
+				filteredTokens.add(t);
+			}
+		}
+		if ( filteredTokens.isEmpty() ) {
+			filteredTokens = null;
+		}
+		return filteredTokens;
     }
 
 	/**

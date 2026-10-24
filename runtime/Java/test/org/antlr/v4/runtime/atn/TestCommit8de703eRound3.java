@@ -80,6 +80,13 @@ public class TestCommit8de703eRound3 {
 		assertTrue(set.canMerge(left, key, same));
 		assertTrue(set.canMerge(left, key, equal));
 		assertFalse(set.canMerge(left, key, mismatch));
+
+		ATNConfig high = ATNConfig.create(state, 4097, PredictionContext.EMPTY_LOCAL);
+		assertFalse("alts that differ by 4096 must not share a merge key", set.canMerge(left, key, high));
+		ATNConfigSet both = new ATNConfigSet();
+		both.add(ATNConfig.create(state, 1, PredictionContext.EMPTY_LOCAL));
+		both.add(high);
+		assertEquals(2, both.size());
 	}
 
 	@Test

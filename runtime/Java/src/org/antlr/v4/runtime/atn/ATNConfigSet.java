@@ -459,10 +459,13 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		return ls == rs || (ls != null && ls.equals(rs));
 	}
 
+	/**
+	 * Packed {@code (stateNumber, alt)} key. The alternative keeps the full
+	 * 24 bits stored by {@link ATNConfig}.
+	 */
 	protected long getKey(ATNConfig e) {
-		long key = e.getState().stateNumber;
-		key = (key << 12) | (e.getAlt() & 0xFFF);
-		return key;
+		long key = e.getState().stateNumber & 0xFFFFFFFFL;
+		return (key << 24) | (e.getAlt() & 0xFFFFFF);
 	}
 
 	@Override

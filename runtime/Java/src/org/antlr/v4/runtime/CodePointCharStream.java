@@ -119,7 +119,18 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 
 	@Override
 	public final void seek(int index) {
-		position = index;
+		// The negative throw lives in another method so this one stays a
+		// leaf. accept() calls seek once per token; an exception edge here
+		// stops the JIT from inlining it into that path.
+		if (index >= 0) {
+			position = index > size ? size : index;
+			return;
+		}
+		rejectNegativeSeek(index);
+	}
+
+	private static void rejectNegativeSeek(int index) {
+		throw new IllegalArgumentException("cannot seek to negative index " + index);
 	}
 
 	@Override

@@ -109,7 +109,6 @@ public class FlexibleHashMap<K,V> implements Map<K, V> {
 			if ( comparator.equals(e.key, key) ) {
 				V prev = e.value;
 				e.value = value;
-				n++;
 				return prev;
 			}
 		}

@@ -177,6 +177,30 @@ public class TestInterpreterDataReader {
 	}
 
 	@Test
+	public void parserLayoutWithToolExtraBlankBeforeAtn() throws IOException {
+		String atnLine = readAtnLineFromClasspathXPathLexer();
+		File f = tmp.newFile("parser-double-blank.interp");
+		String content =
+			"token literal names:\n" +
+			"null\n" +
+			"\n" +
+			"token symbolic names:\n" +
+			"A\n" +
+			"\n" +
+			"rule names:\n" +
+			"s\n" +
+			"\n" +
+			"\n" +
+			"atn:\n" +
+			atnLine + "\n";
+		write(f, content);
+		InterpreterDataReader.InterpreterData data = InterpreterDataReader.parseFile(f.getAbsolutePath());
+		assertEquals(Collections.singletonList("s"), data.ruleNames);
+		assertNotNull(data.atn);
+		assertNull(data.channels);
+	}
+
+	@Test
 	public void constructReaderAndBracketedAtnLine() throws IOException {
 		assertNotNull(new InterpreterDataReader());
 		// atn line with brackets around first/last element (covers startsWith/endsWith branches)

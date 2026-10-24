@@ -71,6 +71,15 @@ public class UnbufferedCharStream implements UnicodeCharStream, CharStream {
 
     protected Reader input;
 
+	/**
+	 * Set when {@link #nextChar()} returns EOF. The historical buffer still
+	 * stores that EOF as {@code (char) -1} ({@code U+FFFF}) so existing
+	 * window walks keep their layout. {@link #LA} treats {@code U+FFFF} as
+	 * EOF only when it is that trailing sentinel. A real {@code U+FFFF}
+	 * earlier in the buffer is returned as itself.
+	 */
+	protected boolean hitEOF;
+
 	/** The name or source of this char stream. */
 	public String name;
 
@@ -145,12 +154,17 @@ public class UnbufferedCharStream implements UnicodeCharStream, CharStream {
 	 */
 	protected int fill(int n) {
 		for (int i=0; i<n; i++) {
-			if (this.n > 0 && data[this.n - 1] == (char)IntStream.EOF) {
+			if (hitEOF) {
 				return i;
 			}
 
 			try {
 				int c = nextChar();
+				if (c == IntStream.EOF) {
+					hitEOF = true;
+				}
+				// Store EOF as the historical U+FFFF sentinel so buffer length
+				// and seek clamping stay the same. LA distinguishes it.
 				add(c);
 			}
 			catch (IOException ioe) {
@@ -183,8 +197,9 @@ public class UnbufferedCharStream implements UnicodeCharStream, CharStream {
         int index = p + i - 1;
         if ( index < 0 ) throw new IndexOutOfBoundsException();
 		if ( index >= n ) return IntStream.EOF;
-        char c = data[index];
-        if ( c==(char)IntStream.EOF ) return IntStream.EOF;
+		char c = data[index];
+		// Only the trailing sentinel means EOF. A real U+FFFF is data.
+		if (hitEOF && index == n - 1 && c == (char)IntStream.EOF) return IntStream.EOF;
         return c;
     }
 
@@ -287,7 +302,7 @@ public class UnbufferedCharStream implements UnicodeCharStream, CharStream {
 		}
 
 		int bufferStartIndex = getBufferStartIndex();
-		if (n > 0 && data[n - 1] == Character.MAX_VALUE) {
+		if (n > 0 && data[n - 1] == Character.MAX_VALUE && hitEOF) {
 			if (interval.a + interval.length() > bufferStartIndex + n) {
 				throw new IllegalArgumentException("the interval extends past the end of the stream");
 			}

@@ -18,6 +18,9 @@ import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * ATN interpreter for lexers. Builds and consults a per-mode DFA cache while
  * falling back to ATN simulation for unseen edges.
@@ -104,6 +107,26 @@ public class LexerATNSimulator extends ATNSimulator {
 	 */
 	private final RetainedConfigSet retainedReach = new RetainedConfigSet(true);
 
+	/**
+	 * Closure busy set for the current outermost {@link #closure} call.
+	 * The value is the {@code currentAltReachedAcceptState} flag of the most
+	 * permissive visit ({@code false} means the config was added). A revisit is
+	 * skipped unless a later path is more permissive, which stops {@code EOF*}
+	 * and epsilon cycles without dropping a diamond that still has to add the
+	 * config. Warm DFA edge walks do not enter {@link #closure}.
+	 */
+	private final Map<ATNConfig, Boolean> closureBusy = new HashMap<ATNConfig, Boolean>();
+
+	/** Nesting depth of {@link #closure}. Zero outside a closure root. */
+	private int closureDepth;
+
+	/**
+	 * Closure frames before {@link #closureBusy} is consulted. Shallow
+	 * decisions pay no map probe. Deep enough that a same-config cycle stops
+	 * well short of the thread stack, including when the ATN itself is large.
+	 */
+	private static final int CLOSURE_BUSY_DEPTH = 64;
+
 	/** @deprecated This field is no longer used. */
 	@Deprecated
 	public static int match_calls = 0;
@@ -150,6 +173,8 @@ public class LexerATNSimulator extends ATNSimulator {
 		line = 1;
 		charPositionInLine = 0;
 		mode = Lexer.DEFAULT_MODE;
+		closureBusy.clear();
+		closureDepth = 0;
 	}
 
 	protected int matchATN(@NotNull CharStream input) {
@@ -454,6 +479,19 @@ public class LexerATNSimulator extends ATNSimulator {
 	 * {@code false}.
 	 */
 	protected boolean closure(@NotNull CharStream input, @NotNull ATNConfig config, @NotNull ATNConfigSet configs, boolean currentAltReachedAcceptState, boolean speculative, boolean treatEofAsEpsilon) {
+		boolean root = closureDepth++ == 0;
+		if (root && !closureBusy.isEmpty()) {
+			closureBusy.clear();
+		}
+		try {
+		// Hash only after a normal decision would have finished, so a DFA-miss
+		// closure does not probe the map on every frame. A same-config cycle
+		// (EOF* or an epsilon loop) stops here instead of walking one frame
+		// per ATN state and overflowing the stack.
+		if (closureDepth > CLOSURE_BUSY_DEPTH && reuseClosure(config, currentAltReachedAcceptState)) {
+			return currentAltReachedAcceptState;
+		}
+
 		/*if ( debug ) {
 			System.out.println("closure("+config.toString(recog, true)+")");
 		}*/
@@ -515,6 +553,30 @@ public class LexerATNSimulator extends ATNSimulator {
 		}
 
 		return currentAltReachedAcceptState;
+		}
+		finally {
+			closureDepth--;
+		}
+	}
+
+	/**
+	 * @return {@code true} when {@code config} was already closed under an
+	 * equally or more permissive accept flag
+	 */
+	private boolean reuseClosure(@NotNull ATNConfig config, boolean currentAltReachedAcceptState) {
+		Boolean previous = closureBusy.get(config);
+		if (previous == null) {
+			closureBusy.put(config, Boolean.valueOf(currentAltReachedAcceptState));
+			return false;
+		}
+		if (!previous.booleanValue()) {
+			return true;
+		}
+		if (!currentAltReachedAcceptState) {
+			closureBusy.put(config, Boolean.FALSE);
+			return false;
+		}
+		return true;
 	}
 
 	// side-effect: can alter configs.hasSemanticContext

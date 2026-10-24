@@ -100,21 +100,34 @@ public class DefaultErrorStrategy implements ANTLRErrorStrategy {
 	/**
 	 * {@inheritDoc}
 	 *
-	 * <p>The default implementation calls {@link #endErrorCondition} only when
-	 * the strategy is currently in error recovery mode (i.e. leaving recovery
-	 * after a successful match). When not recovering, this method is a pure
-	 * no-op — it does <em>not</em> invoke {@code endErrorCondition} on every
-	 * successful match. That matters because every generated
-	 * {@link Parser#match} reaches this method on the hot path.</p>
+	 * <p>{@link DefaultErrorStrategy} returns {@code false}. Generated match
+	 * sites then call {@link #reportMatch} only while
+	 * {@link Parser#errorRecoveryMode} is set, which is exactly when this
+	 * method has work to do. A subclass that needs {@code reportMatch} (or
+	 * {@link #inErrorRecoveryMode}) on every successful token must override
+	 * this method and return {@code true}.</p>
+	 */
+	@Override
+	public boolean isReportMatchRequired() {
+		return false;
+	}
+
+	/**
+	 * {@inheritDoc}
 	 *
-	 * <p>Subclasses that previously overrode {@link #endErrorCondition} as a
-	 * general “match succeeded” hook should override {@code reportMatch}
-	 * instead (or call {@code super.reportMatch} then run their own logic).</p>
+	 * <p>The default implementation calls {@link #endErrorCondition} only when
+	 * the strategy is currently in error recovery mode (leaving recovery after
+	 * a successful match). When not recovering, this method is a pure no-op.
+	 * Combined with {@link #isReportMatchRequired()} returning {@code false},
+	 * generated parsers do not call it on the success path at all.</p>
+	 *
+	 * <p>To run custom logic on every successful match, override
+	 * {@link #isReportMatchRequired()} to return {@code true} and override
+	 * this method. Overriding only this method leaves the hot path on the
+	 * cached flag.</p>
 	 */
 	@Override
 	public void reportMatch(Parser recognizer) {
-		// Fast path: not recovering → nothing to clear. Generated parsers call
-		// this on every successful token match.
 		if (errorRecoveryMode) {
 			endErrorCondition(recognizer);
 		}

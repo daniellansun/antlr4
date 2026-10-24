@@ -113,15 +113,6 @@ public class CommonTokenStream extends BufferedTokenStream {
         return tokens.get(i);
     }
 
-	/**
-	 * PERF: Channel-aware LA(1) via the base LT(1) cache (p is always on-channel
-	 * after {@link #adjustSeekIndex}).
-	 */
-	@Override
-	public int LA(int i) {
-		return i == 1 ? super.LA(1) : super.LA(i);
-	}
-
 	/** Count EOF just once. */
 	public int getNumberOfOnChannelTokens() {
 		int n = 0;

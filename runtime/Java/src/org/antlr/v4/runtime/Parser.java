@@ -118,11 +118,19 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	 * Cached {@link ANTLRErrorStrategy#inErrorRecoveryMode} flag. Updated by
 	 * {@link DefaultErrorStrategy#beginErrorCondition} /
 	 * {@link DefaultErrorStrategy#endErrorCondition} (and {@link #reset}).
-	 * Generated match / {@link #consume(Token)} read this field so the success
-	 * path does not pay a virtual recovery check or {@code reportMatch} per
-	 * token.
+	 * Generated match / {@link #consume(Token)} read this field when
+	 * {@link #reportMatchRequired} is false, so the default strategy does not
+	 * pay a virtual recovery check or {@code reportMatch} per token.
 	 */
 	protected boolean errorRecoveryMode;
+
+	/**
+	 * Cached {@link ANTLRErrorStrategy#isReportMatchRequired()} for the
+	 * installed handler. {@code false} for {@link DefaultErrorStrategy} and
+	 * its subclasses unless they opt in. Updated only by
+	 * {@link #setErrorHandler}; do not assign {@code _errHandler} directly.
+	 */
+	protected boolean reportMatchRequired;
 
 	/**
 	 * Last symbol actually consumed by {@link #consume(Token)}. Used by
@@ -213,8 +221,10 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 
 	/**
 	 * Match current input symbol against {@code ttype}. If the symbol type
-	 * matches, {@link ANTLRErrorStrategy#reportMatch} and {@link #consume} are
-	 * called to complete the match process.
+	 * matches, {@link #consume} completes the match.
+	 * {@link ANTLRErrorStrategy#reportMatch} runs on every success when
+	 * {@link ANTLRErrorStrategy#isReportMatchRequired()} is true, and otherwise
+	 * only while {@link #errorRecoveryMode} is set.
 	 *
 	 * <p>If the symbol type does not match,
 	 * {@link ANTLRErrorStrategy#recoverInline} is called on the current error
@@ -239,7 +249,7 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 			if ( ttype==Token.EOF ) {
 				matchedEOF = true;
 			}
-			if (errorRecoveryMode) {
+			if (reportMatchRequired || errorRecoveryMode) {
 				_errHandler.reportMatch(this);
 			}
 			consume(t);
@@ -257,8 +267,9 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 
 	/**
 	 * Match current input symbol as a wildcard. If the symbol type matches
-	 * (i.e. has a value greater than 0), {@link ANTLRErrorStrategy#reportMatch}
-	 * and {@link #consume} are called to complete the match process.
+	 * (i.e. has a value greater than 0), {@link #consume} completes the match.
+	 * {@link ANTLRErrorStrategy#reportMatch} follows the same rule as
+	 * {@link #match(int)}.
 	 *
 	 * <p>If the symbol type does not match,
 	 * {@link ANTLRErrorStrategy#recoverInline} is called on the current error
@@ -277,7 +288,7 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	public Token matchWildcard() throws RecognitionException {
 		Token t = _input.LT(1);
 		if (t.getType() > 0) {
-			if (errorRecoveryMode) {
+			if (reportMatchRequired || errorRecoveryMode) {
 				_errHandler.reportMatch(this);
 			}
 			consume(t);
@@ -540,6 +551,7 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	public void setErrorHandler(@NotNull ANTLRErrorStrategy handler) {
 		this._errHandler = handler;
 		this.errorSyncEnabled = handler.isSyncRequired();
+		this.reportMatchRequired = handler.isReportMatchRequired();
 	}
 
 	/**
@@ -629,11 +641,16 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 		lastConsumed = o;
 		// Common path: build parse trees with no listeners. Empty listener lists
 		// are normalized to null by removeParseListener(s), so a non-null
-		// reference means "notify". Recovery uses the cached
-		// {@link #errorRecoveryMode} field so the success path is a boolean load.
+		// reference means "notify". The default strategy uses the cached
+		// {@link #errorRecoveryMode} field (one boolean load). A strategy that
+		// returns true from {@link ANTLRErrorStrategy#isReportMatchRequired()}
+		// is asked {@link ANTLRErrorStrategy#inErrorRecoveryMode} instead.
 		List<ParseTreeListener> listeners = _parseListeners;
 		if (_buildParseTrees || listeners != null) {
-			if ( errorRecoveryMode ) {
+			boolean recovering = reportMatchRequired
+				? _errHandler.inErrorRecoveryMode(this)
+				: errorRecoveryMode;
+			if ( recovering ) {
 				ErrorNode node = _ctx.addErrorNode(createErrorNode(_ctx,o));
 				if (listeners != null) {
 					for (ParseTreeListener listener : listeners) {

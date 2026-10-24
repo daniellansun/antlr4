@@ -85,7 +85,14 @@ public class DFAState {
 	@NotNull
 	private volatile AbstractEdgeMap<DFAState> contextEdges;
 
-	/** Symbols in this set require a global context transition before matching an input symbol. */
+	/**
+	 * Symbols that require a global context transition before the symbol edge.
+	 * Copy-on-write so a reader never sees a half-updated {@link BitSet}.
+	 * Not volatile: the LL walk reads {@link #edges} first, and
+	 * {@link #setContextSymbol} stores the bit before {@link #setTarget}
+	 * publishes that map. {@code null} means the state is not context
+	 * sensitive. SLL does not read this field.
+	 */
 	@Nullable
 	private BitSet contextSymbols;
 
@@ -159,11 +166,29 @@ public class DFAState {
 	}
 
 	public final boolean isContextSymbol(int symbol) {
-		if (!isContextSensitive() || symbol < edges.minIndex) {
+		// edges first, then the bit. setContextSymbol writes the bit before
+		// setTarget publishes the map, so a reader that sees the new map sees
+		// the bit. SLL does not call this.
+		AbstractEdgeMap<DFAState> edgeMap = edges;
+		BitSet bits = contextSymbols;
+		if (bits == null || symbol < edgeMap.minIndex) {
 			return false;
 		}
 
-		return contextSymbols.get(symbol - edges.minIndex);
+		return bits.get(symbol - edgeMap.minIndex);
+	}
+
+	/**
+	 * Same test as {@link #isContextSymbol} for a caller that has already
+	 * read {@link #edges} (the warm LL loop, which would otherwise load the
+	 * map twice).
+	 */
+	public final boolean contextSymbolAfterEdge(int symbol) {
+		BitSet bits = contextSymbols;
+		if (bits == null || symbol < edges.minIndex) {
+			return false;
+		}
+		return bits.get(symbol - edges.minIndex);
 	}
 
 	public final void setContextSymbol(int symbol) {
@@ -172,12 +197,21 @@ public class DFAState {
 			return;
 		}
 
-		contextSymbols.set(symbol - edges.minIndex);
+		int bit = symbol - edges.minIndex;
+		synchronized (this) {
+			BitSet bits = contextSymbols;
+			if (bits != null && bits.get(bit)) {
+				return;
+			}
+			BitSet copy = bits == null ? new BitSet() : (BitSet) bits.clone();
+			copy.set(bit);
+			contextSymbols = copy;
+		}
 	}
 
 	public void setContextSensitive(ATN atn) {
 		assert !configs.isOutermostConfigSet();
-		if (isContextSensitive()) {
+		if (contextSymbols != null) {
 			return;
 		}
 

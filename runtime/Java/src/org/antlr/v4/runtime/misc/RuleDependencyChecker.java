@@ -20,7 +20,9 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -39,20 +41,40 @@ public class RuleDependencyChecker {
 			return;
 		}
 
-		List<Class<?>> typesToCheck = new ArrayList<>();
+		List<Class<?>> typesToCheck = new ArrayList<Class<?>>();
 		typesToCheck.add(dependentClass);
 		Collections.addAll(typesToCheck, dependentClass.getDeclaredClasses());
+		List<Class<?>> passed = new ArrayList<Class<?>>();
 		for (final Class<?> clazz : typesToCheck) {
 			if (isChecked(clazz)) {
 				continue;
 			}
 
 			List<Tuple2<RuleDependency, AnnotatedElement>> dependencies = getDependencies(clazz);
-			if (dependencies.isEmpty()) {
-				continue;
+			if (!dependencies.isEmpty()) {
+				// Group by recognizer so every recognizer on the class is checked.
+				Map<Class<? extends Recognizer<?, ?>>, List<Tuple2<RuleDependency, AnnotatedElement>>> byRecognizer =
+					new LinkedHashMap<Class<? extends Recognizer<?, ?>>, List<Tuple2<RuleDependency, AnnotatedElement>>>();
+				for (Tuple2<RuleDependency, AnnotatedElement> dependency : dependencies) {
+					Class<? extends Recognizer<?, ?>> recognizer = dependency.getItem1().recognizer();
+					List<Tuple2<RuleDependency, AnnotatedElement>> group = byRecognizer.get(recognizer);
+					if (group == null) {
+						group = new ArrayList<Tuple2<RuleDependency, AnnotatedElement>>();
+						byRecognizer.put(recognizer, group);
+					}
+					group.add(dependency);
+				}
+				for (Map.Entry<Class<? extends Recognizer<?, ?>>, List<Tuple2<RuleDependency, AnnotatedElement>>> entry : byRecognizer.entrySet()) {
+					checkDependencies(entry.getValue(), entry.getKey());
+				}
 			}
-
-			checkDependencies(dependencies, dependencies.get(0).getItem1().recognizer());
+			// Mark only after every class in this call has succeeded. Marking
+			// the outer class before a declared class throws would make a
+			// retry skip the failure.
+			passed.add(clazz);
+		}
+		for (int i = 0; i < passed.size(); i++) {
+			markChecked(passed.get(i));
 		}
 	}
 
@@ -98,8 +120,6 @@ public class RuleDependencyChecker {
 		if (incompatible.length() != 0) {
 			throw new IllegalStateException(incompatible.toString());
 		}
-
-		markChecked(recognizerClass);
 	}
 
 	private static int[] getRuleVersions(Class<? extends Recognizer<?, ?>> recognizerClass, String[] ruleNames) {

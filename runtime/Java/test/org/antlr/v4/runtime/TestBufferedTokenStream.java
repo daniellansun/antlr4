@@ -87,13 +87,45 @@ public class TestBufferedTokenStream {
 		assertEquals(2, tokens.LA(1));
 	}
 
-	@Test(expected = IndexOutOfBoundsException.class)
+	@Test(expected = IllegalStateException.class)
 	public void consumeWithoutCachedLt1WhenPNotLessThanSize() {
 		BufferedTokenStream tokens = stream(tok(1, "x"), tok(2, "y"));
 		tokens.LT(2);
 		tokens.seek(2);
-		assertNull(tokens.cachedLT1());
+		assertEquals(Token.EOF, tokens.LA(1));
+		assertEquals(2, tokens.index());
 		tokens.consume();
+	}
+
+	@Test
+	public void seekPastEndClampsToEof() {
+		BufferedTokenStream tokens = stream(tok(1, "x"), tok(2, "y"));
+		tokens.seek(100);
+		assertEquals(Token.EOF, tokens.LA(1));
+		assertEquals(tokens.size() - 1, tokens.index());
+	}
+
+	@Test(expected = IllegalArgumentException.class)
+	public void seekNegativeThrows() {
+		BufferedTokenStream tokens = stream(tok(1, "x"));
+		tokens.LT(1);
+		tokens.seek(-1);
+	}
+
+	@Test
+	public void getTokensByTypeIncludesEofAndRejectsNegative() {
+		BufferedTokenStream tokens = stream(tok(1, "a"), tok(2, "b"));
+		tokens.fill();
+		List<Token> eofs = tokens.getTokens(0, tokens.size() - 1, Token.EOF);
+		assertEquals(1, eofs.size());
+		assertEquals(Token.EOF, eofs.get(0).getType());
+		try {
+			tokens.getTokens(0, 0, -2);
+			throw new AssertionError("negative type");
+		}
+		catch (IllegalArgumentException expected) {
+			assertTrue(expected.getMessage().contains("-2"));
+		}
 	}
 
 	@Test(expected = IllegalStateException.class)

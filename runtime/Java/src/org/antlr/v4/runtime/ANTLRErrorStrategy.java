@@ -124,8 +124,30 @@ public interface ANTLRErrorStrategy {
 	boolean inErrorRecoveryMode(@NotNull Parser recognizer);
 
 	/**
-	 * This method is called by when the parser successfully matches an input
-	 * symbol.
+	 * Whether a successful match must call {@link #reportMatch} and consult
+	 * {@link #inErrorRecoveryMode} instead of {@link Parser}'s cached recovery
+	 * flag. {@code false} means {@link DefaultErrorStrategy#reportMatch} is a
+	 * no-op except while the strategy is already recovering, so generated
+	 * match sites may skip the virtual call.
+	 *
+	 * <p>The default is {@code true} (a strategy that implements this interface
+	 * directly keeps the historical "every match reports" contract).
+	 * {@link DefaultErrorStrategy} returns {@code false}. A subclass that
+	 * overrides {@link #reportMatch} or {@link #inErrorRecoveryMode} and needs
+	 * those methods on the success path must return {@code true} here, the
+	 * same way a {@link #sync} override must return {@code true} from
+	 * {@link #isSyncRequired}.</p>
+	 *
+	 * @since 4.13.2.18
+	 */
+	default boolean isReportMatchRequired() {
+		return true;
+	}
+
+	/**
+	 * This method is called when the parser successfully matches an input
+	 * symbol, unless {@link #isReportMatchRequired()} is {@code false} and the
+	 * parser is not already recovering.
 	 *
 	 * @param recognizer the parser instance
 	 */

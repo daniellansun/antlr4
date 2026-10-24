@@ -303,6 +303,13 @@ public class ParserATNSimulator extends ATNSimulator {
 	protected final Parser parser;
 
 	/**
+	 * A subclass that overrides {@link #getExistingTargetState} (the
+	 * profiler) must see full-context DFA edges. The base class reuses the
+	 * edge it already loaded. One class test at construction, not per edge.
+	 */
+	private final boolean subclassObservesDfaEdge = getClass() != ParserATNSimulator.class;
+
+	/**
 	 * When {@code true}, ambiguous alternatives are reported when they are
 	 * encountered within {@link #execATN}. When {@code false}, these messages
 	 * are suppressed. The default is {@code false}.
@@ -627,11 +634,20 @@ public class ParserATNSimulator extends ATNSimulator {
 		DFAState s = s0;
 
 		int t = input.LA(1);
+		// Non-accept EOF edges do not consume. A repeated state on that walk
+		// is a cycle; record it only after LA(1) is EOF so the token hot path
+		// stays the existing compare.
+		ArrayList<DFAState> eofStates = null;
+		ArrayList<ParserRuleContext> eofContexts = null;
 
 		while ( true ) {
 			if ( dfa_debug ) System.out.println("DFA state "+s.stateNumber+" LA(1)=="+getLookaheadName(input));
+			DFAState prefetched = null;
 			if ( useContext ) {
-				while ( s.isContextSymbol(t) ) {
+				// One volatile edge load, then the plain context bit. A second
+				// getTarget below would repeat that load on every LL state.
+				prefetched = s.getTarget(t);
+				while ( s.contextSymbolAfterEdge(t) ) {
 					DFAState next = null;
 					if (remainingOuterContext != null) {
 						remainingOuterContext = skipTailCalls(remainingOuterContext);
@@ -647,6 +663,7 @@ public class ParserATNSimulator extends ATNSimulator {
 					assert remainingOuterContext != null;
 					remainingOuterContext = remainingOuterContext.getParent();
 					s = next;
+					prefetched = s.getTarget(t);
 				}
 			}
 
@@ -668,8 +685,20 @@ public class ParserATNSimulator extends ATNSimulator {
 			// t is not updated if one of these states is reached
 			assert !isAcceptState(s, useContext);
 
-			// if no edge, pop over to ATN interpreter, update DFA and return
-			DFAState target = getExistingTargetState(s, t);
+			// if no edge, pop over to ATN interpreter, update DFA and return.
+			// Full context already loaded the edge. Call the protected hook
+			// only when a subclass overrides it, so the base LL walk does not
+			// load the map again.
+			DFAState target;
+			if (!useContext) {
+				target = getExistingTargetState(s, t);
+			}
+			else if (subclassObservesDfaEdge) {
+				target = getExistingTargetState(s, t);
+			}
+			else {
+				target = prefetched;
+			}
 			if ( target == null ) {
 				if ( dfa_debug && t>=0 ) System.out.println("no edge for "+parser.getVocabulary().getDisplayName(t));
 				int alt;
@@ -696,9 +725,17 @@ public class ParserATNSimulator extends ATNSimulator {
 				return handleNoViableAlt(input, startIndex, errorState);
 			}
 			s = target;
-			if (!isAcceptState(s, useContext) && t != IntStream.EOF) {
-				input.consume();
-				t = input.LA(1);
+			if (!isAcceptState(s, useContext)) {
+				if (t != IntStream.EOF) {
+					input.consume();
+					t = input.LA(1);
+				}
+				else if (repeatedEof(eofStates = eofStates == null ? new ArrayList<DFAState>() : eofStates,
+						eofContexts = eofContexts == null ? new ArrayList<ParserRuleContext>() : eofContexts,
+						s, remainingOuterContext, useContext)) {
+					SimulatorState errorState = new SimulatorState(outerContext, s, useContext, remainingOuterContext);
+					return handleNoViableAlt(input, startIndex, errorState);
+				}
 			}
 		}
 //		if ( acceptState==null ) {
@@ -886,6 +923,8 @@ public class ParserATNSimulator extends ATNSimulator {
 		SimulatorState previous = initialState;
 
 		PredictionContextCache contextCache = obtainContextCache();
+		ArrayList<DFAState> eofStates = null;
+		ArrayList<ParserRuleContext> eofContexts = null;
 		while (true) { // while more work
 			SimulatorState nextState = computeReachSet(dfa, previous, t, contextCache);
 			if (nextState == null) {
@@ -1005,13 +1044,50 @@ public class ParserATNSimulator extends ATNSimulator {
 				}
 			}
 
+			SimulatorState source = previous;
 			previous = nextState;
 
 			if (t != IntStream.EOF) {
 				input.consume();
 				t = input.LA(1);
 			}
+			else if (repeatedEof(eofStates = eofStates == null ? new ArrayList<DFAState>() : eofStates,
+					eofContexts = eofContexts == null ? new ArrayList<ParserRuleContext>() : eofContexts,
+					D, nextState.remainingOuterContext, useContext)) {
+				return handleNoViableAlt(input, startIndex, source);
+			}
 		}
+	}
+
+	/**
+	 * @return {@code true} when this EOF step repeats a state the walk has
+	 * already seen with the same remaining outer context. Full-context
+	 * prediction reuses one DFA state after a context pop; that pop is
+	 * progress, so the context object is part of the key. SLL passes
+	 * {@code useContext false} and any repeat of the state is a cycle.
+	 * Identity, not {@code stateNumber}: outermost states stay at {@code -1}
+	 * when the global-context DFA is disabled, and {@code addDFAState} then
+	 * returns a new object on every reach. Those compare equal by
+	 * configuration set.
+	 */
+	private static boolean repeatedEof(ArrayList<DFAState> states, ArrayList<ParserRuleContext> contexts,
+			DFAState state, ParserRuleContext ctx, boolean useContext) {
+		for (int i = 0; i < states.size(); i++) {
+			if (useContext && contexts.get(i) != ctx) {
+				continue;
+			}
+			DFAState seen = states.get(i);
+			if (seen == state) {
+				return true;
+			}
+			// Not interned: a fresh object with the same configs is the same step.
+			if (state.stateNumber < 0 && seen.stateNumber < 0 && seen.configs.equals(state.configs)) {
+				return true;
+			}
+		}
+		states.add(state);
+		contexts.add(useContext ? ctx : null);
+		return false;
 	}
 
 	/**

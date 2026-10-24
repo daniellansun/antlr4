@@ -165,7 +165,11 @@ public class RuleDependencyProcessor extends AbstractProcessor {
 
 				int highestRequiredDependency = checkDependencyVersion(dependency, ruleNames, ruleVersions, effectiveRule, null);
 
-				if (dependents.contains(Dependents.PARENTS)) {
+				// Segmented Java output stores _serializedATN as Utils.join(...),
+				// which is not a compile-time constant. extractRuleRelations
+				// already reported that. SELF is checked above and the declared
+				// version is compared below; only the graph walks need relations.
+				if (relations != null && dependents.contains(Dependents.PARENTS)) {
 					BitSet parents = relations.parents[dependency.getItem1().rule()];
 					for (int parent = parents.nextSetBit(0); parent >= 0; parent = parents.nextSetBit(parent + 1)) {
 						if (parent < 0 || parent >= ruleVersions.length || checked.get(parent)) {
@@ -178,7 +182,7 @@ public class RuleDependencyProcessor extends AbstractProcessor {
 					}
 				}
 
-				if (dependents.contains(Dependents.CHILDREN)) {
+				if (relations != null && dependents.contains(Dependents.CHILDREN)) {
 					BitSet children = relations.children[dependency.getItem1().rule()];
 					for (int child = children.nextSetBit(0); child >= 0; child = children.nextSetBit(child + 1)) {
 						if (child < 0 || child >= ruleVersions.length || checked.get(child)) {
@@ -191,7 +195,7 @@ public class RuleDependencyProcessor extends AbstractProcessor {
 					}
 				}
 
-				if (dependents.contains(Dependents.ANCESTORS)) {
+				if (relations != null && dependents.contains(Dependents.ANCESTORS)) {
 					BitSet ancestors = relations.getAncestors(dependency.getItem1().rule());
 					for (int ancestor = ancestors.nextSetBit(0); ancestor >= 0; ancestor = ancestors.nextSetBit(ancestor + 1)) {
 						if (ancestor < 0 || ancestor >= ruleVersions.length || checked.get(ancestor)) {
@@ -204,7 +208,7 @@ public class RuleDependencyProcessor extends AbstractProcessor {
 					}
 				}
 
-				if (dependents.contains(Dependents.DESCENDANTS)) {
+				if (relations != null && dependents.contains(Dependents.DESCENDANTS)) {
 					BitSet descendants = relations.getDescendants(dependency.getItem1().rule());
 					for (int descendant = descendants.nextSetBit(0); descendant >= 0; descendant = descendants.nextSetBit(descendant + 1)) {
 						if (descendant < 0 || descendant >= ruleVersions.length || checked.get(descendant)) {
