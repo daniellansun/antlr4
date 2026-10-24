@@ -11,6 +11,7 @@ import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.Lexer;
 import org.antlr.v4.runtime.dfa.DFA;
 import org.antlr.v4.runtime.dfa.DFAState;
+import org.antlr.v4.runtime.misc.IntervalSet;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -172,5 +173,103 @@ public class TestLexerATNSimulatorHotPaths {
 		assertEquals(16, ATNConfigSet.scratchCapacity(1));
 		assertEquals(32, ATNConfigSet.scratchCapacity(16));
 		assertEquals(64, ATNConfigSet.scratchCapacity(32));
+	}
+
+	/**
+	 * ID : [a-z]+ ; WS : [ \n]+ ;
+	 * A warm DFA loop must leave the input index, line, and column on the
+	 * same character the slow loop would, including a newline inside WS.
+	 */
+	@Test
+	public void selfLoopRunKeepsIndexLineAndColumn() {
+		ATN atn = buildSelfLoopLexer();
+		LexerATNSimulator sim = new LexerATNSimulator(atn);
+		// Cold match builds the loop edges.
+		assertEquals(1, sim.match(CharStreams.fromString("abcd"), Lexer.DEFAULT_MODE));
+		sim.reset();
+
+		CharStream ident = CharStreams.fromString("abcd");
+		assertEquals(1, sim.match(ident, Lexer.DEFAULT_MODE));
+		assertEquals(4, ident.index());
+		assertEquals(1, sim.getLine());
+		assertEquals(4, sim.getCharPositionInLine());
+		sim.reset();
+
+		CharStream split = CharStreams.fromString("ab\ncd");
+		assertEquals(1, sim.match(split, Lexer.DEFAULT_MODE));
+		assertEquals(2, split.index());
+		assertEquals(1, sim.getLine());
+		assertEquals(2, sim.getCharPositionInLine());
+		assertEquals(2, sim.match(split, Lexer.DEFAULT_MODE));
+		assertEquals(3, split.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(1, sim.match(split, Lexer.DEFAULT_MODE));
+		assertEquals(5, split.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(2, sim.getCharPositionInLine());
+		sim.reset();
+
+		// First whitespace match installs the edges. The second match is the
+		// warm loop, including the newline that moves the line.
+		sim.match(CharStreams.fromString(" \n "), Lexer.DEFAULT_MODE);
+		sim.reset();
+		CharStream ws = CharStreams.fromString(" \n ");
+		assertEquals(2, sim.match(ws, Lexer.DEFAULT_MODE));
+		assertEquals(3, ws.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+		sim.reset();
+
+		CharStream one = CharStreams.fromString("a");
+		assertEquals(1, sim.match(one, Lexer.DEFAULT_MODE));
+		assertEquals(1, one.index());
+		assertEquals(1, sim.getCharPositionInLine());
+	}
+
+	private static ATN buildSelfLoopLexer() {
+		ATN atn = new ATN(ATNType.LEXER, Character.MAX_CODE_POINT);
+		TokensStartState tokensStart = new TokensStartState();
+		tokensStart.ruleIndex = -1;
+		atn.addState(tokensStart);
+
+		RuleStartState idStart = new RuleStartState();
+		idStart.ruleIndex = 0;
+		atn.addState(idStart);
+		BasicState idMid = new BasicState();
+		idMid.ruleIndex = 0;
+		atn.addState(idMid);
+		RuleStopState idStop = new RuleStopState();
+		idStop.ruleIndex = 0;
+		atn.addState(idStop);
+		idStart.stopState = idStop;
+		idStart.addTransition(new RangeTransition(idMid, 'a', 'z'));
+		idMid.addTransition(new RangeTransition(idMid, 'a', 'z'));
+		idMid.addTransition(new EpsilonTransition(idStop));
+
+		RuleStartState wsStart = new RuleStartState();
+		wsStart.ruleIndex = 1;
+		atn.addState(wsStart);
+		BasicState wsMid = new BasicState();
+		wsMid.ruleIndex = 1;
+		atn.addState(wsMid);
+		RuleStopState wsStop = new RuleStopState();
+		wsStop.ruleIndex = 1;
+		atn.addState(wsStop);
+		wsStart.stopState = wsStop;
+		IntervalSet wsSet = new IntervalSet();
+		wsSet.add(' ');
+		wsSet.add('\n');
+		wsStart.addTransition(new SetTransition(wsMid, wsSet));
+		wsMid.addTransition(new SetTransition(wsMid, wsSet));
+		wsMid.addTransition(new EpsilonTransition(wsStop));
+
+		tokensStart.addTransition(new EpsilonTransition(idStart));
+		tokensStart.addTransition(new EpsilonTransition(wsStart));
+		atn.ruleToStartState = new RuleStartState[] { idStart, wsStart };
+		atn.ruleToStopState = new RuleStopState[] { idStop, wsStop };
+		atn.ruleToTokenType = new int[] { 1, 2 };
+		atn.defineMode("DEFAULT_MODE", tokensStart);
+		return atn;
 	}
 }

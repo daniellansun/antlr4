@@ -49,6 +49,19 @@ public class TestIntegerStack {
 	}
 
 	@Test
+	public void popRemovesOnlyTheTail() {
+		IntegerStack stack = new IntegerStack();
+		for (int i = 0; i < 32; i++) {
+			stack.push(i);
+		}
+		for (int i = 31; i >= 0; i--) {
+			assertEquals(i, stack.pop());
+			assertEquals(i, stack.size());
+		}
+		assertTrue(stack.isEmpty());
+	}
+
+	@Test
 	public void popEmptyThrows() {
 		final IntegerStack stack = new IntegerStack();
 		assertThrows(IndexOutOfBoundsException.class, new ThrowingRunnable() {

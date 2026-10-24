@@ -9,6 +9,7 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 
 public class TestCommonTokenStream {
 	private static CommonToken on(int type, String text) {
@@ -192,5 +193,27 @@ public class TestCommonTokenStream {
 	public void lookbackBeyondStartIsNull() {
 		CommonTokenStream tokens = new CommonTokenStream(new MockTokenSource(on(1, "a")));
 		assertNull(tokens.LT(-1));
+		// Cold LT(-1) must lazyInit. p left at -1 makes get/seek throw.
+		assertEquals(0, tokens.index());
+		assertEquals("a", tokens.get(0).getText());
+		tokens.seek(tokens.index());
+		assertEquals("a", tokens.LT(1).getText());
+	}
+
+	@Test
+	public void ltMinusOneHitIsStableUntilSeek() {
+		CommonToken first = on(1, "a");
+		CommonToken second = on(2, "b");
+		CommonTokenStream tokens = new CommonTokenStream(new MockTokenSource(
+			off(" "), first, off("\n"), second));
+		assertEquals("a", tokens.LT(1).getText());
+		tokens.consume();
+		Token prev = tokens.LT(-1);
+		assertEquals("a", prev.getText());
+		assertSame(prev, tokens.LT(-1));
+		assertEquals("b", tokens.LT(1).getText());
+		tokens.seek(0);
+		assertNull(tokens.LT(-1));
+		assertEquals("a", tokens.LT(1).getText());
 	}
 }
