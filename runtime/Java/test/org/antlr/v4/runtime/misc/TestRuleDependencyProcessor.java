@@ -27,9 +27,15 @@ import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.MirroredTypeException;
+import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
@@ -41,9 +47,12 @@ import javax.tools.ToolProvider;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringWriter;
+import java.lang.annotation.AnnotationTypeMismatchException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -59,6 +68,7 @@ import java.util.Set;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -475,6 +485,177 @@ public class TestRuleDependencyProcessor {
 		}
 	}
 
+	@Test
+	public void stubbedMirrorsCoverUncheckedBranches() throws Exception {
+		DepEnv env = new DepEnv();
+		RuleDependencyProcessor processor = env.processor();
+
+		// recognizer type is not assignable to the grouped type
+		env.invokeCheck(processor, Collections.singletonList(
+			env.dependency(env.otherType, 0, 0, new Dependents[] { Dependents.SELF })),
+			env.recognizerType);
+
+		// unknown rule, no annotation mirror for the property
+		env.messages.clear();
+		env.invokeCheck(processor, Collections.singletonList(
+			env.dependency(env.recognizerType, 99, 0, new Dependents[] { Dependents.SELF })),
+			env.recognizerType);
+		assertTrue(env.messages.toString(), contains(env.messages, "unknown rule"));
+
+		// child 5 is also a parent, and the RULE_ table includes index 5 so the
+		// already-checked continue (not the out-of-range jump) runs
+		env.messages.clear();
+		env.installRules(buildWideInvocationAtn(), 0, false);
+		env.members.add(env.fieldPublic("RULE_f", Integer.valueOf(5)));
+		env.invokeCheck(processor, Collections.singletonList(
+			env.dependency(env.recognizerType, 0, 0,
+				new Dependents[] { Dependents.PARENTS, Dependents.CHILDREN })),
+			env.recognizerType);
+
+		// declared version above every actual version, mirror missing
+		env.messages.clear();
+		env.installRules(null, 0, false);
+		env.invokeCheck(processor, Collections.singletonList(
+			env.dependency(env.recognizerType, 0, 5, new Dependents[] { Dependents.SELF })),
+			env.recognizerType);
+		assertTrue(env.messages.toString(), contains(env.messages, "maximum dependency version"));
+
+		// actual version above the declaration, mirror missing
+		env.messages.clear();
+		env.installRules(null, 2, false);
+		env.invokeCheck(processor, Collections.singletonList(
+			env.dependency(env.recognizerType, 0, 0, new Dependents[] { Dependents.SELF })),
+			env.recognizerType);
+		assertTrue(env.messages.toString(), contains(env.messages, "has version"));
+
+		// unimplemented SIBLINGS and no dependents mirror
+		env.messages.clear();
+		env.installRules(null, 0, false);
+		env.invokeCheck(processor, Collections.singletonList(
+			env.dependency(env.recognizerType, 0, 0, new Dependents[] { Dependents.SIBLINGS })),
+			env.recognizerType);
+		assertTrue(env.messages.toString(), contains(env.messages, "Cannot validate"));
+
+		// annotation member type does not match
+		env.messages.clear();
+		env.invokeCheck(processor, Collections.singletonList(env.mismatchingDependency()), env.recognizerType);
+		assertTrue(env.messages.toString(), contains(env.messages, "Could not validate"));
+
+		// @RuleVersion mirror present but runtime value is null, then getAnnotation throws
+		env.messages.clear();
+		env.installSplitRules();
+		env.invokeGetRuleVersions(processor);
+		assertTrue(env.messages.toString(), contains(env.messages, "Exception occurred"));
+
+		// RuleVersion type missing, then a mirror that is not RuleVersion
+		processor = env.processor();
+		env.hideRuleVersion = true;
+		assertFalse(env.invokeHasRuleVersion(processor, env.method("a", null, true)));
+		env.hideRuleVersion = false;
+		assertFalse(env.invokeHasRuleVersion(processor, env.method("a", null, false)));
+
+		// RuleDependencies.value() is null
+		List<Tuple2<RuleDependency, Element>> none = RuleDependencyProcessor.getDependencies(env.nullValueRound());
+		assertTrue(none.isEmpty());
+
+		// malformed mirrors inside findRuleDependencyProperty
+		env.messages.clear();
+		processor = env.processor();
+		Tuple2<RuleDependency, Element> dep = env.dependency(
+			env.recognizerType, 1, 1, new Dependents[] { Dependents.SELF });
+		assertNull(env.invokeFind(processor, dep, env.mirrorWith("value()", annotationValue("nope")),
+			RuleDependencyProcessor.RuleDependencyProperty.RULE));
+		assertTrue(contains(env.messages, "Expected array"));
+
+		env.messages.clear();
+		assertNull(env.invokeFind(processor, dep, env.mirrorWith("value()", annotationValue(Collections.singletonList("x"))),
+			RuleDependencyProcessor.RuleDependencyProperty.RULE));
+		assertTrue(contains(env.messages, "Expected RuleDependency annotation mirror"));
+
+		env.messages.clear();
+		assertNull(env.invokeFind(processor, dep, env.mirrorWith("other()", annotationValue(1)),
+			RuleDependencyProcessor.RuleDependencyProperty.RULE));
+		assertTrue(contains(env.messages, "Unexpected annotation property"));
+
+		AnnotationMirror inner = env.ruleMirror(Collections.singletonMap("rule()", annotationValue("bad")));
+		env.messages.clear();
+		assertNull(env.invokeFind(processor, dep,
+			env.mirrorWith("value()", annotationValue(Collections.singletonList(inner))),
+			RuleDependencyProcessor.RuleDependencyProperty.RULE));
+
+		assertNull(env.invokeInner(processor, dep, env.ruleMirror(Collections.singletonMap("rule()", annotationValue("no"))),
+			RuleDependencyProcessor.RuleDependencyProperty.RULE));
+		assertNull(env.invokeInner(processor, dep, env.ruleMirror(Collections.singletonMap("recognizer()", annotationValue("no"))),
+			RuleDependencyProcessor.RuleDependencyProperty.RECOGNIZER));
+		assertNull(env.invokeInner(processor, dep, env.ruleMirror(Collections.singletonMap("recognizer()", annotationValue(env.otherType))),
+			RuleDependencyProcessor.RuleDependencyProperty.RECOGNIZER));
+		assertNull(env.invokeInner(processor, dep, env.ruleMirror(Collections.singletonMap("version()", annotationValue("no"))),
+			RuleDependencyProcessor.RuleDependencyProperty.VERSION));
+		assertNull(env.invokeInner(processor, dep, env.ruleMirror(Collections.singletonMap("version()", annotationValue(9))),
+			RuleDependencyProcessor.RuleDependencyProperty.VERSION));
+		assertNotNull(env.invokeInner(processor, dep,
+			env.ruleMirror(Collections.singletonMap("recognizer()", annotationValue(env.recognizerType))),
+			RuleDependencyProcessor.RuleDependencyProperty.RECOGNIZER));
+
+		env.messages.clear();
+		assertNull(env.invokeInner(processor, dep, env.ruleMirror(Collections.<String, AnnotationValue>emptyMap()),
+			RuleDependencyProcessor.RuleDependencyProperty.VERSION));
+		assertTrue(env.messages.toString(), contains(env.messages, "recognizer()"));
+		assertTrue(contains(env.messages, "rule()"));
+		assertTrue(contains(env.messages, "version()"));
+
+		env.messages.clear();
+		assertNull(env.invokeInner(processor, dep, env.ruleMirror(Collections.<String, AnnotationValue>emptyMap()),
+			RuleDependencyProcessor.RuleDependencyProperty.RECOGNIZER));
+		assertNull(env.invokeInner(processor, dep, env.ruleMirror(Collections.<String, AnnotationValue>emptyMap()),
+			RuleDependencyProcessor.RuleDependencyProperty.RULE));
+
+		// recognizer present, rule absent, version present: fall out of the early return
+		java.util.Map<String, AnnotationValue> recognizerAndVersion = new java.util.LinkedHashMap<String, AnnotationValue>();
+		recognizerAndVersion.put("recognizer()", annotationValue(env.recognizerType));
+		recognizerAndVersion.put("version()", annotationValue(Integer.valueOf(1)));
+		assertNull(env.invokeInner(processor, dep, env.ruleMirror(recognizerAndVersion),
+			RuleDependencyProcessor.RuleDependencyProperty.VERSION));
+
+		java.util.Map<String, AnnotationValue> recognizerAndRule = new java.util.LinkedHashMap<String, AnnotationValue>();
+		recognizerAndRule.put("recognizer()", annotationValue(env.recognizerType));
+		recognizerAndRule.put("rule()", annotationValue(Integer.valueOf(1)));
+		assertNull(env.invokeInner(processor, dep, env.ruleMirror(recognizerAndRule),
+			RuleDependencyProcessor.RuleDependencyProperty.VERSION));
+	}
+
+	static boolean contains(List<String> messages, String fragment) {
+		for (String message : messages) {
+			if (message.contains(fragment)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	static AnnotationValue annotationValue(final Object value) {
+		return (AnnotationValue) Proxy.newProxyInstance(AnnotationValue.class.getClassLoader(),
+			new Class<?>[] { AnnotationValue.class },
+			new InvocationHandler() {
+				@Override
+				public Object invoke(Object proxy, Method method, Object[] args) {
+					if ("getValue".equals(method.getName())) {
+						return value;
+					}
+					if ("toString".equals(method.getName())) {
+						return String.valueOf(value);
+					}
+					if ("hashCode".equals(method.getName())) {
+						return System.identityHashCode(proxy);
+					}
+					if ("equals".equals(method.getName())) {
+						return proxy == args[0];
+					}
+					return null;
+				}
+			});
+	}
+
 	// ---------- helpers ----------
 
 	/**
@@ -533,6 +714,49 @@ public class TestRuleDependencyProcessor {
 
 		atn.ruleToStartState = new RuleStartState[] { aStart, bStart, cStart };
 		atn.ruleToStopState = new RuleStopState[] { aStop, bStop, cStop };
+		atn.clearDFA();
+		return atn;
+	}
+
+	/** Rule 0 calls rule 5 and rule 5 calls rule 0, so relation bits sit outside a 1-slot RULE_ table. */
+	static ATN buildWideInvocationAtn() {
+		ATN atn = new ATN(ATNType.PARSER, 1);
+		RuleStartState[] starts = new RuleStartState[6];
+		RuleStopState[] stops = new RuleStopState[6];
+		for (int i = 0; i < 6; i++) {
+			starts[i] = new RuleStartState();
+			stops[i] = new RuleStopState();
+			starts[i].ruleIndex = i;
+			stops[i].ruleIndex = i;
+			starts[i].stopState = stops[i];
+			atn.addState(starts[i]);
+			atn.addState(stops[i]);
+			if (i != 0 && i != 5) {
+				starts[i].addTransition(new EpsilonTransition(stops[i]));
+			}
+		}
+		BasicState call0 = new BasicState();
+		BasicState follow0 = new BasicState();
+		call0.ruleIndex = 0;
+		follow0.ruleIndex = 0;
+		atn.addState(call0);
+		atn.addState(follow0);
+		starts[0].addTransition(new EpsilonTransition(call0));
+		call0.addTransition(new RuleTransition(starts[5], 5, 0, follow0));
+		follow0.addTransition(new EpsilonTransition(stops[0]));
+
+		BasicState call5 = new BasicState();
+		BasicState follow5 = new BasicState();
+		call5.ruleIndex = 5;
+		follow5.ruleIndex = 5;
+		atn.addState(call5);
+		atn.addState(follow5);
+		starts[5].addTransition(new EpsilonTransition(call5));
+		call5.addTransition(new RuleTransition(starts[0], 0, 0, follow5));
+		follow5.addTransition(new EpsilonTransition(stops[5]));
+
+		atn.ruleToStartState = starts;
+		atn.ruleToStopState = stops;
 		atn.clearDFA();
 		return atn;
 	}
@@ -738,5 +962,543 @@ public class TestRuleDependencyProcessor {
 			@RuleDependency(recognizer = MiniRecognizer.class, rule = 1, version = 0)
 		})
 		int multi;
+	}
+
+	/**
+	 * Hand-built annotation-processing environment. Runtime {@link RuleDependency}
+	 * proxies throw {@link MirroredTypeException} the way javac mirrors do, and
+	 * element mirrors are omitted or malformed on purpose.
+	 */
+	static final class DepEnv {
+		final List<String> messages = new ArrayList<String>();
+		final TypeMirror recognizerType = typeMirror();
+		final TypeMirror otherType = typeMirror();
+		final DeclaredType ruleDepType = declared();
+		final DeclaredType ruleDepsType = declared();
+		final DeclaredType ruleVerType = declared();
+		final TypeElement ruleDepElement = typeElement(ruleDepType);
+		final TypeElement ruleDepsElement = typeElement(ruleDepsType);
+		final TypeElement ruleVerElement = typeElement(ruleVerType);
+		boolean hideRuleVersion;
+		List<Element> members = new ArrayList<Element>();
+		String serialized;
+
+		RuleDependencyProcessor processor() {
+			RuleDependencyProcessor processor = new RuleDependencyProcessor();
+			processor.init(environment());
+			return processor;
+		}
+
+		void installRules(ATN atn, final int version, final boolean versionIsNull) {
+			members = new ArrayList<Element>();
+			members.add(field("RULE_a", Integer.valueOf(0), true));
+			if (atn != null) {
+				serialized = ATNSerializer.getSerializedAsString(atn, Arrays.asList("a", "b", "c", "d", "e", "f"));
+				members.add(field("_serializedATN", serialized, true));
+			}
+			members.add(method("a", versionIsNull ? null : Integer.valueOf(version), true));
+		}
+
+		void installSplitRules() {
+			members = new ArrayList<Element>();
+			members.add(field("RULE_a", Integer.valueOf(0), true));
+			members.add(field("RULE_b", Integer.valueOf(1), true));
+			members.add(method("a", null, true));
+			members.add(throwingMethod("b"));
+		}
+
+		Tuple2<RuleDependency, Element> dependency(final TypeMirror type, final int rule, final int version,
+													final Dependents[] dependents) {
+			RuleDependency dep = (RuleDependency) Proxy.newProxyInstance(RuleDependency.class.getClassLoader(),
+				new Class<?>[] { RuleDependency.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						String name = method.getName();
+						if ("recognizer".equals(name)) {
+							throw new MirroredTypeException(type);
+						}
+						if ("rule".equals(name)) {
+							return Integer.valueOf(rule);
+						}
+						if ("version".equals(name)) {
+							return Integer.valueOf(version);
+						}
+						if ("dependents".equals(name)) {
+							return dependents;
+						}
+						if ("annotationType".equals(name)) {
+							return RuleDependency.class;
+						}
+						if ("toString".equals(name)) {
+							return "dep";
+						}
+						if ("hashCode".equals(name)) {
+							return System.identityHashCode(proxy);
+						}
+						if ("equals".equals(name)) {
+							return proxy == args[0];
+						}
+						return null;
+					}
+				});
+			return Tuple.create(dep, elementWithMirrors(Collections.<AnnotationMirror>emptyList()));
+		}
+
+		Tuple2<RuleDependency, Element> mismatchingDependency() {
+			final Method ruleMethod = RuleDependency.class.getDeclaredMethods()[0];
+			RuleDependency dep = (RuleDependency) Proxy.newProxyInstance(RuleDependency.class.getClassLoader(),
+				new Class<?>[] { RuleDependency.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						String name = method.getName();
+						if ("recognizer".equals(name)) {
+							throw new MirroredTypeException(recognizerType);
+						}
+						if ("rule".equals(name) || "version".equals(name) || "dependents".equals(name)) {
+							throw new AnnotationTypeMismatchException(ruleMethod, "bad");
+						}
+						if ("annotationType".equals(name)) {
+							return RuleDependency.class;
+						}
+						if ("hashCode".equals(name)) {
+							return System.identityHashCode(proxy);
+						}
+						if ("equals".equals(name)) {
+							return proxy == args[0];
+						}
+						if ("toString".equals(name)) {
+							return "bad";
+						}
+						return null;
+					}
+				});
+			return Tuple.create(dep, elementWithMirrors(Collections.<AnnotationMirror>emptyList()));
+		}
+
+		void invokeCheck(RuleDependencyProcessor processor, List<Tuple2<RuleDependency, Element>> deps, TypeMirror type)
+			throws Exception {
+			Method method = RuleDependencyProcessor.class.getDeclaredMethod("checkDependencies", List.class, TypeMirror.class);
+			method.setAccessible(true);
+			method.invoke(processor, deps, type);
+		}
+
+		void invokeGetRuleVersions(RuleDependencyProcessor processor) throws Exception {
+			Method method = RuleDependencyProcessor.class.getDeclaredMethod("getRuleVersions", TypeMirror.class, String[].class);
+			method.setAccessible(true);
+			method.invoke(processor, recognizerType, new String[] { "a", "b" });
+		}
+
+		boolean invokeHasRuleVersion(RuleDependencyProcessor processor, ExecutableElement executable) throws Exception {
+			Method method = RuleDependencyProcessor.class.getDeclaredMethod("hasRuleVersionAnnotation", ExecutableElement.class);
+			method.setAccessible(true);
+			return (Boolean) method.invoke(processor, executable);
+		}
+
+		RoundEnvironment nullValueRound() {
+			final Element element = elementWithMirrors(Collections.<AnnotationMirror>emptyList());
+			return new RoundEnvironment() {
+				@Override public boolean processingOver() { return false; }
+				@Override public boolean errorRaised() { return false; }
+				@Override public Set<? extends Element> getRootElements() { return Collections.emptySet(); }
+				@Override public Set<? extends Element> getElementsAnnotatedWith(TypeElement a) {
+					return Collections.emptySet();
+				}
+				@Override
+				public Set<? extends Element> getElementsAnnotatedWith(Class<? extends java.lang.annotation.Annotation> a) {
+					if (a == RuleDependencies.class) {
+						return Collections.singleton(new Element() {
+							@Override
+							@SuppressWarnings("unchecked")
+							public <A extends java.lang.annotation.Annotation> A getAnnotation(Class<A> annotationType) {
+								if (annotationType == RuleDependencies.class) {
+									return (A) nullDependencies();
+								}
+								return null;
+							}
+							@Override public ElementKind getKind() { return ElementKind.FIELD; }
+							@Override public Set<javax.lang.model.element.Modifier> getModifiers() { return Collections.emptySet(); }
+							@Override public javax.lang.model.element.Name getSimpleName() { return new SimpleName("x"); }
+							@Override public Element getEnclosingElement() { return null; }
+							@Override public List<? extends Element> getEnclosedElements() { return Collections.emptyList(); }
+							@Override public boolean equals(Object obj) { return this == obj; }
+							@Override public int hashCode() { return System.identityHashCode(this); }
+							@Override public TypeMirror asType() { return null; }
+							@Override public List<? extends AnnotationMirror> getAnnotationMirrors() { return Collections.emptyList(); }
+							@Override public <R, P> R accept(javax.lang.model.element.ElementVisitor<R, P> v, P p) { return null; }
+							@Override
+							@SuppressWarnings("unchecked")
+							public <A extends java.lang.annotation.Annotation> A[] getAnnotationsByType(Class<A> annotationType) {
+								return (A[]) java.lang.reflect.Array.newInstance(annotationType, 0);
+							}
+						});
+					}
+					return Collections.emptySet();
+				}
+			};
+		}
+
+		AnnotationMirror mirrorWith(final String key, final AnnotationValue value) {
+			Map<ExecutableElement, AnnotationValue> values = new java.util.LinkedHashMap<ExecutableElement, AnnotationValue>();
+			values.put(keyElement(key), value);
+			return depsMirror(values);
+		}
+
+		AnnotationMirror ruleMirror(Map<String, AnnotationValue> named) {
+			Map<ExecutableElement, AnnotationValue> values = new java.util.LinkedHashMap<ExecutableElement, AnnotationValue>();
+			for (Map.Entry<String, AnnotationValue> entry : named.entrySet()) {
+				values.put(keyElement(entry.getKey()), entry.getValue());
+			}
+			return dependencyAnnotation(values);
+		}
+
+		Object invokeFind(RuleDependencyProcessor processor, Tuple2<RuleDependency, Element> dep,
+						  AnnotationMirror mirror, RuleDependencyProcessor.RuleDependencyProperty property) throws Exception {
+			// attach the mirror to the dependency element by wrapping
+			Tuple2<RuleDependency, Element> wrapped = Tuple.create(dep.getItem1(), elementWithMirrors(Collections.singletonList(mirror)));
+			Method method = RuleDependencyProcessor.class.getDeclaredMethod(
+				"findRuleDependencyProperty", Tuple2.class, RuleDependencyProcessor.RuleDependencyProperty.class);
+			method.setAccessible(true);
+			return method.invoke(processor, wrapped, property);
+		}
+
+		Object invokeInner(RuleDependencyProcessor processor, Tuple2<RuleDependency, Element> dep,
+						   AnnotationMirror mirror, RuleDependencyProcessor.RuleDependencyProperty property) throws Exception {
+			Method method = RuleDependencyProcessor.class.getDeclaredMethod(
+				"findRuleDependencyProperty", Tuple2.class, AnnotationMirror.class,
+				RuleDependencyProcessor.RuleDependencyProperty.class);
+			method.setAccessible(true);
+			return method.invoke(processor, dep, mirror, property);
+		}
+
+		ExecutableElement method(String name, Integer version, boolean versionMirror) {
+			return methodElement(name, version, versionMirror, false);
+		}
+
+		private RuleDependencies nullDependencies() {
+			return (RuleDependencies) Proxy.newProxyInstance(RuleDependencies.class.getClassLoader(),
+				new Class<?>[] { RuleDependencies.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						if ("value".equals(method.getName())) {
+							return null;
+						}
+						if ("annotationType".equals(method.getName())) {
+							return RuleDependencies.class;
+						}
+						if ("hashCode".equals(method.getName())) {
+							return System.identityHashCode(proxy);
+						}
+						if ("equals".equals(method.getName())) {
+							return proxy == args[0];
+						}
+						if ("toString".equals(method.getName())) {
+							return "deps";
+						}
+						return null;
+					}
+				});
+		}
+
+		private ProcessingEnvironment environment() {
+			return new ProcessingEnvironment() {
+				@Override public Map<String, String> getOptions() { return Collections.emptyMap(); }
+				@Override public Messager getMessager() {
+					return new Messager() {
+						@Override public void printMessage(Diagnostic.Kind kind, CharSequence msg) {
+							messages.add(kind + ":" + msg);
+						}
+						@Override public void printMessage(Diagnostic.Kind kind, CharSequence msg, Element e) {
+							printMessage(kind, msg);
+						}
+						@Override public void printMessage(Diagnostic.Kind kind, CharSequence msg, Element e, AnnotationMirror a) {
+							printMessage(kind, msg);
+						}
+						@Override public void printMessage(Diagnostic.Kind kind, CharSequence msg, Element e, AnnotationMirror a, AnnotationValue v) {
+							printMessage(kind, msg);
+						}
+					};
+				}
+				@Override public Filer getFiler() { return null; }
+				@Override public Elements getElementUtils() {
+					return (Elements) Proxy.newProxyInstance(Elements.class.getClassLoader(),
+						new Class<?>[] { Elements.class },
+						new InvocationHandler() {
+							@Override
+							public Object invoke(Object proxy, Method method, Object[] args) {
+								if ("getAllMembers".equals(method.getName())) {
+									return members;
+								}
+								if ("getTypeElement".equals(method.getName())) {
+									String name = args[0].toString();
+									if (RuleDependencyProcessor.RuleDependencyClassName.equals(name)) {
+										return ruleDepElement;
+									}
+									if (RuleDependencyProcessor.RuleDependenciesClassName.equals(name)) {
+										return ruleDepsElement;
+									}
+									if (RuleDependencyProcessor.RuleVersionClassName.equals(name)) {
+										return hideRuleVersion ? null : ruleVerElement;
+									}
+									return null;
+								}
+								if ("hashCode".equals(method.getName())) {
+									return System.identityHashCode(proxy);
+								}
+								if ("equals".equals(method.getName())) {
+									return proxy == args[0];
+								}
+								if ("toString".equals(method.getName())) {
+									return "elements";
+								}
+								throw new UnsupportedOperationException(method.getName());
+							}
+						});
+				}
+				@Override public javax.lang.model.util.Types getTypeUtils() {
+					return (javax.lang.model.util.Types) Proxy.newProxyInstance(
+						javax.lang.model.util.Types.class.getClassLoader(),
+						new Class<?>[] { javax.lang.model.util.Types.class },
+						new InvocationHandler() {
+							@Override
+							public Object invoke(Object proxy, Method method, Object[] args) {
+								String name = method.getName();
+								if ("isAssignable".equals(name) || "isSameType".equals(name)) {
+									return args[0] == args[1];
+								}
+								if ("asElement".equals(name)) {
+									return ruleDepElement;
+								}
+								if ("hashCode".equals(name)) {
+									return System.identityHashCode(proxy);
+								}
+								if ("equals".equals(name)) {
+									return proxy == args[0];
+								}
+								if ("toString".equals(name)) {
+									return "types";
+								}
+								throw new UnsupportedOperationException(name);
+							}
+						});
+				}
+				@Override public SourceVersion getSourceVersion() { return SourceVersion.RELEASE_8; }
+				@Override public java.util.Locale getLocale() { return java.util.Locale.US; }
+			};
+		}
+
+		Element fieldPublic(String name, Object constant) {
+			return field(name, constant, true);
+		}
+
+		private Element field(final String name, final Object constant, final boolean stat) {
+			return (VariableElement) Proxy.newProxyInstance(VariableElement.class.getClassLoader(),
+				new Class<?>[] { VariableElement.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+						String n = method.getName();
+						if ("getKind".equals(n)) return ElementKind.FIELD;
+						if ("getModifiers".equals(n)) {
+							return stat
+								? java.util.EnumSet.of(javax.lang.model.element.Modifier.STATIC)
+								: java.util.EnumSet.noneOf(javax.lang.model.element.Modifier.class);
+						}
+						if ("getConstantValue".equals(n)) return constant;
+						if ("getSimpleName".equals(n)) return new SimpleName(name);
+						if ("getAnnotationMirrors".equals(n)) return Collections.emptyList();
+						if ("getAnnotation".equals(n)) return null;
+						if ("toString".equals(n)) return name;
+						if ("hashCode".equals(n)) return System.identityHashCode(proxy);
+						if ("equals".equals(n)) return proxy == args[0];
+						if ("getEnclosedElements".equals(n)) return Collections.emptyList();
+						if ("getAnnotationsByType".equals(n)) {
+							Class<?> c = (Class<?>) args[0];
+							return java.lang.reflect.Array.newInstance(c, 0);
+						}
+						return null;
+					}
+				});
+		}
+
+		private ExecutableElement throwingMethod(String name) {
+			return methodElement(name, null, true, true);
+		}
+
+		private ExecutableElement methodElement(final String name, final Integer version, final boolean versionMirror,
+												final boolean explode) {
+			final List<AnnotationMirror> mirrors = new ArrayList<AnnotationMirror>();
+			if (versionMirror) {
+				mirrors.add(ruleVerMirror());
+			}
+			else {
+				mirrors.add(dependencyAnnotation(Collections.<ExecutableElement, AnnotationValue>emptyMap()));
+			}
+			return (ExecutableElement) Proxy.newProxyInstance(ExecutableElement.class.getClassLoader(),
+				new Class<?>[] { ExecutableElement.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						String n = method.getName();
+						if ("getKind".equals(n)) return ElementKind.METHOD;
+						if ("getSimpleName".equals(n)) return new SimpleName(name);
+						if ("getAnnotationMirrors".equals(n)) return mirrors;
+						if ("getAnnotation".equals(n)) {
+							if (explode) {
+								throw new IllegalArgumentException("boom");
+							}
+							if (version == null) {
+								return null;
+							}
+							return ruleVersion(version.intValue());
+						}
+						if ("contentEquals".equals(n)) return name.contentEquals((CharSequence) args[0]);
+						if ("toString".equals(n)) return name;
+						if ("hashCode".equals(n)) return System.identityHashCode(proxy);
+						if ("equals".equals(n)) return proxy == args[0];
+						if ("getModifiers".equals(n)) return Collections.emptySet();
+						if ("getEnclosedElements".equals(n)) return Collections.emptyList();
+						if ("getAnnotationsByType".equals(n)) {
+							Class<?> c = (Class<?>) args[0];
+							return java.lang.reflect.Array.newInstance(c, 0);
+						}
+						return null;
+					}
+				});
+		}
+
+		private AnnotationMirror ruleVerMirror() {
+			return (AnnotationMirror) Proxy.newProxyInstance(AnnotationMirror.class.getClassLoader(),
+				new Class<?>[] { AnnotationMirror.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						if ("getAnnotationType".equals(method.getName())) return ruleVerType;
+						if ("getElementValues".equals(method.getName())) return Collections.emptyMap();
+						if ("toString".equals(method.getName())) return "@RuleVersion";
+						if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
+						if ("equals".equals(method.getName())) return proxy == args[0];
+						return null;
+					}
+				});
+		}
+
+		private AnnotationMirror dependencyAnnotation(final Map<ExecutableElement, AnnotationValue> values) {
+			return (AnnotationMirror) Proxy.newProxyInstance(AnnotationMirror.class.getClassLoader(),
+				new Class<?>[] { AnnotationMirror.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						if ("getAnnotationType".equals(method.getName())) return ruleDepType;
+						if ("getElementValues".equals(method.getName())) return values;
+						if ("toString".equals(method.getName())) return "@RuleDependency";
+						if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
+						if ("equals".equals(method.getName())) return proxy == args[0];
+						return null;
+					}
+				});
+		}
+
+		private AnnotationMirror depsMirror(final Map<ExecutableElement, AnnotationValue> values) {
+			return (AnnotationMirror) Proxy.newProxyInstance(AnnotationMirror.class.getClassLoader(),
+				new Class<?>[] { AnnotationMirror.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						if ("getAnnotationType".equals(method.getName())) return ruleDepsType;
+						if ("getElementValues".equals(method.getName())) return values;
+						if ("toString".equals(method.getName())) return "@RuleDependencies";
+						if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
+						if ("equals".equals(method.getName())) return proxy == args[0];
+						return null;
+					}
+				});
+		}
+
+		private ExecutableElement keyElement(final String text) {
+			return (ExecutableElement) Proxy.newProxyInstance(ExecutableElement.class.getClassLoader(),
+				new Class<?>[] { ExecutableElement.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						if ("toString".equals(method.getName())) return text;
+						if ("getSimpleName".equals(method.getName())) return new SimpleName(text);
+						if ("hashCode".equals(method.getName())) return text.hashCode();
+						if ("equals".equals(method.getName())) return proxy == args[0];
+						return null;
+					}
+				});
+		}
+
+		private RuleVersion ruleVersion(final int value) {
+			return (RuleVersion) Proxy.newProxyInstance(RuleVersion.class.getClassLoader(),
+				new Class<?>[] { RuleVersion.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						if ("value".equals(method.getName())) return Integer.valueOf(value);
+						if ("annotationType".equals(method.getName())) return RuleVersion.class;
+						if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
+						if ("equals".equals(method.getName())) return proxy == args[0];
+						if ("toString".equals(method.getName())) return "@RuleVersion";
+						return null;
+					}
+				});
+		}
+
+		private Element elementWithMirrors(final List<? extends AnnotationMirror> mirrors) {
+			return new AnnotationBearingElement(null) {
+				@Override
+				public List<? extends AnnotationMirror> getAnnotationMirrors() {
+					return mirrors;
+				}
+			};
+		}
+
+		private static TypeMirror typeMirror() {
+			return (TypeMirror) Proxy.newProxyInstance(TypeMirror.class.getClassLoader(),
+				new Class<?>[] { TypeMirror.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						if ("toString".equals(method.getName())) return "type";
+						if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
+						if ("equals".equals(method.getName())) return proxy == args[0];
+						return null;
+					}
+				});
+		}
+
+		private static DeclaredType declared() {
+			return (DeclaredType) Proxy.newProxyInstance(DeclaredType.class.getClassLoader(),
+				new Class<?>[] { DeclaredType.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						if ("toString".equals(method.getName())) return "declared";
+						if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
+						if ("equals".equals(method.getName())) return proxy == args[0];
+						return null;
+					}
+				});
+		}
+
+		private static TypeElement typeElement(final DeclaredType type) {
+			return (TypeElement) Proxy.newProxyInstance(TypeElement.class.getClassLoader(),
+				new Class<?>[] { TypeElement.class },
+				new InvocationHandler() {
+					@Override
+					public Object invoke(Object proxy, Method method, Object[] args) {
+						if ("asType".equals(method.getName())) return type;
+						if ("toString".equals(method.getName())) return "element";
+						if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
+						if ("equals".equals(method.getName())) return proxy == args[0];
+						if ("getKind".equals(method.getName())) return ElementKind.ANNOTATION_TYPE;
+						return null;
+					}
+				});
+		}
 	}
 }

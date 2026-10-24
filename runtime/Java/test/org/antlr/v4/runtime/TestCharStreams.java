@@ -19,7 +19,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class TestCharStreams {
 	@Rule
@@ -153,5 +155,19 @@ public class TestCharStreams {
 		CodePointCharStream s = CharStreams.fromString("");
 		assertEquals(0, s.size());
 		assertEquals(IntStream.EOF, s.LA(1));
+	}
+
+	@Test
+	public void reportMalformedUtf8FromChannel() throws IOException {
+		byte[] bad = new byte[] { (byte) 0xFF };
+		java.nio.channels.ReadableByteChannel channel = java.nio.channels.Channels.newChannel(
+			new java.io.ByteArrayInputStream(bad));
+		try {
+			CharStreams.fromChannel(channel, 16, java.nio.charset.CodingErrorAction.REPORT, "bad");
+			fail("malformed UTF-8 must be reported");
+		}
+		catch (java.nio.charset.CharacterCodingException expected) {
+			assertNotNull(expected);
+		}
 	}
 }

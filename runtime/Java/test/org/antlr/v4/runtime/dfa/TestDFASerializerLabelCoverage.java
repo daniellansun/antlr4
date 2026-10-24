@@ -7,13 +7,16 @@ package org.antlr.v4.runtime.dfa;
 
 import org.antlr.v4.runtime.VocabularyImpl;
 import org.antlr.v4.runtime.atn.ATN;
+import org.antlr.v4.runtime.atn.ATNConfig;
 import org.antlr.v4.runtime.atn.ATNConfigSet;
 import org.antlr.v4.runtime.atn.ATNSimulator;
 import org.antlr.v4.runtime.atn.ATNType;
+import org.antlr.v4.runtime.atn.BasicState;
 import org.antlr.v4.runtime.atn.PredictionContext;
 import org.junit.Test;
 
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * {@link DFASerializer} context-edge labels and accept-state string forms.
@@ -40,5 +43,28 @@ public class TestDFASerializerLabelCoverage {
 		s.setAcceptState(new AcceptStateInfo(2));
 		s.predicates = new DFAState.PredPrediction[0];
 		assertNotNull(ser.st(s));
+	}
+
+	@Test
+	public void contextSymbolToErrorPrintsCtx() {
+		ATN grammar = new ATN(ATNType.PARSER, 2);
+		BasicState start = new BasicState();
+		grammar.addState(start);
+		DFA decision = new DFA(start, 0);
+		ATNConfigSet configs = new ATNConfigSet();
+		BasicState atnState = new BasicState();
+		atnState.stateNumber = 1;
+		configs.add(ATNConfig.create(atnState, 1, PredictionContext.EMPTY_FULL));
+		DFAState state = new DFAState(decision, configs);
+		state.stateNumber = 1;
+		decision.states.put(state, state);
+		decision.s0.set(state);
+		state.setContextSensitive(grammar);
+		state.setTarget(1, ATNSimulator.ERROR);
+		state.setContextSymbol(1);
+		String text = new DFASerializer(decision, VocabularyImpl.EMPTY_VOCABULARY,
+			new String[] { "s" }, grammar).toString();
+		assertNotNull(text);
+		assertTrue(text.contains("ctx"));
 	}
 }

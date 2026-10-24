@@ -77,6 +77,9 @@ public class TestRecognitionExceptions {
 		NoViableAltException e = new NoViableAltException(parser);
 		assertSame(parser.getCurrentToken(), e.getStartToken());
 		assertNull(e.getDeadEndConfigs());
+		assertSame(parser.getCurrentToken(), e.getOffendingToken(parser));
+		StubParser other = new StubParser(new CommonToken(2, "q"));
+		assertNull(e.getOffendingToken(other));
 	}
 
 	@Test

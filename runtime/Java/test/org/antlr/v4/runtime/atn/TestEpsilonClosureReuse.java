@@ -184,4 +184,69 @@ public class TestEpsilonClosureReuse {
 		assertTrue(substituted[0]);
 		assertTrue(configs.size() >= 1);
 	}
+
+	@Test
+	public void ruleCallChainReusesFirstBufferOnThirdLayer() {
+		ATN atn = new ATN(ATNType.PARSER, 1);
+		RuleStartState s = ruleStart(atn, 0);
+		RuleStartState r1 = ruleStart(atn, 1);
+		RuleStartState r2 = ruleStart(atn, 2);
+		BasicState sStopFollow = new BasicState();
+		sStopFollow.ruleIndex = 0;
+		atn.addState(sStopFollow);
+		s.addTransition(new RuleTransition(r1, 1, 0, sStopFollow));
+		BasicState r1Follow = new BasicState();
+		r1Follow.ruleIndex = 1;
+		atn.addState(r1Follow);
+		r1.addTransition(new RuleTransition(r2, 2, 0, r1Follow));
+		r2.addTransition(new AtomTransition(newStop(atn, 2), 1));
+
+		ParserATNSimulator simulator = new ParserATNSimulator(atn);
+		EpsilonClosure closure = simulator.epsilonClosure();
+		ATNConfigSet source = new ATNConfigSet();
+		source.add(ATNConfig.create(s, 1, PredictionContext.EMPTY_LOCAL));
+		ATNConfigSet configs = new ATNConfigSet();
+		closure.close(source, configs, false, true, PredictionContextCache.UNCACHED, false);
+		assertTrue(closure.hasIntermediateBuffers());
+		assertNotNull(closure.retainedBufferA());
+		assertNotNull(closure.retainedBufferB());
+	}
+
+	@Test
+	public void rightRecursiveStopEdgeHitsBusyContinue() {
+		ATN atn = new ATN(ATNType.PARSER, 1);
+		RuleStopState stop = new RuleStopState();
+		stop.ruleIndex = 0;
+		BasicState again = new BasicState();
+		again.ruleIndex = 0;
+		atn.addState(stop);
+		atn.addState(again);
+		stop.addTransition(new EpsilonTransition(again));
+		again.addTransition(new EpsilonTransition(stop));
+		atn.ruleToStartState = new RuleStartState[] { new RuleStartState() };
+		atn.ruleToStopState = new RuleStopState[] { stop };
+
+		ParserATNSimulator simulator = new ParserATNSimulator(atn);
+		ATNConfigSet source = new ATNConfigSet();
+		source.add(ATNConfig.create(stop, 1, PredictionContext.EMPTY_LOCAL));
+		ATNConfigSet configs = new ATNConfigSet();
+		simulator.epsilonClosure().close(source, configs, false, true, PredictionContextCache.UNCACHED, false);
+		assertTrue(configs.size() >= 1);
+	}
+
+	private static RuleStartState ruleStart(ATN atn, int ruleIndex) {
+		RuleStartState start = new RuleStartState();
+		start.ruleIndex = ruleIndex;
+		start.stopState = new RuleStopState();
+		start.stopState.ruleIndex = ruleIndex;
+		atn.addState(start);
+		return start;
+	}
+
+	private static RuleStopState newStop(ATN atn, int ruleIndex) {
+		RuleStopState stop = new RuleStopState();
+		stop.ruleIndex = ruleIndex;
+		atn.addState(stop);
+		return stop;
+	}
 }

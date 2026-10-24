@@ -10,6 +10,8 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class TestUnbufferedTokenStream {
 	private static CommonToken t(int type, String text) {
@@ -214,6 +216,22 @@ public class TestUnbufferedTokenStream {
 			// ok
 		}
 		tokens.release(m);
+	}
+
+	@Test
+	public void seekPastBufferedTokensThrows() {
+		UnbufferedTokenStream tokens = new UnbufferedTokenStream(new MockTokenSource(t(1, "a"), t(2, "b")));
+		tokens.LT(1);
+		tokens.currentTokenIndex = 10;
+		tokens.p = 5;
+		tokens.n = 1;
+		try {
+			tokens.seek(6);
+			fail("expected seek outside buffer");
+		}
+		catch (UnsupportedOperationException expected) {
+			assertTrue(expected.getMessage().contains("outside buffer"));
+		}
 	}
 
 	@Test(expected = IllegalArgumentException.class)

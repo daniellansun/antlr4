@@ -88,7 +88,23 @@ public class InterpreterDataReader {
 				result.ruleNames.add(line);
 			}
 
-			if (line.equals("channel names:")) { // Additional lexer data.
+			// Blank lines separate sections. The rule-name loop stops on the
+			// separator, so the following header is still unread. Peek it:
+			// lexer files continue with "channel names:", parser files with
+			// "atn:". Reset unless this really is the lexer section, so the
+			// "atn:" read below still sees the parser header.
+			if (line != null && line.isEmpty()) {
+				br.mark(8192);
+				String header = br.readLine();
+				if ("channel names:".equals(header)) {
+					line = header;
+				}
+				else {
+					br.reset();
+				}
+			}
+
+			if (line != null && line.equals("channel names:")) { // Additional lexer data.
 				result.channels = new ArrayList<>();
 				while ((line = br.readLine()) != null) {
 					if (line.isEmpty())

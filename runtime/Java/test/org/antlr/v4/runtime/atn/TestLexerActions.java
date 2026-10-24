@@ -12,6 +12,8 @@ import org.antlr.v4.runtime.LexerInterpreter;
 import org.antlr.v4.runtime.VocabularyImpl;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.Collections;
 
@@ -224,6 +226,33 @@ public class TestLexerActions {
 		ATN atn = ATNTestHelpers.buildLexerMatchA();
 		LexerInterpreter lexer = ATNTestHelpers.createLexer(atn, "a");
 		indexed.execute(lexer);
+	}
+
+	@Test
+	public void executorSeekEqualityAndHashCollision() throws Exception {
+		LexerIndexedCustomAction atEnd = new LexerIndexedCustomAction(0, new LexerChannelAction(1));
+		LexerActionExecutor sameOffset = new LexerActionExecutor(new LexerAction[] { atEnd });
+		LexerInterpreter lexer = ATNTestHelpers.createLexer(ATNTestHelpers.buildLexerMatchA(), "abcd");
+		CharStream input = lexer.getInputStream();
+		input.seek(0);
+		sameOffset.execute(lexer, input, 0);
+		input.seek(3);
+		sameOffset.execute(lexer, input, 0);
+
+		assertTrue(sameOffset.equals(sameOffset));
+		LexerActionExecutor copy = new LexerActionExecutor(new LexerAction[] {
+			new LexerIndexedCustomAction(0, new LexerChannelAction(1))
+		});
+		assertEquals(sameOffset, copy);
+
+		LexerActionExecutor other = new LexerActionExecutor(new LexerAction[] { LexerSkipAction.INSTANCE });
+		Field hash = LexerActionExecutor.class.getDeclaredField("hashCode");
+		hash.setAccessible(true);
+		Field modifiers = Field.class.getDeclaredField("modifiers");
+		modifiers.setAccessible(true);
+		modifiers.setInt(hash, hash.getModifiers() & ~Modifier.FINAL);
+		hash.setInt(other, sameOffset.hashCode());
+		assertFalse(sameOffset.equals(other));
 	}
 
 	/** Tiny local constant helper for token type values in tests. */

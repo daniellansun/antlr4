@@ -173,4 +173,12 @@ public class TestANTLRInputStream {
 		s.seek(100);
 		assertEquals(s.size(), s.index());
 	}
+
+	@Test
+	public void getTextClampsStopAndEmptyWhenStartPastEnd() {
+		ANTLRInputStream input = new ANTLRInputStream("ab");
+		assertEquals("ab", input.getText(Interval.of(0, 100)));
+		assertEquals("", input.getText(Interval.of(50, 60)));
+		assertEquals("a", input.getText(Interval.of(0, 0)));
+	}
 }

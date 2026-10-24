@@ -15,12 +15,15 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class TestInterpreterDataReader {
 	@Rule
@@ -112,19 +115,41 @@ public class TestInterpreterDataReader {
 		sb.append(atnLine).append("\n");
 		write(f, sb.toString());
 
-		// Current reader expects after rule-names empty line then next read is "atn:".
-		// With channel section present after blank, reader throws; verify that behavior.
+		InterpreterDataReader.InterpreterData data = InterpreterDataReader.parseFile(f.getAbsolutePath());
+		assertNotNull(data.channels);
+		assertEquals(Arrays.asList("DEFAULT_TOKEN_CHANNEL", "HIDDEN"), data.channels);
+		assertNotNull(data.modes);
+		assertEquals(Collections.singletonList("DEFAULT_MODE"), data.modes);
+		assertNotNull(data.atn);
+	}
+
+	@Test
+	public void lexerLayoutRejectsMissingModeHeader() throws IOException {
+		String atnLine = readAtnLineFromClasspathXPathLexer();
+		File f = tmp.newFile("lexer-bad-mode.interp");
+		String content =
+			"token literal names:\n" +
+			"null\n" +
+			"\n" +
+			"token symbolic names:\n" +
+			"ID\n" +
+			"\n" +
+			"rule names:\n" +
+			"ID\n" +
+			"\n" +
+			"channel names:\n" +
+			"DEFAULT_TOKEN_CHANNEL\n" +
+			"\n" +
+			"not modes:\n" +
+			"atn:\n" +
+			atnLine + "\n";
+		write(f, content);
 		try {
-			InterpreterDataReader.InterpreterData data = InterpreterDataReader.parseFile(f.getAbsolutePath());
-			// If implementation accepts lexer layout, assert channels/modes
-			if (data.channels != null) {
-				assertTrue(data.channels.size() >= 1);
-				assertNotNull(data.modes);
-			}
+			InterpreterDataReader.parseFile(f.getAbsolutePath());
+			fail("expected a bad mode header to be rejected");
 		}
 		catch (RuntimeException expected) {
-			assertTrue(expected.getMessage().contains("Unexpected")
-				|| expected.getMessage() != null);
+			assertTrue(expected.getMessage().contains("Unexpected"));
 		}
 	}
 

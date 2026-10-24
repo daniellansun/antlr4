@@ -5,11 +5,13 @@
  */
 package org.antlr.v4.runtime.atn;
 
+import org.antlr.v4.runtime.ParserInterpreter;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.RuleContext;
 import org.junit.Test;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -254,5 +256,119 @@ public class TestPredictionContext {
 		assertFalse(c.equals(a, PredictionContext.EMPTY_FULL.getChild(1)));
 		PredictionContext.IdentityHashMap map = new PredictionContext.IdentityHashMap();
 		assertNotNull(map);
+	}
+
+	@Test
+	public void joinReturnsRightParentAndShrinksOverlap() {
+		// size-1, same return state, merged parent is the right parent only
+		PredictionContext left = PredictionContext.EMPTY_FULL.getChild(5);
+		PredictionContext right = PredictionContext.EMPTY_LOCAL.getChild(5);
+		assertSame(right, PredictionContext.join(left, right));
+
+		// overlap plus a unique tail on each side: count < allocated length
+		PredictionContext overlapLeft = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_FULL, PredictionContext.EMPTY_FULL },
+			new int[] { 1, 3 });
+		PredictionContext overlapRight = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_FULL, PredictionContext.EMPTY_FULL },
+			new int[] { 1, 4 });
+		PredictionContext merged = PredictionContext.join(overlapLeft, overlapRight);
+		assertEquals(3, merged.size());
+
+		// shared return states whose joined parent is not the left parent,
+		// then a later shared state so canReturnLeft short-circuits
+		PredictionContext differ = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_FULL, PredictionContext.EMPTY_FULL },
+			new int[] { 1, 3 });
+		PredictionContext localParents = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_LOCAL, PredictionContext.EMPTY_FULL },
+			new int[] { 1, 3 });
+		assertNotNull(PredictionContext.join(differ, localParents));
+	}
+
+	@Test
+	public void getCachedContextVisitsSharedParentAndRecordsExisting() {
+		PredictionContext shared = PredictionContext.EMPTY_FULL.getChild(1);
+		ArrayPredictionContext fork = new ArrayPredictionContext(
+			new PredictionContext[] { shared, shared },
+			new int[] { 2, 3 });
+		PredictionContext cached = PredictionContext.getCachedContext(
+			fork,
+			new ConcurrentHashMap<PredictionContext, PredictionContext>(),
+			new PredictionContext.IdentityHashMap());
+		assertEquals(2, cached.size());
+
+		final PredictionContext stable = PredictionContext.EMPTY_FULL.getChild(3);
+		ConcurrentMap<PredictionContext, PredictionContext> alreadyThere =
+			new ConcurrentHashMap<PredictionContext, PredictionContext>() {
+				@Override
+				public PredictionContext get(Object key) {
+					return null;
+				}
+
+				@Override
+				public PredictionContext putIfAbsent(PredictionContext key, PredictionContext value) {
+					return key;
+				}
+			};
+		assertNotNull(PredictionContext.getCachedContext(
+			stable, alreadyThere, new PredictionContext.IdentityHashMap()));
+
+		final PredictionContext canonical = PredictionContext.EMPTY_FULL.getChild(1);
+		final PredictionContext doppel = PredictionContext.EMPTY_FULL.getChild(1);
+		ConcurrentMap<PredictionContext, PredictionContext> racing =
+			new ConcurrentHashMap<PredictionContext, PredictionContext>() {
+				@Override
+				public PredictionContext get(Object key) {
+					if (key == doppel) {
+						return canonical;
+					}
+					return null;
+				}
+
+				@Override
+				public PredictionContext putIfAbsent(PredictionContext key, PredictionContext value) {
+					// pretend another thread won the insert
+					return key;
+				}
+			};
+		PredictionContext rewritten = PredictionContext.getCachedContext(
+			doppel.getChild(9), racing, new PredictionContext.IdentityHashMap());
+		assertEquals(9, rewritten.getReturnState(0));
+		assertSame(canonical, rewritten.getParent(0));
+	}
+
+	@Test
+	public void toStringsSkipsInvalidPermutationAndSeparatesRuleNames() {
+		PredictionContext parent = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_FULL, PredictionContext.EMPTY_FULL },
+			new int[] { 10, 11 });
+		PredictionContext root = new ArrayPredictionContext(
+			new PredictionContext[] { parent, parent, parent },
+			new int[] { 1, 2, 3 });
+		String[] paths = root.toStrings(null, 0);
+		assertEquals(6, paths.length);
+
+		ATN atn = new ATN(ATNType.PARSER, 1);
+		BasicState s0 = new BasicState();
+		BasicState s1 = new BasicState();
+		s0.ruleIndex = 0;
+		s1.ruleIndex = 0;
+		atn.addState(s0);
+		atn.addState(s1);
+		RuleStartState rule = new RuleStartState();
+		rule.ruleIndex = 0;
+		RuleStopState stop = new RuleStopState();
+		stop.ruleIndex = 0;
+		rule.stopState = stop;
+		atn.addState(rule);
+		atn.addState(stop);
+		atn.ruleToStartState = new RuleStartState[] { rule };
+		atn.ruleToStopState = new RuleStopState[] { stop };
+		ParserInterpreter parser = ATNTestHelpers.createParser(atn, 1);
+		PredictionContext deep = PredictionContext.EMPTY_FULL.getChild(0).getChild(1);
+		String[] named = deep.toStrings(parser, 0);
+		assertTrue(named.length >= 1);
+		assertTrue(named[0].contains(" "));
 	}
 }

@@ -6,6 +6,9 @@
 package org.antlr.v4.runtime.tree;
 
 import org.antlr.v4.runtime.CommonToken;
+import org.antlr.v4.runtime.CommonTokenStream;
+import org.antlr.v4.runtime.ListTokenSource;
+import org.antlr.v4.runtime.Parser;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.misc.Interval;
@@ -473,5 +476,20 @@ public class TestTreesAndNodes {
 			}
 		};
 		assertEquals("r:2", Trees.getNodeText(ctx, Arrays.asList("r")));
+	}
+
+	@Test
+	public void getNodeTextWhenParserReportsNoRuleNames() {
+		Parser parser = new Parser(new CommonTokenStream(new ListTokenSource(
+			java.util.Collections.singletonList(new CommonToken(1, "x"))))) {
+			@Override public String[] getTokenNames() { return new String[0]; }
+			@Override public String[] getRuleNames() { return null; }
+			@Override public String getGrammarFileName() { return "t.g4"; }
+			@Override public org.antlr.v4.runtime.atn.ATN getATN() {
+				return new org.antlr.v4.runtime.atn.ATN(
+					org.antlr.v4.runtime.atn.ATNType.PARSER, 1);
+			}
+		};
+		assertEquals("x", Trees.getNodeText(new TerminalNodeImpl(new CommonToken(1, "x")), parser));
 	}
 }

@@ -7,6 +7,8 @@ package org.antlr.v4.runtime.atn;
 
 import org.junit.Test;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.Assert.assertEquals;
@@ -150,5 +152,65 @@ public class TestArrayPredictionContextCoverage {
 		assertEquals(PredictionContext.EMPTY_FULL, fromRoot);
 		PredictionContext local = PredictionContext.fromRuleContext(atn, root, false);
 		assertEquals(PredictionContext.EMPTY_LOCAL, local);
+	}
+
+	@Test
+	public void equalsWorkListBranches() throws Exception {
+		PredictionContext sharedLeft = PredictionContext.EMPTY_FULL.getChild(4);
+		PredictionContext sharedRight = PredictionContext.EMPTY_FULL.getChild(4);
+		ArrayPredictionContext repeatedLeft = new ArrayPredictionContext(
+			new PredictionContext[] { sharedLeft, sharedLeft },
+			new int[] { 1, 2 });
+		ArrayPredictionContext repeatedRight = new ArrayPredictionContext(
+			new PredictionContext[] { sharedRight, sharedRight },
+			new int[] { 1, 2 });
+		assertEquals(repeatedLeft, repeatedRight);
+
+		// empty parents share a hash but are not equal
+		ArrayPredictionContext fullParents = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_FULL, PredictionContext.EMPTY_FULL },
+			new int[] { 1, 2 });
+		ArrayPredictionContext localParent = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_LOCAL, PredictionContext.EMPTY_FULL },
+			new int[] { 1, 2 });
+		assertEquals(fullParents.hashCode(), localParent.hashCode());
+		assertNotEquals(fullParents, localParent);
+
+		ArrayPredictionContext size2 = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_FULL, PredictionContext.EMPTY_FULL },
+			new int[] { 1, 2 });
+		ArrayPredictionContext size3 = new ArrayPredictionContext(
+			new PredictionContext[] {
+				PredictionContext.EMPTY_FULL, PredictionContext.EMPTY_FULL, PredictionContext.EMPTY_FULL
+			},
+			new int[] { 1, 2, 3 });
+		forceSameHash(size2, size3);
+		assertNotEquals(size2, size3);
+
+		ArrayPredictionContext otherReturns = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_FULL, PredictionContext.EMPTY_FULL },
+			new int[] { 1, 9 });
+		forceSameHash(size2, otherReturns);
+		assertNotEquals(size2, otherReturns);
+
+		ArrayPredictionContext parentA = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_FULL.getChild(1), PredictionContext.EMPTY_FULL },
+			new int[] { 4, 5 });
+		ArrayPredictionContext parentB = new ArrayPredictionContext(
+			new PredictionContext[] { PredictionContext.EMPTY_FULL.getChild(2), PredictionContext.EMPTY_FULL },
+			new int[] { 4, 5 });
+		forceSameHash(parentA, parentB);
+		assertNotEquals(parentA, parentB);
+	}
+
+	/** Equalize cached hashes so {@code equals} reaches structural mismatches. */
+	private static void forceSameHash(PredictionContext a, PredictionContext b) throws Exception {
+		Field hash = PredictionContext.class.getDeclaredField("cachedHashCode");
+		hash.setAccessible(true);
+		Field modifiers = Field.class.getDeclaredField("modifiers");
+		modifiers.setAccessible(true);
+		modifiers.setInt(hash, hash.getModifiers() & ~Modifier.FINAL);
+		hash.setInt(a, 1);
+		hash.setInt(b, 1);
 	}
 }

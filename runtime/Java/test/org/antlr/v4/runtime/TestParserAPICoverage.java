@@ -17,6 +17,8 @@ import org.antlr.v4.runtime.atn.ProfilingATNSimulator;
 import org.antlr.v4.runtime.atn.RuleStartState;
 import org.antlr.v4.runtime.atn.RuleStopState;
 import org.antlr.v4.runtime.atn.RuleTransition;
+import org.antlr.v4.runtime.atn.TokensStartState;
+import org.antlr.v4.runtime.atn.TokensStartState;
 import org.antlr.v4.runtime.misc.IntervalSet;
 import org.antlr.v4.runtime.tree.ErrorNode;
 import org.antlr.v4.runtime.tree.ParseTreeListener;
@@ -548,5 +550,117 @@ public class TestParserAPICoverage {
 		Token eof = p.match(Token.EOF);
 		assertEquals(Token.EOF, eof.getType());
 		assertTrue(p.isMatchedEOF());
+	}
+
+	@Test
+	public void isExpectedTokenWalksInvokingFollow() {
+		ATN atn = new ATN(ATNType.PARSER, 1);
+		RuleStartState sStart = new RuleStartState();
+		BasicState follow = new BasicState();
+		RuleStopState sStop = new RuleStopState();
+		RuleStartState tStart = new RuleStartState();
+		RuleStopState tStop = new RuleStopState();
+		sStart.ruleIndex = 0;
+		follow.ruleIndex = 0;
+		sStop.ruleIndex = 0;
+		tStart.ruleIndex = 1;
+		tStop.ruleIndex = 1;
+		sStart.stopState = sStop;
+		tStart.stopState = tStop;
+		atn.addState(sStart);
+		atn.addState(tStart);
+		atn.addState(tStop);
+		atn.addState(follow);
+		atn.addState(sStop);
+		sStart.addTransition(new RuleTransition(tStart, 1, 0, follow));
+		follow.addTransition(new AtomTransition(sStop, 1));
+		tStart.addTransition(new EpsilonTransition(tStop));
+		atn.ruleToStartState = new RuleStartState[] { sStart, tStart };
+		atn.ruleToStopState = new RuleStopState[] { sStop, tStop };
+		atn.clearDFA();
+
+		ParserInterpreter parser = makeParser(atn, Arrays.asList("s", "t"), 1);
+		ParserRuleContext outer = new ParserRuleContext();
+		outer.invokingState = -1;
+		ParserRuleContext inner = new ParserRuleContext(outer, sStart.stateNumber);
+		inner.invokingState = sStart.stateNumber;
+		parser.setContext(inner);
+		parser.setState(tStop.stateNumber);
+		assertTrue(parser.isExpectedToken(1));
+		assertFalse(parser.isExpectedToken(99));
+	}
+
+	@Test
+	public void compileParseTreePatternWithExplicitLexerEntersMatcher() {
+		ATN parserAtn = epsilonRuleMatchA();
+		String serialized = ATNSerializer.getSerializedAsString(parserAtn, Collections.singletonList("s"));
+		ATN lexerAtn = lexerMatchA();
+		Vocabulary vocab = new VocabularyImpl(new String[] { null, "'a'" }, new String[] { null, "A" });
+		LexerInterpreter lexer = new LexerInterpreter(
+			"L.g4", vocab, Collections.singletonList("A"), null,
+			Collections.singletonList("DEFAULT_MODE"), lexerAtn, CharStreams.fromString("a"));
+		CommonTokenStream tokens = new CommonTokenStream(lexer);
+		tokens.fill();
+		ParserInterpreter parser = new ParserInterpreter(
+			"P.g4", vocab, Collections.singletonList("s"), parserAtn, tokens) {
+			@Override
+			public String getSerializedATN() {
+				return serialized;
+			}
+		};
+		assertNotNull(parser.compileParseTreePattern("a", 0));
+		assertNotNull(parser.compileParseTreePattern("a", 0, lexer));
+	}
+
+	/** Rule start is epsilon-only so bypass-alt deserialization accepts the ATN. */
+	private static ATN epsilonRuleMatchA() {
+		ATN atn = new ATN(ATNType.PARSER, 1);
+		RuleStartState ruleStart = new RuleStartState();
+		BasicState match = new BasicState();
+		BasicState after = new BasicState();
+		RuleStopState ruleStop = new RuleStopState();
+		ruleStart.ruleIndex = 0;
+		match.ruleIndex = 0;
+		after.ruleIndex = 0;
+		ruleStop.ruleIndex = 0;
+		ruleStart.stopState = ruleStop;
+		atn.addState(ruleStart);
+		atn.addState(match);
+		atn.addState(after);
+		atn.addState(ruleStop);
+		ruleStart.addTransition(new EpsilonTransition(match));
+		match.addTransition(new AtomTransition(after, 1));
+		after.addTransition(new EpsilonTransition(ruleStop));
+		atn.ruleToStartState = new RuleStartState[] { ruleStart };
+		atn.ruleToStopState = new RuleStopState[] { ruleStop };
+		atn.clearDFA();
+		return atn;
+	}
+
+	private static ATN lexerMatchA() {
+		ATN atn = new ATN(ATNType.LEXER, 1);
+		TokensStartState tokensStart = new TokensStartState();
+		RuleStartState ruleStart = new RuleStartState();
+		BasicState mid = new BasicState();
+		RuleStopState ruleStop = new RuleStopState();
+		tokensStart.ruleIndex = -1;
+		ruleStart.ruleIndex = 0;
+		mid.ruleIndex = 0;
+		ruleStop.ruleIndex = 0;
+		ruleStart.stopState = ruleStop;
+		atn.addState(tokensStart);
+		atn.addState(ruleStart);
+		atn.addState(mid);
+		atn.addState(ruleStop);
+		tokensStart.addTransition(new EpsilonTransition(ruleStart));
+		ruleStart.addTransition(new AtomTransition(mid, 'a'));
+		mid.addTransition(new EpsilonTransition(ruleStop));
+		atn.ruleToStartState = new RuleStartState[] { ruleStart };
+		atn.ruleToStopState = new RuleStopState[] { ruleStop };
+		atn.ruleToTokenType = new int[] { 1 };
+		atn.lexerActions = new org.antlr.v4.runtime.atn.LexerAction[0];
+		atn.defineMode("DEFAULT_MODE", tokensStart);
+		atn.clearDFA();
+		return atn;
 	}
 }

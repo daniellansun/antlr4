@@ -319,5 +319,21 @@ public class TestUnbufferedCharStream {
 		assertEquals('c', s.LA(1));
 		assertEquals('b', s.LA(-1));
 	}
+
+	@Test
+	public void seekPastBufferedWindowThrows() {
+		UnbufferedCharStream stream = new UnbufferedCharStream(new StringReader("abcdef"));
+		assertEquals('a', stream.LA(1));
+		stream.currentCharIndex = 10;
+		stream.p = 5;
+		stream.n = 1;
+		try {
+			stream.seek(6);
+			fail("expected seek outside buffer");
+		}
+		catch (UnsupportedOperationException expected) {
+			assertTrue(expected.getMessage().contains("outside buffer"));
+		}
+	}
 }
 

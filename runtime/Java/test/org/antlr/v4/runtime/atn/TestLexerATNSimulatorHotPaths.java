@@ -15,6 +15,7 @@ import org.antlr.v4.runtime.misc.IntervalSet;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
@@ -270,6 +271,181 @@ public class TestLexerATNSimulatorHotPaths {
 		atn.ruleToStopState = new RuleStopState[] { idStop, wsStop };
 		atn.ruleToTokenType = new int[] { 1, 2 };
 		atn.defineMode("DEFAULT_MODE", tokensStart);
+		return atn;
+	}
+
+	@Test
+	public void emptyRuleCapturesAcceptAtStart() {
+		ATN atn = modeWithRules(true);
+		LexerATNSimulator sim = new LexerATNSimulator(atn);
+		assertEquals(1, sim.match(CharStreams.fromString(""), Lexer.DEFAULT_MODE));
+	}
+
+	@Test
+	public void eofAtomAcceptsAndWildcardFallsThroughEpsilonTarget() {
+		ATN atn = new ATN(ATNType.LEXER, Character.MAX_CODE_POINT);
+		TokensStartState tokens = new TokensStartState();
+		tokens.ruleIndex = -1;
+		atn.addState(tokens);
+		RuleStartState start = new RuleStartState();
+		BasicState mid = new BasicState();
+		BasicState wildTarget = new BasicState();
+		RuleStopState stop = new RuleStopState();
+		start.ruleIndex = 0;
+		mid.ruleIndex = 0;
+		wildTarget.ruleIndex = 0;
+		stop.ruleIndex = 0;
+		start.stopState = stop;
+		atn.addState(start);
+		atn.addState(mid);
+		atn.addState(wildTarget);
+		atn.addState(stop);
+		tokens.addTransition(new EpsilonTransition(start));
+		start.addTransition(new AtomTransition(mid, CharStream.EOF));
+		mid.addTransition(new EpsilonTransition(stop));
+		mid.addTransition(new WildcardTransition(wildTarget));
+		atn.ruleToStartState = new RuleStartState[] { start };
+		atn.ruleToStopState = new RuleStopState[] { stop };
+		atn.ruleToTokenType = new int[] { 1 };
+		atn.lexerActions = new LexerAction[0];
+		atn.defineMode("DEFAULT_MODE", tokens);
+
+		LexerATNSimulator sim = new LexerATNSimulator(atn);
+		assertEquals(1, sim.match(CharStreams.fromString(""), Lexer.DEFAULT_MODE));
+	}
+
+	@Test
+	public void positionDependentActionFixesOffsetBeforeNextChar() {
+		ATN atn = new ATN(ATNType.LEXER, Character.MAX_CODE_POINT);
+		TokensStartState tokens = new TokensStartState();
+		tokens.ruleIndex = -1;
+		atn.addState(tokens);
+		RuleStartState start = new RuleStartState();
+		BasicState mid = new BasicState();
+		BasicState after = new BasicState();
+		BasicState preStop = new BasicState();
+		RuleStopState stop = new RuleStopState();
+		for (ATNState state : new ATNState[] { start, mid, after, preStop, stop }) {
+			state.ruleIndex = 0;
+			atn.addState(state);
+		}
+		start.stopState = stop;
+		tokens.addTransition(new EpsilonTransition(start));
+		start.addTransition(new AtomTransition(mid, 'a'));
+		mid.addTransition(new ActionTransition(after, 0, 0, false));
+		after.addTransition(new AtomTransition(preStop, 'b'));
+		preStop.addTransition(new EpsilonTransition(stop));
+		atn.ruleToStartState = new RuleStartState[] { start };
+		atn.ruleToStopState = new RuleStopState[] { stop };
+		atn.ruleToTokenType = new int[] { 4 };
+		atn.lexerActions = new LexerAction[] { new LexerCustomAction(0, 1) };
+		atn.defineMode("DEFAULT_MODE", tokens);
+
+		assertEquals(4, new LexerATNSimulator(atn).match(CharStreams.fromString("ab"), Lexer.DEFAULT_MODE));
+	}
+
+	@Test
+	public void referencedRuleSkipsActionAndUsesOptimizedTailCall() {
+		ATN atn = new ATN(ATNType.LEXER, Character.MAX_CODE_POINT);
+		TokensStartState tokens = new TokensStartState();
+		tokens.ruleIndex = -1;
+		atn.addState(tokens);
+
+		RuleStartState outer = new RuleStartState();
+		BasicState outerAfter = new BasicState();
+		RuleStopState outerStop = new RuleStopState();
+		RuleStartState mid = new RuleStartState();
+		BasicState afterAction = new BasicState();
+		RuleStopState midStop = new RuleStopState();
+		RuleStartState inner = new RuleStartState();
+		BasicState innerPre = new BasicState();
+		RuleStopState innerStop = new RuleStopState();
+		ATNState[] states = new ATNState[] {
+			outer, outerAfter, outerStop, mid, afterAction, midStop, inner, innerPre, innerStop
+		};
+		int[] rules = new int[] { 0, 0, 0, 1, 1, 1, 2, 2, 2 };
+		for (int i = 0; i < states.length; i++) {
+			states[i].ruleIndex = rules[i];
+			atn.addState(states[i]);
+		}
+		outer.stopState = outerStop;
+		mid.stopState = midStop;
+		inner.stopState = innerStop;
+		tokens.addTransition(new EpsilonTransition(outer));
+		outer.addTransition(new RuleTransition(mid, 1, 0, outerAfter));
+		outerAfter.addTransition(new EpsilonTransition(outerStop));
+		mid.addTransition(new ActionTransition(afterAction, 1, 0, false));
+		RuleTransition tail = new RuleTransition(inner, 2, 0, midStop);
+		tail.optimizedTailCall = true;
+		afterAction.addTransition(tail);
+		inner.addTransition(new AtomTransition(innerPre, 'a'));
+		innerPre.addTransition(new EpsilonTransition(innerStop));
+		atn.ruleToStartState = new RuleStartState[] { outer, mid, inner };
+		atn.ruleToStopState = new RuleStopState[] { outerStop, midStop, innerStop };
+		atn.ruleToTokenType = new int[] { 7, 0, 0 };
+		atn.lexerActions = new LexerAction[] { new LexerCustomAction(1, 0) };
+		atn.defineMode("DEFAULT_MODE", tokens);
+
+		assertEquals(7, new LexerATNSimulator(atn).match(CharStreams.fromString("a"), Lexer.DEFAULT_MODE));
+	}
+
+	@Test
+	public void ruleStopWithEmptyAndReturnContextSplits() {
+		ATN atn = new ATN(ATNType.LEXER, 1);
+		RuleStopState stop = new RuleStopState();
+		stop.ruleIndex = 0;
+		BasicState follow = new BasicState();
+		follow.ruleIndex = 0;
+		atn.addState(stop);
+		atn.addState(follow);
+		atn.ruleToStartState = new RuleStartState[] { new RuleStartState() };
+		atn.ruleToStopState = new RuleStopState[] { stop };
+		atn.lexerActions = new LexerAction[0];
+
+		PredictionContext[] parents = new PredictionContext[] {
+			PredictionContext.EMPTY_FULL, PredictionContext.EMPTY_FULL
+		};
+		int[] returns = new int[] { follow.stateNumber, PredictionContext.EMPTY_FULL_STATE_KEY };
+		PredictionContext ctx = new ArrayPredictionContext(parents, returns);
+		assertTrue(ctx.hasEmpty());
+		assertFalse(ctx.isEmpty());
+
+		ATNConfigSet configs = new ATNConfigSet();
+		ATNConfig config = ATNConfig.create(stop, 1, ctx);
+		boolean accepted = new ExposedLexer(atn).closeStop(config, configs);
+		assertTrue(accepted || configs.size() >= 1);
+	}
+
+	static final class ExposedLexer extends LexerATNSimulator {
+		ExposedLexer(ATN atn) { super(atn); }
+
+		boolean closeStop(ATNConfig config, ATNConfigSet configs) {
+			return closure(CharStreams.fromString(""), config, configs, false, false, false);
+		}
+	}
+
+	/** One empty rule (optional) plus a fallback, so the mode closure can accept immediately. */
+	private static ATN modeWithRules(boolean includeEmpty) {
+		ATN atn = new ATN(ATNType.LEXER, Character.MAX_CODE_POINT);
+		TokensStartState tokens = new TokensStartState();
+		tokens.ruleIndex = -1;
+		atn.addState(tokens);
+		RuleStartState start = new RuleStartState();
+		RuleStopState stop = new RuleStopState();
+		start.ruleIndex = 0;
+		stop.ruleIndex = 0;
+		start.stopState = stop;
+		atn.addState(start);
+		atn.addState(stop);
+		tokens.addTransition(new EpsilonTransition(start));
+		if (includeEmpty) {
+			start.addTransition(new EpsilonTransition(stop));
+		}
+		atn.ruleToStartState = new RuleStartState[] { start };
+		atn.ruleToStopState = new RuleStopState[] { stop };
+		atn.ruleToTokenType = new int[] { 1 };
+		atn.lexerActions = new LexerAction[0];
+		atn.defineMode("DEFAULT_MODE", tokens);
 		return atn;
 	}
 }

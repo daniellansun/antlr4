@@ -1150,6 +1150,9 @@ public class ATNDeserializer {
 			if (reachable.get(state.stateNumber)) {
 				continue;
 			}
+			// Without this mark, an epsilon cycle in the follow state
+			// walks the same edge forever.
+			reachable.set(state.stateNumber);
 
 			if (state instanceof RuleStopState) {
 				continue;

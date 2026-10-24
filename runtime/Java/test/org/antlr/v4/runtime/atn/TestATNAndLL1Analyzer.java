@@ -5,9 +5,13 @@
  */
 package org.antlr.v4.runtime.atn;
 
+import org.antlr.v4.runtime.ParserInterpreter;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.misc.IntervalSet;
 import org.junit.Test;
+
+import java.util.BitSet;
+import java.util.HashSet;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -226,5 +230,68 @@ public class TestATNAndLL1Analyzer {
 		IntervalSet look = analyzer.LOOK(start, PredictionContext.EMPTY_LOCAL);
 		assertFalse(look.contains(1));
 		assertTrue(look.contains(2));
+	}
+
+	@Test
+	public void lookBusyPredicateAndRuleStopEof() {
+		ATN atn = new ATN(ATNType.PARSER, 2);
+		BasicState loop = new BasicState();
+		loop.ruleIndex = 0;
+		atn.addState(loop);
+		loop.addTransition(new EpsilonTransition(loop));
+		LL1Analyzer analyzer = new LL1Analyzer(atn);
+		IntervalSet loopLook = new IntervalSet();
+		analyzer._LOOK(loop, null, PredictionContext.EMPTY_LOCAL, loopLook,
+			new HashSet<ATNConfig>(), new BitSet(), true, false);
+		assertTrue(loopLook.isNil());
+
+		BasicBlockStartState decision = new BasicBlockStartState();
+		BasicState predState = new BasicState();
+		BasicState after = new BasicState();
+		decision.ruleIndex = 0;
+		predState.ruleIndex = 0;
+		after.ruleIndex = 0;
+		atn.addState(decision);
+		atn.addState(predState);
+		atn.addState(after);
+		decision.addTransition(new EpsilonTransition(predState));
+		predState.addTransition(new PredicateTransition(after, 0, 0, false));
+		IntervalSet[] decisionLook = analyzer.getDecisionLookahead(decision);
+		assertNull(decisionLook[0]);
+
+		RuleStopState stop = new RuleStopState();
+		stop.ruleIndex = 0;
+		atn.addState(stop);
+		atn.ruleToStopState = new RuleStopState[] { stop };
+		IntervalSet withEof = new IntervalSet();
+		analyzer._LOOK(stop, null, PredictionContext.EMPTY_FULL, withEof,
+			new HashSet<ATNConfig>(), new BitSet(), true, true);
+		assertTrue(withEof.contains(Token.EOF));
+		IntervalSet noEof = new IntervalSet();
+		analyzer._LOOK(stop, null, PredictionContext.EMPTY_FULL, noEof,
+			new HashSet<ATNConfig>(), new BitSet(), true, false);
+		assertFalse(noEof.contains(Token.EOF));
+		IntervalSet local = new IntervalSet();
+		analyzer._LOOK(stop, null, PredictionContext.EMPTY_LOCAL, local,
+			new HashSet<ATNConfig>(), new BitSet(), true, true);
+		IntervalSet nested = new IntervalSet();
+		analyzer._LOOK(stop, null, PredictionContext.EMPTY_FULL.getChild(stop.stateNumber), nested,
+			new HashSet<ATNConfig>(), new BitSet(), true, true);
+		assertNotNull(local);
+		assertNotNull(nested);
+	}
+
+	@Test
+	public void parseInfoListsFallbackDecisions() {
+		ATN atn = new ATN(ATNType.PARSER, 1);
+		BasicBlockStartState decision = new BasicBlockStartState();
+		atn.addState(decision);
+		atn.defineDecisionState(decision);
+		ParserInterpreter parser = ATNTestHelpers.createParser(atn, 1);
+		ProfilingATNSimulator simulator = new ProfilingATNSimulator(parser);
+		simulator.decisions[0].LL_Fallback = 3;
+		ParseInfo info = new ParseInfo(simulator);
+		assertEquals(1, info.getLLDecisions().size());
+		assertEquals(Integer.valueOf(0), info.getLLDecisions().get(0));
 	}
 }

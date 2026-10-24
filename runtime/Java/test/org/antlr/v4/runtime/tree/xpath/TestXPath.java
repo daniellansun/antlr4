@@ -437,6 +437,18 @@ public class TestXPath {
 	}
 
 	@Test
+	public void stringTokenIsUnknownPathElement() {
+		StubParser parser = stubParser();
+		try {
+			new XPath(parser, "'abc'");
+			fail("expected unknown path element");
+		}
+		catch (IllegalArgumentException expected) {
+			assertTrue(expected.getMessage().contains("Unknowth"));
+		}
+	}
+
+	@Test
 	public void xpathWildcardAnywhereInvert() {
 		IndexedRuleContext root = sampleTree();
 		XPathWildcardAnywhereElement el = new XPathWildcardAnywhereElement();

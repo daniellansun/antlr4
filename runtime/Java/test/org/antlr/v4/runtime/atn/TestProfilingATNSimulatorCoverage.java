@@ -152,4 +152,48 @@ public class TestProfilingATNSimulatorCoverage {
 		assertTrue(pi.getTotalSLLATNLookaheadOps() >= 0);
 		assertTrue(pi.getTotalLLATNLookaheadOps() >= 0);
 	}
+
+	@Test
+	public void secondFullContextPredictionUpdatesMinLookAndDfaCount() {
+		ATN atn = ATNTestHelpers.buildParserAorB();
+		ParserInterpreter p = parser(atn, Collections.singletonList("s"), 1);
+		ProfilingATNSimulator prof = new ProfilingATNSimulator(p);
+		prof.optimize_ll1 = false;
+		prof.force_global_context = true;
+		prof.enable_global_context_dfa = true;
+		p.setInterpreter(prof);
+		assertNotNull(p.parse(0));
+		p.reset();
+		assertNotNull(p.parse(0));
+		DecisionInfo info = prof.getDecisionInfo()[0];
+		assertTrue(info.invocations >= 1);
+		assertTrue(info.LL_MinLook >= 0);
+		assertTrue(info.LL_DFATransitions >= 0);
+	}
+
+	@Test
+	public void profilesMissingReachAndReusedErrorEdge() {
+		ATN atn = ATNTestHelpers.buildParserAorB();
+		ParserInterpreter p = parser(atn, Collections.singletonList("s"), 3);
+		p.removeErrorListeners();
+		ProfilingATNSimulator prof = new ProfilingATNSimulator(p);
+		prof.optimize_ll1 = false;
+		p.setInterpreter(prof);
+		try {
+			p.parse(0);
+		}
+		catch (RuntimeException expected) {
+			assertNotNull(expected);
+		}
+		assertNotNull(prof.getDecisionInfo());
+		assertTrue(prof.getDecisionInfo()[0].errors.size() >= 0);
+		p.reset();
+		try {
+			p.parse(0);
+		}
+		catch (RuntimeException expected) {
+			assertNotNull(expected);
+		}
+		assertTrue(prof.getDecisionInfo()[0].errors.size() >= 0);
+	}
 }

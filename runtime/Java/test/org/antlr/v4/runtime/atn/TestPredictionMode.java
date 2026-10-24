@@ -149,6 +149,19 @@ public class TestPredictionMode {
 		assertTrue(PredictionMode.hasSLLConflictTerminatingPrediction(PredictionMode.SLL, withPred));
 	}
 
+	@Test
+	public void altAndContextMapUsesStateAndContextOnly() {
+		PredictionMode.AltAndContextMap map = new PredictionMode.AltAndContextMap();
+		ATNConfig first = ATNConfig.create(state(1), 1, PredictionContext.EMPTY_FULL);
+		ATNConfig again = ATNConfig.create(state(1), 4, PredictionContext.EMPTY_FULL);
+		BitSet bits = new BitSet();
+		bits.set(1);
+		map.put(first, bits);
+		map.put(first, bits);
+		assertSame(bits, map.get(again));
+		assertEquals(null, map.get(null));
+	}
+
 	private static BitSet bitset(int... alts) {
 		BitSet b = new BitSet();
 		for (int a : alts) {

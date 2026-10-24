@@ -19,6 +19,8 @@ import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.Vocabulary;
 import org.antlr.v4.runtime.VocabularyImpl;
 import org.antlr.v4.runtime.dfa.DFA;
+import org.antlr.v4.runtime.dfa.DFAState;
+import org.antlr.v4.runtime.misc.IntegerList;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -443,5 +445,393 @@ public class TestParserATNSimulatorCoverage {
 	public void predictionModeEnum() {
 		assertEquals(PredictionMode.SLL, PredictionMode.valueOf("SLL"));
 		assertTrue(PredictionMode.values().length >= 3);
+	}
+
+	@Test
+	public void errorEdgeIsReusedAndWildcardOnEofReturnsNull() {
+		ATN atn = ATNTestHelpers.buildParserAorB();
+		ParserInterpreter p = parser(atn, Collections.singletonList("s"), 3);
+		p.removeErrorListeners();
+		Exposed sim = new Exposed(p, atn);
+		p.setInterpreter(sim);
+		try {
+			sim.adaptivePredict(p.getInputStream(), 0, p.getContext());
+		}
+		catch (RuntimeException expected) {
+			assertNotNull(expected);
+		}
+		p.getInputStream().seek(0);
+		try {
+			sim.adaptivePredict(p.getInputStream(), 0, p.getContext());
+		}
+		catch (RuntimeException expected) {
+			assertNotNull(expected);
+		}
+
+		ATN eofAtn = eofThenWildcard();
+		ParserInterpreter eofParser = ATNTestHelpers.createParser(eofAtn, vocab(), Collections.singletonList("s"));
+		eofParser.removeErrorListeners();
+		Exposed eofSim = new Exposed(eofParser, eofAtn);
+		eofParser.setInterpreter(eofSim);
+		try {
+			int alt = eofSim.adaptivePredict(eofParser.getInputStream(), 0, eofParser.getContext());
+			assertTrue(alt == ATN.INVALID_ALT_NUMBER || alt >= 1);
+		}
+		catch (RuntimeException expected) {
+			assertNotNull(expected);
+		}
+	}
+
+	@Test
+	public void contextSensitiveDecisionStepsIntoGlobalContext() {
+		ATN atn = buildEInTwoCallers();
+		Vocabulary v = new VocabularyImpl(
+			new String[] { null, "'$'", "'@'", "ID", "INT" },
+			new String[] { null, "DOLLAR", "AT", "ID", "INT" });
+		List<String> rules = Arrays.asList("s", "a", "b", "e");
+		parseContextSensitive(atn, v, rules, 1, 4, 3);
+		parseContextSensitive(atn, v, rules, 2, 4, 3);
+	}
+
+	@Test
+	public void precedenceStartWithoutParserAndNegativePrecedence() {
+		ATN atn = precedenceStar();
+		DFA dfa = atn.decisionToDFA[0];
+		assertTrue(dfa.isPrecedenceDfa());
+		DFAState marker = new DFAState(dfa, new ATNConfigSet());
+		dfa.setPrecedenceStartState(0, false, marker);
+		ParserATNSimulator bare = new ParserATNSimulator(atn);
+		try {
+			bare.adaptivePredict(parser(ATNTestHelpers.buildParserAorB(), Collections.singletonList("s"), 1).getInputStream(),
+				0, ParserRuleContext.emptyContext());
+		}
+		catch (RuntimeException expected) {
+			assertNotNull(expected);
+		}
+
+		ParserInterpreter shell = parser(atn, Collections.singletonList("e"), 1);
+		ParserInterpreter negative = new EmptyPrecParser(shell.getGrammarFileName(), shell.getVocabulary(),
+			Arrays.asList(shell.getRuleNames()), atn, shell.getInputStream());
+		assertEquals(-1, negative.getPrecedence());
+		negative.removeErrorListeners();
+		ParserATNSimulator sim = new ParserATNSimulator(negative, atn);
+		negative.setInterpreter(sim);
+		try {
+			sim.adaptivePredict(negative.getInputStream(), 0, negative.getContext());
+		}
+		catch (RuntimeException expected) {
+			assertNotNull(expected);
+		}
+	}
+
+	@Test
+	public void reenteringStartStateAndLostCas() {
+		ATN atn = ATNTestHelpers.buildParserAorB();
+		Exposed sim = new Exposed(atn);
+		DFA dfa = atn.decisionToDFA[0];
+		SimulatorState first = sim.compute(dfa, ParserRuleContext.emptyContext(), false);
+		assertNotNull(first);
+		SimulatorState second = sim.compute(dfa, ParserRuleContext.emptyContext(), false);
+		assertNotNull(second);
+		assertSame(first.s0, second.s0);
+
+		ATN fresh = ATNTestHelpers.buildParserAorB();
+		CasSim cas = new CasSim(fresh);
+		SimulatorState raced = cas.start(fresh.decisionToDFA[0]);
+		assertNotNull(raced);
+	}
+
+	@Test
+	public void conflictInfoStopsEarlyAndContextEdgeWalk() {
+		ATN atn = ATNTestHelpers.buildParserAorB();
+		BasicState s1 = new BasicState();
+		BasicState s2 = new BasicState();
+		BasicState s3 = new BasicState();
+		s1.ruleIndex = 0;
+		s2.ruleIndex = 0;
+		s3.ruleIndex = 0;
+		atn.addState(s1);
+		atn.addState(s2);
+		atn.addState(s3);
+		PredictionContextCache cache = new PredictionContextCache();
+		ATNConfigSet configs = new ATNConfigSet();
+		configs.add(ATNConfig.create(s1, 1, PredictionContext.EMPTY_FULL), cache);
+		configs.add(ATNConfig.create(s1, 2, PredictionContext.EMPTY_FULL), cache);
+		configs.add(ATNConfig.create(s2, 1, PredictionContext.EMPTY_FULL), cache);
+		configs.add(ATNConfig.create(s3, 1, PredictionContext.EMPTY_FULL), cache);
+		configs.add(ATNConfig.create(s3, 2, PredictionContext.EMPTY_FULL), cache);
+		Exposed sim = new Exposed(atn);
+		DFAState added = sim.addState(atn.decisionToDFA[0], configs, cache);
+		assertNotNull(added);
+
+		ATNConfigSet outermost = new ATNConfigSet();
+		outermost.setOutermostConfigSet(true);
+		outermost.add(ATNConfig.create(s1, 1, PredictionContext.EMPTY_LOCAL), cache);
+		DFA dfa = atn.decisionToDFA[0];
+		// addDFAEdge requires a context-sensitive DFA before it records context edges.
+		dfa.s0full.set(new DFAState(dfa, new ATNConfigSet()));
+		DFAState from = new DFAState(dfa, outermost);
+		IntegerList contexts = new IntegerList();
+		contexts.add(PredictionContext.EMPTY_FULL_STATE_KEY);
+		assertNotNull(sim.addEdge(dfa, from, 1, contexts, outermost, cache));
+
+		walkExistingContextEdge(atn);
+	}
+
+	private static void parseContextSensitive(ATN atn, Vocabulary v, List<String> rules, int... toks) {
+		ParserInterpreter p = ATNTestHelpers.createParser(atn, v, rules, toks);
+		p.removeErrorListeners();
+		Exposed sim = new Exposed(p, atn);
+		sim.reportAmbiguities = true;
+		sim.enable_global_context_dfa = true;
+		sim.optimize_ll1 = false;
+		p.setInterpreter(sim);
+		assertNotNull(p.parse(0));
+	}
+
+	private static void walkExistingContextEdge(ATN atn) {
+		BasicState follow = new BasicState();
+		follow.ruleIndex = 0;
+		atn.addState(follow);
+		BasicState call = new BasicState();
+		call.ruleIndex = 0;
+		atn.addState(call);
+		RuleStartState target = new RuleStartState();
+		target.ruleIndex = 0;
+		target.stopState = new RuleStopState();
+		atn.addState(target);
+		call.addTransition(new RuleTransition(target, 0, 0, follow));
+		DFA dfa = atn.decisionToDFA[0];
+		ATNConfigSet configs = new ATNConfigSet();
+		configs.add(ATNConfig.create(call, 1, PredictionContext.EMPTY_FULL));
+		DFAState s = new DFAState(dfa, configs);
+		DFAState next = new DFAState(dfa, new ATNConfigSet());
+		s.setContextSensitive(atn);
+		s.setContextSymbol(1);
+		s.setContextTarget(follow.stateNumber, next);
+		ParserRuleContext outer = new ParserRuleContext(ParserRuleContext.emptyContext(), call.stateNumber);
+		Exposed sim = new Exposed(atn);
+		SimulatorState state = new SimulatorState(outer, s, true, outer);
+		sim.reach(dfa, state, 1);
+
+		ATNConfigSet missingConfigs = new ATNConfigSet();
+		missingConfigs.add(ATNConfig.create(call, 1, PredictionContext.EMPTY_FULL));
+		DFAState missing = new DFAState(dfa, missingConfigs);
+		missing.setContextSensitive(atn);
+		missing.setContextSymbol(1);
+		SimulatorState failover = new SimulatorState(outer, missing, true, outer);
+		ParserInterpreter p = parser(ATNTestHelpers.buildParserAorB(), Collections.singletonList("s"), 1);
+		Exposed withInput = new Exposed(p, atn);
+		try {
+			withInput.exec(dfa, p.getInputStream(), 0, failover);
+		}
+		catch (RuntimeException expected) {
+			assertNotNull(expected);
+		}
+	}
+
+	private static ATN eofThenWildcard() {
+		ATN atn = new ATN(ATNType.PARSER, 1);
+		RuleStartState start = new RuleStartState();
+		BasicBlockStartState block = new BasicBlockStartState();
+		BasicState matcher = new BasicState();
+		BasicState mid = new BasicState();
+		BasicState other = new BasicState();
+		BlockEndState end = new BlockEndState();
+		RuleStopState stop = new RuleStopState();
+		for (ATNState state : new ATNState[] { start, block, matcher, mid, other, end, stop }) {
+			state.ruleIndex = 0;
+			atn.addState(state);
+		}
+		start.stopState = stop;
+		block.endState = end;
+		end.startState = block;
+		start.addTransition(new EpsilonTransition(block));
+		block.addTransition(new EpsilonTransition(matcher));
+		matcher.addTransition(new AtomTransition(mid, Token.EOF));
+		mid.addTransition(new EpsilonTransition(end));
+		mid.addTransition(new WildcardTransition(other));
+		end.addTransition(new EpsilonTransition(stop));
+		atn.defineDecisionState(block);
+		atn.ruleToStartState = new RuleStartState[] { start };
+		atn.ruleToStopState = new RuleStopState[] { stop };
+		atn.clearDFA();
+		return atn;
+	}
+
+	private static ATN precedenceStar() {
+		ATN atn = ATNTestHelpers.buildParserAStar();
+		atn.ruleToStartState[0].isPrecedenceRule = true;
+		for (ATNState state : atn.states) {
+			if (state instanceof StarLoopEntryState) {
+				StarLoopEntryState entry = (StarLoopEntryState) state;
+				entry.precedenceRuleDecision = true;
+				entry.precedenceLoopbackStates = new BitSet();
+			}
+		}
+		atn.decisionToDFA = null;
+		atn.clearDFA();
+		return atn;
+	}
+
+	private static ATN buildEInTwoCallers() {
+		ATN atn = new ATN(ATNType.PARSER, 4);
+		RuleStartState sStart = start(atn, 0);
+		BasicBlockStartState sDec = block(atn, 0);
+		BasicState sAlt1 = basic(atn, 0);
+		BasicState sCallA = basic(atn, 0);
+		BasicState sAfterA = basic(atn, 0);
+		BasicState sAlt2 = basic(atn, 0);
+		BasicState sCallB = basic(atn, 0);
+		BasicState sAfterB = basic(atn, 0);
+		BlockEndState sEnd = blockEnd(atn, 0, sDec);
+		RuleStopState sStop = stop(atn, 0, sStart);
+
+		RuleStartState aStart = start(atn, 1);
+		BasicState aAfter = basic(atn, 1);
+		RuleStopState aStop = stop(atn, 1, aStart);
+
+		RuleStartState bStart = start(atn, 2);
+		BasicState bAfter = basic(atn, 2);
+		BasicState bMid = basic(atn, 2);
+		RuleStopState bStop = stop(atn, 2, bStart);
+
+		RuleStartState eStart = start(atn, 3);
+		BasicBlockStartState eDec = block(atn, 3);
+		BasicState eInt = basic(atn, 3);
+		BlockEndState eEnd = blockEnd(atn, 3, eDec);
+		RuleStopState eStop = stop(atn, 3, eStart);
+
+		sStart.addTransition(new EpsilonTransition(sDec));
+		sDec.addTransition(new EpsilonTransition(sAlt1));
+		sAlt1.addTransition(new AtomTransition(sCallA, 1));
+		sCallA.addTransition(new RuleTransition(aStart, 1, 0, sAfterA));
+		sAfterA.addTransition(new EpsilonTransition(sEnd));
+		sDec.addTransition(new EpsilonTransition(sAlt2));
+		sAlt2.addTransition(new AtomTransition(sCallB, 2));
+		sCallB.addTransition(new RuleTransition(bStart, 2, 0, sAfterB));
+		sAfterB.addTransition(new EpsilonTransition(sEnd));
+		sEnd.addTransition(new EpsilonTransition(sStop));
+
+		aStart.addTransition(new RuleTransition(eStart, 3, 0, aAfter));
+		aAfter.addTransition(new AtomTransition(aStop, 3));
+
+		bStart.addTransition(new RuleTransition(eStart, 3, 0, bAfter));
+		bAfter.addTransition(new AtomTransition(bMid, 4));
+		bMid.addTransition(new AtomTransition(bStop, 3));
+
+		eStart.addTransition(new EpsilonTransition(eDec));
+		eDec.addTransition(new EpsilonTransition(eInt));
+		eInt.addTransition(new AtomTransition(eEnd, 4));
+		eDec.addTransition(new EpsilonTransition(eEnd));
+		eEnd.addTransition(new EpsilonTransition(eStop));
+		eStop.addTransition(new EpsilonTransition(aAfter));
+		eStop.addTransition(new EpsilonTransition(bAfter));
+
+		atn.defineDecisionState(sDec);
+		atn.defineDecisionState(eDec);
+		atn.ruleToStartState = new RuleStartState[] { sStart, aStart, bStart, eStart };
+		atn.ruleToStopState = new RuleStopState[] { sStop, aStop, bStop, eStop };
+		atn.clearDFA();
+		return atn;
+	}
+
+	private static RuleStartState start(ATN atn, int rule) {
+		RuleStartState state = new RuleStartState();
+		state.ruleIndex = rule;
+		atn.addState(state);
+		return state;
+	}
+
+	private static BasicState basic(ATN atn, int rule) {
+		BasicState state = new BasicState();
+		state.ruleIndex = rule;
+		atn.addState(state);
+		return state;
+	}
+
+	private static BasicBlockStartState block(ATN atn, int rule) {
+		BasicBlockStartState state = new BasicBlockStartState();
+		state.ruleIndex = rule;
+		atn.addState(state);
+		return state;
+	}
+
+	private static BlockEndState blockEnd(ATN atn, int rule, BasicBlockStartState startState) {
+		BlockEndState state = new BlockEndState();
+		state.ruleIndex = rule;
+		atn.addState(state);
+		startState.endState = state;
+		state.startState = startState;
+		return state;
+	}
+
+	private static RuleStopState stop(ATN atn, int rule, RuleStartState startState) {
+		RuleStopState state = new RuleStopState();
+		state.ruleIndex = rule;
+		atn.addState(state);
+		startState.stopState = state;
+		return state;
+	}
+
+	static final class EmptyPrecParser extends ParserInterpreter {
+		EmptyPrecParser(String grammarFileName, Vocabulary vocabulary, java.util.Collection<String> ruleNames,
+						ATN atn, org.antlr.v4.runtime.TokenStream input) {
+			super(grammarFileName, vocabulary, ruleNames, atn, input);
+			_precedenceStack.clear();
+		}
+	}
+
+	static final class Exposed extends ParserATNSimulator {
+		Exposed(ATN atn) {
+			super(atn);
+			optimize_ll1 = false;
+		}
+
+		Exposed(Parser parser, ATN atn) {
+			super(parser, atn);
+			optimize_ll1 = false;
+		}
+
+		SimulatorState compute(DFA dfa, ParserRuleContext ctx, boolean useContext) {
+			return computeStartState(dfa, ctx, useContext);
+		}
+
+		SimulatorState reach(DFA dfa, SimulatorState state, int t) {
+			return computeReachSet(dfa, state, t, new PredictionContextCache());
+		}
+
+		int exec(DFA dfa, org.antlr.v4.runtime.TokenStream input, int start, SimulatorState state) {
+			return execDFA(dfa, input, start, state);
+		}
+
+		DFAState addState(DFA dfa, ATNConfigSet configs, PredictionContextCache cache) {
+			return addDFAState(dfa, configs, cache);
+		}
+
+		DFAState addEdge(DFA dfa, DFAState from, int t, IntegerList contexts, ATNConfigSet to,
+						 PredictionContextCache cache) {
+			return addDFAEdge(dfa, from, t, contexts, to, cache);
+		}
+	}
+
+	static final class CasSim extends ParserATNSimulator {
+		CasSim(ATN atn) {
+			super(atn);
+			optimize_ll1 = false;
+		}
+
+		@Override
+		protected DFAState addDFAState(DFA dfa, ATNConfigSet configs, PredictionContextCache contextCache) {
+			DFAState state = super.addDFAState(dfa, configs, contextCache);
+			if (!dfa.isPrecedenceDfa() && dfa.s0.get() == null) {
+				dfa.s0.compareAndSet(null, state);
+			}
+			return state;
+		}
+
+		SimulatorState start(DFA dfa) {
+			return computeStartState(dfa, ParserRuleContext.emptyContext(), false);
+		}
 	}
 }

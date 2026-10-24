@@ -104,6 +104,17 @@ public class TestRuleDependencyChecker {
 	}
 
 	@Test
+	public void repeatedCheckSkipsMarkedRecognizerAndForeignDependency() {
+		RuleDependencyChecker.checkDependencies(SelfCheckedRecognizer.class);
+		RuleDependencyChecker.checkDependencies(SelfCheckedRecognizer.class);
+
+		RuleDependencyChecker.checkDependencies(OuterHolder.InnerRec.class);
+		RuleDependencyChecker.checkDependencies(OuterHolder.class);
+
+		RuleDependencyChecker.checkDependencies(MixedRecognizers.class);
+	}
+
+	@Test
 	public void privateConstructorViaReflection() throws Exception {
 		Constructor<RuleDependencyChecker> ctor = RuleDependencyChecker.class.getDeclaredConstructor();
 		ctor.setAccessible(true);
@@ -241,5 +252,43 @@ public class TestRuleDependencyChecker {
 	static class DependentOnOddRecognizer {
 		@RuleDependency(recognizer = OddRecognizer.class, rule = 0, version = 1)
 		int ok;
+	}
+
+	@RuleDependency(recognizer = SelfCheckedRecognizer.class, rule = 0, version = 1)
+	public static class SelfCheckedRecognizer extends Recognizer<Token, ATNSimulator> {
+		public static final String[] ruleNames = new String[] { "a" };
+		public static final int RULE_a = 0;
+		public int notStatic;
+
+		@RuleVersion(1)
+		public void a() {}
+
+		@Override public String[] getTokenNames() { return new String[0]; }
+		@Override public String[] getRuleNames() { return ruleNames; }
+		@Override public String getGrammarFileName() { return "Self.g4"; }
+		@Override public IntStream getInputStream() { return null; }
+	}
+
+	static class OuterHolder {
+		@RuleDependency(recognizer = InnerRec.class, rule = 0, version = 0)
+		public static class InnerRec extends Recognizer<Token, ATNSimulator> {
+			public static final String[] ruleNames = new String[] { "a" };
+			public static final int RULE_a = 0;
+
+			@RuleVersion(0)
+			public void a() {}
+
+			@Override public String[] getTokenNames() { return new String[0]; }
+			@Override public String[] getRuleNames() { return ruleNames; }
+			@Override public String getGrammarFileName() { return "Inner.g4"; }
+			@Override public IntStream getInputStream() { return null; }
+		}
+	}
+
+	static class MixedRecognizers {
+		@RuleDependency(recognizer = FakeRecognizer.class, rule = 0, version = 1)
+		int left;
+		@RuleDependency(recognizer = OddRecognizer.class, rule = 0, version = 1)
+		int right;
 	}
 }

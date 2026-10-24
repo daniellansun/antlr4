@@ -99,6 +99,14 @@
                             </execution>
                         </executions>
                     </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <!-- @{argLine} is the JaCoCo agent. -ea executes assert statements. -->
+                            <argLine>@{argLine} -ea</argLine>
+                        </configuration>
+                    </plugin>
                 </plugins>
             </build>
         </profile>

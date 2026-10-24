@@ -8,9 +8,13 @@ package org.antlr.v4.runtime;
 import org.antlr.v4.runtime.misc.Interval;
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class TestTokenStreamRewriter {
 	private static CommonTokenStream tokens(String... texts) {
@@ -355,6 +359,32 @@ public class TestTokenStreamRewriter {
 	public void constants() {
 		assertEquals(100, TokenStreamRewriter.PROGRAM_INIT_SIZE);
 		assertEquals(0, TokenStreamRewriter.MIN_TOKEN_INDEX);
+	}
+
+	@Test
+	public void reduceSkipsNullAndRejectsDuplicateIndex() {
+		CommonTokenStream stream = tokens("a", "b", "c", "d");
+		TokenStreamRewriter rewriter = new TokenStreamRewriter(stream);
+		rewriter.replace(0, 0, "X");
+		rewriter.insertBefore(2, "Y");
+		assertEquals("XbYcd", rewriter.getText());
+
+		TokenStreamRewriter.RewriteOperation first =
+			new TokenStreamRewriter.RewriteOperation(stream, 1, "x") { };
+		TokenStreamRewriter.RewriteOperation second =
+			new TokenStreamRewriter.RewriteOperation(stream, 1, "y") { };
+		List<TokenStreamRewriter.RewriteOperation> ops =
+			new ArrayList<TokenStreamRewriter.RewriteOperation>();
+		ops.add(null);
+		ops.add(first);
+		ops.add(second);
+		try {
+			rewriter.reduceToSingleOperationPerIndex(ops);
+			fail("expected duplicate index");
+		}
+		catch (Error expected) {
+			assertTrue(expected.getMessage().contains("one op per index"));
+		}
 	}
 }
 

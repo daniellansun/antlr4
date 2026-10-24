@@ -6,12 +6,17 @@
 package org.antlr.v4.runtime;
 
 import org.antlr.v4.runtime.atn.ATN;
+import org.antlr.v4.runtime.atn.ATNState;
 import org.antlr.v4.runtime.atn.ATNType;
 import org.antlr.v4.runtime.atn.AtomTransition;
 import org.antlr.v4.runtime.atn.BasicState;
 import org.antlr.v4.runtime.atn.EpsilonTransition;
+import org.antlr.v4.runtime.atn.PrecedencePredicateTransition;
 import org.antlr.v4.runtime.atn.RuleStartState;
 import org.antlr.v4.runtime.atn.RuleStopState;
+import org.antlr.v4.runtime.atn.Transition;
+import org.antlr.v4.runtime.misc.IntervalSet;
+import org.antlr.v4.runtime.misc.Tuple;
 import org.junit.Test;
 
 import java.util.Collections;
@@ -19,6 +24,7 @@ import java.util.Collections;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * Minimal hand-built parser ATN coverage for {@link ParserInterpreter}.
@@ -102,5 +108,94 @@ public class TestParserInterpreterMinimal {
 		assertTrue(parser.getErrorHandler() instanceof DefaultErrorStrategy);
 		parser.setErrorHandler(new BailErrorStrategy());
 		assertTrue(parser.getErrorHandler() instanceof BailErrorStrategy);
+	}
+
+	@Test
+	public void precedencePredicateFailureAndUnknownTransition() {
+		ParserInterpreter parser = interpreter();
+		BasicState src = new BasicState();
+		BasicState dst = new BasicState();
+		parser.getATN().addState(src);
+		parser.getATN().addState(dst);
+		src.addTransition(new PrecedencePredicateTransition(dst, 0));
+		parser.setState(src.stateNumber);
+		// seeded precedence is 0; a higher value makes precpred(_ctx, 0) fail
+		parser._precedenceStack.push(10);
+		try {
+			parser.visitState(src);
+			fail("expected FailedPredicateException");
+		}
+		catch (FailedPredicateException expected) {
+			assertTrue(expected.getMessage().contains("precpred"));
+		}
+
+		BasicState bogusSrc = new BasicState();
+		bogusSrc.addTransition(new BogusTransition(dst));
+		try {
+			parser.visitState(bogusSrc);
+			fail("expected UnsupportedOperationException");
+		}
+		catch (UnsupportedOperationException expected) {
+			assertTrue(expected.getMessage().contains("Unrecognized"));
+		}
+	}
+
+	@Test
+	public void recoverFromNoViableAltAddsErrorNode() {
+		ParserInterpreter parser = interpreter();
+		parser.removeErrorListeners();
+		parser.setErrorHandler(new DefaultErrorStrategy() {
+			@Override
+			public void recover(Parser recognizer, RecognitionException e) {
+				// consume nothing
+			}
+		});
+		parser.setContext(new InterpreterRuleContext(null, -1, 0));
+		TokenSource source = parser.getInputStream().getTokenSource();
+		CommonToken tok = new CommonToken(Tuple.create(source, (CharStream) null),
+			1, Token.DEFAULT_CHANNEL, -1, -1);
+		tok.setText("bad");
+		tok.setLine(2);
+		tok.setCharPositionInLine(4);
+		NoViableAltException error = new NoViableAltException(
+			parser, parser.getInputStream(), tok, tok, null, parser.getContext());
+		int index = parser.getInputStream().index();
+		parser.recover(error);
+		assertEquals(index, parser.getInputStream().index());
+		assertTrue(parser.getContext().getChildCount() > 0);
+	}
+
+	private static ParserInterpreter interpreter() {
+		CommonToken token = new CommonToken(1, "a");
+		token.setTokenIndex(0);
+		CommonTokenStream tokens = new CommonTokenStream(new MockTokenSource(token));
+		tokens.fill();
+		return new ParserInterpreter(
+			"P.g4",
+			VocabularyImpl.EMPTY_VOCABULARY,
+			Collections.singletonList("r"),
+			buildParserAtn(),
+			tokens);
+	}
+
+	private static final class BogusTransition extends Transition {
+		BogusTransition(ATNState target) {
+			super(target);
+		}
+
+		@Override
+		public int getSerializationType() {
+			return 99;
+		}
+
+		@Override
+		public boolean matches(int symbol, int minVocabSymbol, int maxVocabSymbol) {
+			return false;
+		}
+
+		@Override
+		public IntervalSet label() {
+			return null;
+		}
 	}
 }

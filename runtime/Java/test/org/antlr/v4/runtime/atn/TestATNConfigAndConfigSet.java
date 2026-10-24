@@ -9,6 +9,7 @@ import org.junit.Test;
 
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 
@@ -385,5 +386,80 @@ public class TestATNConfigAndConfigSet {
 		c.setOuterContextDepth(2);
 		set.add(c);
 		assertTrue(set.getDipsIntoOuterContext());
+	}
+
+	@Test
+	public void scratchCapacityOverflowAndSortByState() {
+		assertEquals(Integer.MAX_VALUE, ATNConfigSet.scratchCapacity(1 << 30));
+
+		ATNConfigSet set = new ATNConfigSet();
+		ATNConfig low = ATNConfig.create(state(2), 1, PredictionContext.EMPTY_FULL);
+		ATNConfig high = ATNConfig.create(state(4), 1, PredictionContext.EMPTY_FULL);
+		set.add(high);
+		set.add(low);
+		String text = set.toString();
+		assertTrue(text.indexOf("2") < text.indexOf("4"));
+
+		ATNConfig missing = ATNConfig.create(state(9), 1, PredictionContext.EMPTY_FULL);
+		assertFalse(set.containsAll(Collections.singleton(missing)));
+	}
+
+	@Test
+	public void unmergedSurvivorMergesAfterRepresentativeRemoved() throws Exception {
+		SemanticContext.Predicate pred = new SemanticContext.Predicate(1, 0, false);
+		ATNConfig base = ATNConfig.create(state(1), 1, PredictionContext.EMPTY_FULL);
+		ATNConfig sibling = ATNConfig.create(state(1), 1, PredictionContext.EMPTY_FULL, pred);
+
+		ATNConfigSet same = new ATNConfigSet();
+		same.add(base);
+		same.add(sibling);
+		same.remove(1);
+		assertEquals(1, same.size());
+
+		ATNConfigSet orphan = new ATNConfigSet();
+		ATNConfig only = ATNConfig.create(state(3), 1, PredictionContext.EMPTY_FULL);
+		orphan.add(only);
+		java.lang.reflect.Field merged = ATNConfigSet.class.getDeclaredField("mergedConfigs");
+		merged.setAccessible(true);
+		merged.get(orphan).getClass().getMethod("clear").invoke(merged.get(orphan));
+		orphan.remove(0);
+		assertEquals(0, orphan.size());
+
+		ATNConfig again = ATNConfig.create(state(1), 1, PredictionContext.EMPTY_FULL, pred);
+		ATNConfigSet collapsed = new ATNConfigSet();
+		collapsed.add(base);
+		collapsed.add(sibling);
+		collapsed.remove(0);
+		assertFalse(collapsed.add(again));
+
+		ATNConfigSet moved = new ATNConfigSet();
+		moved.add(base);
+		moved.add(sibling);
+		moved.remove(0);
+		ATNConfig otherContext = ATNConfig.create(
+			state(1), 1, PredictionContext.EMPTY_FULL.getChild(3), pred);
+		assertTrue(moved.add(otherContext));
+		assertEquals(1, moved.size());
+	}
+
+	@Test
+	public void clearFallsBackWhenMergeKeyChanges() {
+		FlipKeySet set = new FlipKeySet();
+		set.add(ATNConfig.create(state(1), 1, PredictionContext.EMPTY_FULL));
+		set.flip = true;
+		set.clear();
+		assertEquals(0, set.size());
+		assertTrue(set.isEmpty());
+	}
+
+	/** {@link #getKey} changes after insert so sparse clear must bulk-clear. */
+	private static final class FlipKeySet extends ATNConfigSet {
+		boolean flip;
+
+		@Override
+		protected long getKey(ATNConfig e) {
+			long key = super.getKey(e);
+			return flip ? key ^ 0x5L : key;
+		}
 	}
 }

@@ -316,4 +316,30 @@ public class TestBufferedTokenStream {
 		tokens.fill();
 		assertTrue(tokens.getTokens().size() >= 1);
 	}
+
+	@Test
+	public void nextTokenOnChannelSyncsPastTheEndThenSkipsHidden() {
+		CommonToken hidden = new CommonToken(9, " ");
+		hidden.setChannel(Token.HIDDEN_CHANNEL);
+		OpenStream tokens = new OpenStream(new MockTokenSource(hidden, tok(1, "a")));
+		assertEquals(1, tokens.nextOn(0, Token.DEFAULT_CHANNEL));
+	}
+
+	@Test
+	public void nextTokenOnChannelStopsOnOffChannelEof() {
+		CommonToken eof = new CommonToken(Token.EOF, "<EOF>");
+		eof.setChannel(Token.HIDDEN_CHANNEL);
+		OpenStream tokens = new OpenStream(new MockTokenSource(eof));
+		assertEquals(0, tokens.nextOn(0, Token.DEFAULT_CHANNEL));
+	}
+
+	private static final class OpenStream extends BufferedTokenStream {
+		OpenStream(TokenSource source) {
+			super(source);
+		}
+
+		int nextOn(int i, int channel) {
+			return nextTokenOnChannel(i, channel);
+		}
+	}
 }

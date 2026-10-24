@@ -431,6 +431,18 @@ public class TestCodePointBuffer {
 		return builder.build();
 	}
 
+	@Test
+	public void appendNonArrayCharBufferWhileCharTyped() {
+		CodePointBuffer.Builder builder = CodePointBuffer.builder(4);
+		builder.append(CharBuffer.wrap(new char[] { '\u0100' }));
+		assertEquals(CodePointBuffer.Type.CHAR, builder.getType());
+		CharBuffer view = CharBuffer.wrap("ab");
+		assertFalse(view.hasArray());
+		builder.append(view);
+		assertEquals(CodePointBuffer.Type.CHAR, builder.getType());
+		assertEquals("\u0100ab", CodePointCharStream.fromBuffer(builder.build()).toString());
+	}
+
 	private static void assertBuffersEqual(CodePointBuffer expected, CodePointBuffer actual) {
 		assertEquals(expected.getType(), actual.getType());
 		assertEquals(expected.remaining(), actual.remaining());

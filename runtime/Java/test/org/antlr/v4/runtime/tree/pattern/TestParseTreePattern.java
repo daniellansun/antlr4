@@ -571,6 +571,53 @@ public class TestParseTreePattern {
 		return atn;
 	}
 
+	@Test
+	public void compileCancellationAndBadRuleAndChildMismatch() {
+		org.antlr.v4.runtime.atn.ATN lexerAtn = buildLexerA();
+		org.antlr.v4.runtime.atn.ATN parserAtn = buildParserMatchA();
+		String serialized = org.antlr.v4.runtime.atn.ATNSerializer.getSerializedAsString(
+			parserAtn, java.util.Collections.singletonList("s"));
+		org.antlr.v4.runtime.Vocabulary vocab = new org.antlr.v4.runtime.VocabularyImpl(
+			new String[] { null, "'a'" }, new String[] { null, "A" });
+		org.antlr.v4.runtime.LexerInterpreter lexer = new org.antlr.v4.runtime.LexerInterpreter(
+			"L.g4", vocab, java.util.Collections.singletonList("A"), null,
+			java.util.Collections.singletonList("DEFAULT_MODE"), lexerAtn,
+			org.antlr.v4.runtime.CharStreams.fromString("a"));
+		SerParserInterpreter parser = new SerParserInterpreter(
+			"P.g4", vocab, java.util.Collections.singletonList("s"), parserAtn,
+			new org.antlr.v4.runtime.CommonTokenStream(lexer), serialized);
+		ParseTreePatternMatcher matcher = new ParseTreePatternMatcher(lexer, parser);
+		try {
+			matcher.compile("", 0);
+			fail("empty pattern should fail");
+		}
+		catch (org.antlr.v4.runtime.RecognitionException expected) {
+			assertNotNull(expected);
+		}
+		try {
+			matcher.compile("a", 50);
+			fail("bad rule index");
+		}
+		catch (ParseTreePatternMatcher.CannotInvokeStartRule expected) {
+			assertNotNull(expected.getCause());
+		}
+
+		ParserRuleContext left = new ParserRuleContext();
+		left.addChild(new TerminalNodeImpl(new CommonToken(1, "a")));
+		ParserRuleContext right = new ParserRuleContext();
+		right.addChild(new TerminalNodeImpl(new CommonToken(2, "b")));
+		class OpenMatcher extends ParseTreePatternMatcher {
+			OpenMatcher() {
+				super(lexer, parser);
+			}
+
+			ParseTree mismatch(ParseTree tree, ParseTree patternTree) {
+				return matchImpl(tree, patternTree, new MultiMap<String, ParseTree>());
+			}
+		}
+		assertSame(left.getChild(0), new OpenMatcher().mismatch(left, right));
+	}
+
 	static org.antlr.v4.runtime.atn.ATN buildParserMatchA() {
 		// Rule start must use epsilon only (required for bypass-alt ATN verification).
 		// s : A ;

@@ -297,6 +297,42 @@ public class TestDefaultErrorStrategyCoverage {
 	}
 
 	@Test
+	public void noViableAltWithNullInputAndInlineMismatchContext() {
+		ATN atn = abRule();
+		SeqParser parser = new SeqParser(atn, new String[] { "r" }, NAMES);
+		parser.removeErrorListeners();
+		Token start = parser.getCurrentToken();
+		parser.setInputStream(null);
+		NoViableAltException nvae = new NoViableAltException(
+			parser, null, start, start, null, parser.getContext());
+		OpenStrategy strategy = new OpenStrategy();
+		strategy.reportNoViable(parser, nvae);
+
+		SeqParser live = new SeqParser(atn, new String[] { "r" }, NAMES);
+		live.removeErrorListeners();
+		live.setState(atn.ruleToStartState[0].stateNumber);
+		strategy.armContext(new ParserRuleContext(), 1);
+		try {
+			strategy.recoverInline(live);
+			fail();
+		}
+		catch (InputMismatchException expected) {
+			assertNotNull(expected);
+		}
+	}
+
+	static final class OpenStrategy extends DefaultErrorStrategy {
+		void reportNoViable(Parser parser, NoViableAltException e) {
+			reportNoViableAlternative(parser, e);
+		}
+
+		void armContext(ParserRuleContext context, int state) {
+			nextTokensContext = context;
+			nextTokensState = state;
+		}
+	}
+
+	@Test
 	public void recoverInlineThrowsWhenCannotRecover() {
 		ATN atn = abRule();
 		// only EOF, expecting A and B neither available

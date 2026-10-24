@@ -214,6 +214,13 @@ public class TestLexerCoverage {
 		assertEquals(Lexer.SKIP, lexer.getType());
 		lexer.more();
 		assertEquals(Lexer.MORE, lexer.getType());
+		try {
+			lexer.popMode();
+			fail("empty mode stack");
+		}
+		catch (java.util.EmptyStackException expected) {
+			assertNotNull(expected);
+		}
 	}
 
 	@Test

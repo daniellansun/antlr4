@@ -245,4 +245,53 @@ public class TestSemanticContext {
 		SemanticContext singleOr = SemanticContext.or(p0, p0);
 		assertNotNull(singleOr);
 	}
+
+	@Test
+	public void nestedAndOrFlattenBothSidesAndReduceTwoResults() {
+		SemanticContext.Predicate p1 = new SemanticContext.Predicate(1, 1, false);
+		SemanticContext.Predicate p2 = new SemanticContext.Predicate(1, 2, false);
+		SemanticContext.Predicate p3 = new SemanticContext.Predicate(1, 3, false);
+		SemanticContext nestedAnd = new SemanticContext.AND(
+			new SemanticContext.AND(p1, p2), new SemanticContext.AND(p2, p3));
+		assertTrue(nestedAnd instanceof SemanticContext.AND);
+		SemanticContext nestedOr = new SemanticContext.OR(
+			new SemanticContext.OR(p1, p2), new SemanticContext.OR(p2, p3));
+		assertTrue(nestedOr instanceof SemanticContext.OR);
+
+		SemanticContext.AND and = new SemanticContext.AND(new Flip(1), new Flip(2));
+		assertNotNull(and.evalPrecedence(null, null));
+		SemanticContext.OR or = new SemanticContext.OR(new Flip(3), new Flip(4));
+		assertNotNull(or.evalPrecedence(null, null));
+	}
+
+	/** Precedence eval that always becomes a different context, so AND/OR rebuild. */
+	private static final class Flip extends SemanticContext {
+		private final int n;
+
+		Flip(int n) {
+			this.n = n;
+		}
+
+		@Override
+		public <T> boolean eval(org.antlr.v4.runtime.Recognizer<T, ?> parser,
+								org.antlr.v4.runtime.RuleContext parserCallStack) {
+			return true;
+		}
+
+		@Override
+		public SemanticContext evalPrecedence(org.antlr.v4.runtime.Recognizer<?, ?> parser,
+											   org.antlr.v4.runtime.RuleContext parserCallStack) {
+			return new Flip(n + 1);
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			return obj instanceof Flip && ((Flip) obj).n == n;
+		}
+
+		@Override
+		public int hashCode() {
+			return n;
+		}
+	}
 }

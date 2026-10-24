@@ -22,7 +22,11 @@ import org.antlr.v4.runtime.atn.StarLoopEntryState;
 import org.antlr.v4.runtime.atn.TokensStartState;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -655,5 +659,109 @@ public class TestDFA {
 		dfa.s0.set(s0);
 		// no edges => empty string becomes null
 		assertNull(new DFASerializer(dfa, VocabularyImpl.EMPTY_VOCABULARY).toString());
+	}
+
+	@Test
+	public void emptyStartStateStringFormsAreBlank() {
+		ATN atn = parserAtn(1);
+		BasicState start = addBasic(atn);
+		DFA dfa = new DFA(start, 0);
+		assertEquals("", dfa.toString(VocabularyImpl.EMPTY_VOCABULARY));
+		assertEquals("", dfa.toString((String[]) null));
+		assertEquals("", dfa.toString((String[]) null, (String[]) null));
+	}
+
+	@Test
+	public void lexerDirectEdgeOutsideAsciiTable() throws Exception {
+		ATN atn = new ATN(ATNType.LEXER, Character.MAX_CODE_POINT);
+		TokensStartState start = new TokensStartState();
+		atn.addState(start);
+		DFA dfa = new DFA(start);
+		DFAState state = new DFAState(dfa, new ATNConfigSet());
+		DFAState at128 = new DFAState(dfa, new ATNConfigSet());
+		DFAState at384 = new DFAState(dfa, new ATNConfigSet());
+		state.setTarget(128, at128);
+		state.setTarget(384, at384);
+		Field direct = DFAState.class.getDeclaredField("directValues");
+		direct.setAccessible(true);
+		Object[] table = (Object[]) direct.get(state);
+		assertNotNull(table);
+		assertTrue(table.length > 200);
+		assertSame(at128, state.getLexerTarget(128));
+		assertNull(state.getLexerTarget(200));
+	}
+
+	@Test
+	public void contextEdgeMapCopiesReadOnlyMultiEntry() throws Exception {
+		ATN atn = parserAtn(2);
+		BasicState start = addBasic(atn);
+		DFA dfa = new DFA(start, 0);
+		DFAState state = new DFAState(dfa, new ATNConfigSet());
+		DFAState emptyTarget = new DFAState(dfa, new ATNConfigSet());
+		DFAState other = new DFAState(dfa, new ATNConfigSet());
+		Map<Integer, DFAState> backing = new LinkedHashMap<Integer, DFAState>();
+		backing.put(-1, emptyTarget);
+		backing.put(2, other);
+		Field edges = DFAState.class.getDeclaredField("contextEdges");
+		edges.setAccessible(true);
+		edges.set(state, new ReadOnlyContextMap(backing));
+		Map<Integer, DFAState> map = state.getContextEdgeMap();
+		assertSame(emptyTarget, map.get(PredictionContext.EMPTY_FULL_STATE_KEY));
+		assertSame(other, map.get(2));
+		assertFalse(map.containsKey(-1));
+	}
+
+	private static final class ReadOnlyContextMap extends AbstractEdgeMap<DFAState> {
+		private final Map<Integer, DFAState> backing;
+
+		ReadOnlyContextMap(Map<Integer, DFAState> backing) {
+			super(-1, 10);
+			this.backing = backing;
+		}
+
+		@Override
+		public AbstractEdgeMap<DFAState> put(int key, DFAState value) {
+			return this;
+		}
+
+		@Override
+		public AbstractEdgeMap<DFAState> clear() {
+			return this;
+		}
+
+		@Override
+		public AbstractEdgeMap<DFAState> remove(int key) {
+			return this;
+		}
+
+		@Override
+		public int size() {
+			return backing.size();
+		}
+
+		@Override
+		public boolean isEmpty() {
+			return backing.isEmpty();
+		}
+
+		@Override
+		public boolean containsKey(int key) {
+			return backing.containsKey(key);
+		}
+
+		@Override
+		public DFAState get(int key) {
+			return backing.get(key);
+		}
+
+		@Override
+		public Map<Integer, DFAState> toMap() {
+			return Collections.unmodifiableMap(backing);
+		}
+
+		@Override
+		public Set<Map.Entry<Integer, DFAState>> entrySet() {
+			return toMap().entrySet();
+		}
 	}
 }
