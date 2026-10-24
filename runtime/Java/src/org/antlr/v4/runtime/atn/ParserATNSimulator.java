@@ -889,7 +889,8 @@ public class ParserATNSimulator extends ATNSimulator {
 		while (true) { // while more work
 			SimulatorState nextState = computeReachSet(dfa, previous, t, contextCache);
 			if (nextState == null) {
-				addDFAEdge(previous.s0, input.LA(1), ERROR);
+				// t is still LA(1): computeReachSet does not consume.
+				addDFAEdge(previous.s0, t, ERROR);
 				return handleNoViableAlt(input, startIndex, previous);
 			}
 
