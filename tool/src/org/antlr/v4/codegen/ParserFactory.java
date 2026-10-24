@@ -199,12 +199,19 @@ public class ParserFactory extends DefaultOutputModelFactory {
 		// TODO: dup with tokenRef
 		if ( labelAST!=null ) {
 			String label = labelAST.getText();
-			Decl d = getTokenLabelDecl(label);
-			wild.labels.add(d);
-			getCurrentRuleFunction().addContextDecl(ast.getAltLabel(), d);
+			RuleFunction rf = getCurrentRuleFunction();
+			// += . must not declare both a Token and a List<Token> under the
+			// same name. Decl.equals collapses them and the template then
+			// calls add on the Token.
 			if ( labelAST.parent.getType() == ANTLRParser.PLUS_ASSIGN ) {
+				defineImplicitLabel(ast, wild);
 				TokenListDecl l = getTokenListLabelDecl(label);
-				getCurrentRuleFunction().addContextDecl(ast.getAltLabel(), l);
+				rf.addContextDecl(ast.getAltLabel(), l);
+			}
+			else {
+				Decl d = getTokenLabelDecl(label);
+				wild.labels.add(d);
+				rf.addContextDecl(ast.getAltLabel(), d);
 			}
 		}
 		if ( controller.needsImplicitLabel(ast, wild) ) defineImplicitLabel(ast, wild);

@@ -65,6 +65,14 @@ public class GrammarParserInterpreter extends ParserInterpreter {
 									TokenStream input) {
 		super(grammarFileName, vocabulary, ruleNames, atn, input);
 		this.g = g;
+		if (atn != null && atn.states != null) {
+			decisionStatesThatSetOuterAltNumInContext = findOuterMostDecisionStates();
+			stateToAltsMap = new int[atn.states.size()][];
+		}
+		else {
+			decisionStatesThatSetOuterAltNumInContext = new BitSet();
+			stateToAltsMap = new int[0][];
+		}
 	}
 
 	public GrammarParserInterpreter(Grammar g, ATN atn, TokenStream input) {

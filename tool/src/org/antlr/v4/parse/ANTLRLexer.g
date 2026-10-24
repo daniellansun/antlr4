@@ -112,6 +112,27 @@ import org.antlr.v4.runtime.misc.Interval;
 
 	public void grammarError(ErrorType etype, org.antlr.runtime.Token token, Object... args) { }
 
+	/**
+	 * A character set is {@code [...]} after this rule's colon in a lexer rule.
+	 * Brackets before the colon are arguments, returns, or locals, even when
+	 * the previous rule was a lexer rule.
+	 */
+	public boolean inLexerRule() {
+		if (tokens == null) return isLexerRule;
+		int i = tokens.index();
+		int n = tokens.size();
+		if (i >= n) i = n - 1;
+		while (i >= 0) {
+			int ttype = tokens.get(i).getType();
+			// Body of the current rule. The colon action recorded lexer vs parser.
+			if (ttype == COLON) return isLexerRule;
+			// Previous rule ended, or we are still in front of this rule's colon.
+			if (ttype == SEMI) return false;
+			i--;
+		}
+		return false;
+	}
+
 	/** scan backwards from current point in this.tokens list
 	 *  looking for the start of the rule or subrule.
 	 *  Return token or null if for some reason we can't find the start.
@@ -228,8 +249,8 @@ COMMENT
 
 ARG_OR_CHARSET
 options {k=1;}
-    :   {isLexerRule}?=> LEXER_CHAR_SET {$type=LEXER_CHAR_SET;}
-    |   {!isLexerRule}?=> ARG_ACTION
+    :   {inLexerRule()}?=> LEXER_CHAR_SET {$type=LEXER_CHAR_SET;}
+    |   {!inLexerRule()}?=> ARG_ACTION
         {
         $type=ARG_ACTION;
         // Set the token text to our gathered string minus outer [ ]

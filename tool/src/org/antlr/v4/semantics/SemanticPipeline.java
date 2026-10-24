@@ -57,6 +57,9 @@ public class SemanticPipeline {
 
 	public void process() {
 		if ( g.ast==null ) return;
+		// Errors that belong to another file must not skip this grammar's
+		// action-reference pass.
+		final int errorsAtStart = g.tool.getNumErrors();
 
 		// COLLECT RULE OBJECTS
 		RuleCollector ruleCollector = new RuleCollector(g);
@@ -134,8 +137,8 @@ public class SemanticPipeline {
 		identifyStartRules(collector);
 		symcheck.checkForQualifiedRuleIssues(g, collector.qualifiedRulerefs);
 
-		// don't continue if we got symbol errors
-		if ( g.tool.getNumErrors()>0 ) return;
+		// don't continue if this grammar got symbol errors
+		if ( g.tool.getNumErrors()>errorsAtStart ) return;
 
 		// CHECK ATTRIBUTE EXPRESSIONS FOR SEMANTIC VALIDITY
 		AttributeChecks.checkAllAttributeExpressions(g);
@@ -196,23 +199,52 @@ public class SemanticPipeline {
 
 	}
 
+	/**
+	 * True only when every outermost alternative uses {@code -> type} or
+	 * {@code more}. {@code skip} still receives a token type, matching the
+	 * historical numbering of generated token constants.
+	 */
 	boolean hasTypeOrMoreCommand(@NotNull Rule r) {
 		GrammarAST ast = r.ast;
 		if (ast == null) {
 			return false;
 		}
 
-		GrammarAST altActionAst = (GrammarAST)ast.getFirstDescendantWithType(ANTLRParser.LEXER_ALT_ACTION);
-		if (altActionAst == null) {
-			// the rule isn't followed by any commands
+		GrammarAST block = null;
+		for (int i = 0; i < ast.getChildCount(); i++) {
+			GrammarAST child = (GrammarAST) ast.getChild(i);
+			if (child.getType() == ANTLRParser.BLOCK) {
+				block = child;
+				break;
+			}
+		}
+		if (block == null) {
 			return false;
 		}
 
-		// first child is the alt itself, subsequent are the actions
-		for (int i = 1; i < altActionAst.getChildCount(); i++) {
-			GrammarAST node = (GrammarAST)altActionAst.getChild(i);
+		boolean sawAlt = false;
+		for (int i = 0; i < block.getChildCount(); i++) {
+			GrammarAST child = (GrammarAST) block.getChild(i);
+			if (child.getType() != ANTLRParser.ALT && child.getType() != ANTLRParser.LEXER_ALT_ACTION) {
+				continue;
+			}
+			sawAlt = true;
+			if (!altSuppressesRuleTokenType(child)) {
+				return false;
+			}
+		}
+		return sawAlt;
+	}
+
+	private static boolean altSuppressesRuleTokenType(GrammarAST alt) {
+		if (alt.getType() != ANTLRParser.LEXER_ALT_ACTION) {
+			return false;
+		}
+		for (int i = 1; i < alt.getChildCount(); i++) {
+			GrammarAST node = (GrammarAST) alt.getChild(i);
 			if (node.getType() == ANTLRParser.LEXER_ACTION_CALL) {
-				if ("type".equals(node.getChild(0).getText())) {
+				String cmd = node.getChild(0).getText();
+				if ("type".equals(cmd) || "more".equals(cmd)) {
 					return true;
 				}
 			}
@@ -220,7 +252,6 @@ public class SemanticPipeline {
 				return true;
 			}
 		}
-
 		return false;
 	}
 

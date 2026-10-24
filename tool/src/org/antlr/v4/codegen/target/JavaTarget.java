@@ -123,7 +123,10 @@ public class JavaTarget extends Target {
 						}
 						if ( i+toAdvance <= is.length() ) { // we might have an invalid \\uAB or something
 							String fullEscape = is.substring(i, i + toAdvance);
-							appendUnicodeEscapedCodePoint(
+							// javac rewrites \\u000A, \\u000D, \\u0022, and \\u005C
+							// before it tokenizes the string, so those code
+							// points must use the short escapes.
+							appendJavaStringCodePoint(
 									CharSupport.getCharValueFromCharInGrammarLiteral(fullEscape),
 									sb);
 						}
@@ -214,6 +217,39 @@ public class JavaTarget extends Target {
 			return super.toString(o, formatString, locale);
 		}
 
+	}
+
+	/**
+	 * Append one code point inside a Java double-quoted literal.
+	 * Code points that javac treats as raw characters even inside {@code \\u}
+	 * use a short escape instead.
+	 */
+	private void appendJavaStringCodePoint(int codePoint, StringBuilder sb) {
+		if (codePoint < 0 || codePoint > Character.MAX_CODE_POINT) {
+			return;
+		}
+		switch (codePoint) {
+			case '\n':
+				sb.append("\\n");
+				return;
+			case '\r':
+				sb.append("\\r");
+				return;
+			case '"':
+				sb.append("\\\"");
+				return;
+			case '\\':
+				sb.append("\\\\");
+				return;
+			default:
+				break;
+		}
+		if (shouldUseUnicodeEscapeForCodePointInDoubleQuotedString(codePoint)) {
+			appendUnicodeEscapedCodePoint(codePoint, sb);
+		}
+		else {
+			sb.appendCodePoint(codePoint);
+		}
 	}
 
 	@Override

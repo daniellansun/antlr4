@@ -139,7 +139,8 @@ public abstract class Target {
 				buf.append(targetCharValueEscape[c]);
 			}
 			else if (shouldUseUnicodeEscapeForCodePointInDoubleQuotedString(c)) {
-				appendUnicodeEscapedCodePoint(i, buf);
+				// c is the code point. i is only its index in the string.
+				appendUnicodeEscapedCodePoint(c, buf);
 			}
 			else
 			{

@@ -169,8 +169,17 @@ public class TestCodeGeneration extends BaseTest {
 			"s : A ;\n" +
 			"A : 'a' ;\n";
 		String source = generateParserSource(g, false);
-		assertTrue("missing _match helper",
-			source.contains("private Token _match(int ttype)"));
+		int helper = source.indexOf("private Token _match(int ttype)");
+		assertTrue("missing _match helper", helper >= 0);
+		int helperEnd = source.indexOf("Monomorphic precedence test", helper);
+		if (helperEnd < 0) {
+			helperEnd = source.indexOf("private boolean _precpred", helper);
+		}
+		assertTrue(helperEnd > helper);
+		String body = source.substring(helper, helperEnd);
+		assertTrue("token match must gate reportMatch",
+			body.contains("if (reportMatchRequired || errorRecoveryMode)"));
+		assertTrue(body.contains("_errHandler.reportMatch(this)"));
 		assertTrue("token sites must call _match",
 			source.contains("_match("));
 	}

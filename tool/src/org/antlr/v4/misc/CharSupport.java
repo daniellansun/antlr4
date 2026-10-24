@@ -53,8 +53,9 @@ public class CharSupport {
 			if (charValueEscape != null) {
 				result = charValueEscape;
 			}
-			else if (Character.UnicodeBlock.of((char) c) == Character.UnicodeBlock.BASIC_LATIN &&
-					!Character.isISOControl((char) c)) {
+			else if (c <= 0xFFFF
+					&& Character.UnicodeBlock.of(c) == Character.UnicodeBlock.BASIC_LATIN
+					&& !Character.isISOControl(c)) {
 				if (c == '\\') {
 					result = "\\\\";
 				}
@@ -128,8 +129,9 @@ public class CharSupport {
 		return buf.toString();
 	}
 
-	/** Given char x or \\t or \\u1234 return the char value;
-	 *  Unnecessary escapes like '\{' yield -1.
+	/** Given char x or \\t or \\u1234 return the char value.
+	 *  Unnecessary escapes like '\{' yield -1, as does a code point
+	 *  outside {@code U+0000..U+10FFFF}.
 	 */
 	public static int getCharValueFromCharInGrammarLiteral(String cstr) {
 		switch ( cstr.length() ) {
@@ -141,6 +143,7 @@ public class CharSupport {
 				// '\x'  (antlr lexer will catch invalid char)
 				char escChar = cstr.charAt(1);
 				if (escChar == '\'') return escChar; // escape quote only in string literals.
+				if (escChar >= ANTLRLiteralEscapedCharValue.length) return -1;
 				int charVal = ANTLRLiteralEscapedCharValue[escChar];
 				if (charVal == 0) return -1;
 				return charVal;
@@ -176,6 +179,9 @@ public class CharSupport {
 			result = Integer.parseInt(unicodeChars, 16);
 		}
 		catch (NumberFormatException e) {
+		}
+		if (result < Lexer.MIN_CHAR_VALUE || result > Lexer.MAX_CHAR_VALUE) {
+			return -1;
 		}
 		return result;
 	}

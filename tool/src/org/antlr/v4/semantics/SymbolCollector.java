@@ -183,7 +183,8 @@ public class SymbolCollector extends GrammarTreeVisitor {
 
 	/** In case of option id={...}, set resolve in case they use $foo */
 	private void setActionResolver(GrammarAST valueAST) {
-		if ( valueAST instanceof ActionAST) {
+		// A grammar option has no current rule. Resolving $x there used to NPE.
+		if ( valueAST instanceof ActionAST && currentRule != null ) {
 			((ActionAST)valueAST).resolver = currentRule.alt[currentOuterAltNumber];
 		}
 	}

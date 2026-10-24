@@ -551,7 +551,8 @@ public class TestToolSyntaxErrors extends BaseTest {
 				"error(" + ErrorType.EMPTY_STRINGS_AND_SETS_NOT_ALLOWED.code + "): Test.g4:5:33: string literals and sets cannot be empty: 'F'..'A'\n" +
 				"error(" + ErrorType.EMPTY_STRINGS_AND_SETS_NOT_ALLOWED.code + "): Test.g4:6:30: string literals and sets cannot be empty: 'f'..'a'\n" +
 				"error(" + ErrorType.EMPTY_STRINGS_AND_SETS_NOT_ALLOWED.code + "): Test.g4:6:36: string literals and sets cannot be empty: []\n" +
-				"warning("+ ErrorType.EPSILON_TOKEN.code + "): Test.g4:2:0: non-fragment lexer rule 'INVALID_STRING_LITERAL' can match the empty string\n";
+				"warning("+ ErrorType.EPSILON_TOKEN.code + "): Test.g4:2:0: non-fragment lexer rule 'INVALID_STRING_LITERAL' can match the empty string\n" +
+				"warning("+ ErrorType.EPSILON_TOKEN.code + "): Test.g4:3:0: non-fragment lexer rule 'INVALID_STRING_LITERAL_RANGE' can match the empty string\n";
 
 		String[] pair = new String[] {
 				grammar,

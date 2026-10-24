@@ -388,7 +388,14 @@ public class Grammar implements AttributeResolver {
 	}
 
     public void loadImportedGrammars() {
+		loadImportedGrammars(new HashSet<String>());
+	}
+
+	/** {@code visiting} is the import stack. A fresh set per grammar cannot see a cycle. */
+	private void loadImportedGrammars(Set<String> visiting) {
 		if ( ast==null ) return;
+		if ( !visiting.add(this.name) ) return;
+		try {
         GrammarAST i = (GrammarAST)ast.getFirstChildWithType(ANTLRParser.IMPORT);
         if ( i==null ) return;
 	    Set<String> visited = new HashSet<String>();
@@ -404,9 +411,10 @@ public class Grammar implements AttributeResolver {
             else if ( t.getType()==ANTLRParser.ID ) {
                 importedGrammarName = t.getText();
 			}
-			if ( visited.contains(importedGrammarName) ) { // ignore circular refs
+			if ( visited.contains(importedGrammarName) || visiting.contains(importedGrammarName) ) {
 				continue;
 			}
+			visited.add(importedGrammarName);
 			Grammar g;
 			try {
 				g = tool.loadImportedGrammar(this, t);
@@ -421,10 +429,14 @@ public class Grammar implements AttributeResolver {
 			}
 			// did it come back as error node or missing?
 			if ( g == null ) continue;
-			g.parent = this;
+			if ( g.parent == null ) g.parent = this;
 			importedGrammars.add(g);
-			g.loadImportedGrammars(); // recursively pursue any imports in this import
+			g.loadImportedGrammars(visiting);
         }
+		}
+		finally {
+			visiting.remove(this.name);
+		}
     }
 
     public void defineAction(GrammarAST atAST) {
@@ -1358,7 +1370,13 @@ public class Grammar implements AttributeResolver {
 		}
 
 		if (this.isCombined()) {
+			if (implicitLexer == null) {
+				throw new IllegalStateException("A lexer interpreter can only be created for a lexer or combined grammar.");
+			}
 			return implicitLexer.createLexerInterpreter(input);
+		}
+		if (atn == null) {
+			throw new IllegalStateException("The grammar has no ATN.");
 		}
 
 		char[] serializedAtn = ATNSerializer.getSerializedAsChars(atn, Arrays.asList(getRuleNames()));
@@ -1366,8 +1384,17 @@ public class Grammar implements AttributeResolver {
 		List<String> allChannels = new ArrayList<String>();
 		allChannels.add("DEFAULT_TOKEN_CHANNEL");
 		allChannels.add("HIDDEN");
-		allChannels.addAll(channelValueToNameList);
-		return new LexerInterpreter(fileName, getVocabulary(), Arrays.asList(getRuleNames()), allChannels, ((LexerGrammar)this).modes.keySet(), deserialized, input);
+		if (channelValueToNameList != null) {
+			for (int i = 2; i < channelValueToNameList.size(); i++) {
+				String channel = channelValueToNameList.get(i);
+				allChannels.add(channel == null ? "" : channel);
+			}
+		}
+		java.util.Collection<String> modeNames = java.util.Collections.emptyList();
+		if (this instanceof LexerGrammar && ((LexerGrammar)this).modes != null) {
+			modeNames = ((LexerGrammar)this).modes.keySet();
+		}
+		return new LexerInterpreter(fileName, getVocabulary(), Arrays.asList(getRuleNames()), allChannels, modeNames, deserialized, input);
 	}
 
 	/** @since 4.5.1 */

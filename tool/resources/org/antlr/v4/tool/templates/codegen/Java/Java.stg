@@ -1070,7 +1070,7 @@ public <if(lexer.abstractRecognizer)>abstract <endif>class <lexer.name> extends 
 	}
 
 	@Override
-	public String getGrammarFileName() { return "<lexer.grammarFileName>"; }
+	public String getGrammarFileName() { return "<lexer.grammarFileName; format="java-escape">"; }
 
 	@Override
 	public String[] getRuleNames() { return ruleNames; }

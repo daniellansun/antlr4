@@ -269,7 +269,12 @@ public class LexerATNFactory extends ParserATNFactory {
 		ATNState right = newState(b);
 		int t1 = CharSupport.getCharValueFromGrammarCharLiteral(a.getText());
 		int t2 = CharSupport.getCharValueFromGrammarCharLiteral(b.getText());
-		checkRange(a, b, t1, t2);
+		// An inverted or out-of-range pair must not become an edge. checkRange
+		// reports the diagnostic; a transition here would match input the
+		// grammar did not write.
+		if (!checkRange(a, b, t1, t2)) {
+			return new Handle(left, left);
+		}
 		left.addTransition(CodePointTransitions.createWithCodePointRange(right, t1, t2));
 		a.atnState = left;
 		b.atnState = left;
@@ -328,6 +333,25 @@ public class LexerATNFactory extends ParserATNFactory {
 		return new Handle(left, right);
 	}
 
+	private static boolean containsOutOfRangeExtendedEscape(String literal) {
+		int from = 0;
+		while (from < literal.length()) {
+			int start = literal.indexOf("\\u{", from);
+			if (start < 0) return false;
+			int end = literal.indexOf('}', start + 3);
+			if (end < 0) return false;
+			try {
+				int value = Integer.parseInt(literal.substring(start + 3, end), 16);
+				if (value > Lexer.MAX_CHAR_VALUE) return true;
+			}
+			catch (NumberFormatException ignored) {
+				// The grammar lexer reports a non-hex body itself.
+			}
+			from = end + 1;
+		}
+		return false;
+	}
+
 	protected boolean checkRange(GrammarAST leftNode, GrammarAST rightNode, int leftValue, int rightValue) {
 		boolean result = true;
 		if (leftValue == -1) {
@@ -340,11 +364,17 @@ public class LexerATNFactory extends ParserATNFactory {
 			g.tool.errMgr.grammarError(ErrorType.INVALID_LITERAL_IN_LEXER_SET,
 					g.fileName, rightNode.getToken(), rightNode.getText());
 		}
+		if (result && (leftValue > Lexer.MAX_CHAR_VALUE || rightValue > Lexer.MAX_CHAR_VALUE)) {
+			result = false;
+			g.tool.errMgr.grammarError(ErrorType.INVALID_LITERAL_IN_LEXER_SET,
+					g.fileName, leftNode.getToken(), leftNode.getText() + ".." + rightNode.getText());
+		}
 		if (!result) return result;
 
 		if (rightValue < leftValue) {
 			g.tool.errMgr.grammarError(ErrorType.EMPTY_STRINGS_AND_SETS_NOT_ALLOWED,
 					g.fileName, leftNode.parent.getToken(), leftNode.getText() + ".." + rightNode.getText());
+			return false;
 		}
 		return result;
 	}
@@ -361,7 +391,16 @@ public class LexerATNFactory extends ParserATNFactory {
 		ATNState right;
 		String s = CharSupport.getStringFromGrammarStringLiteral(chars);
 		if (s == null) {
-			// the lexer will already have given an error
+			// The grammar lexer already reports a bad short escape. An
+			// extended escape past U+10FFFF is accepted by that lexer and
+			// would otherwise disappear with no diagnostic.
+			if (containsOutOfRangeExtendedEscape(chars)) {
+				g.tool.errMgr.grammarError(ErrorType.INVALID_ESCAPE_SEQUENCE,
+						g.fileName, stringLiteralAST.getToken(), chars);
+			}
+			return new Handle(left, left);
+		}
+		if (s.isEmpty()) {
 			return new Handle(left, left);
 		}
 
@@ -494,7 +533,12 @@ public class LexerATNFactory extends ParserATNFactory {
 				}
 				offset = escapeParseResult.parseLength;
 			}
-			else if (c == '-' && !state.inRange && i != 0 && i != n - 1) {
+			// '-' is a range operator only when a real left endpoint is pending.
+			// After a finished range the state is NONE and prevCodePoint is -1;
+			// treating '-' as a range then widens the set through EOF.
+			else if (c == '-' && !state.inRange && i != 0 && i != n - 1
+					&& (state.mode == CharSetParseState.Mode.PREV_CODE_POINT
+						|| state.mode == CharSetParseState.Mode.PREV_PROPERTY)) {
 				if (state.mode == CharSetParseState.Mode.PREV_PROPERTY) {
 					g.tool.errMgr.grammarError(ErrorType.UNICODE_PROPERTY_NOT_ALLOWED_IN_RANGE,
 							g.fileName, charSetAST.getToken(), charSetAST.getText());

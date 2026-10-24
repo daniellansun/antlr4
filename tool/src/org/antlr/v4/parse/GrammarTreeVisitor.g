@@ -373,6 +373,7 @@ optionValue returns [String v]
     :   ID
     |   STRING_LITERAL
     |   INT
+    |   ACTION
     ;
 
 delegateGrammars

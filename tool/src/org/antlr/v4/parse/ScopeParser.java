@@ -56,7 +56,9 @@ public class ScopeParser {
 		for (Tuple2<String, Integer> decl : decls) {
 			if (decl.getItem1().trim().length() > 0) {
 				Attribute a = parseAttributeDef(action, decl, g);
-				dict.add(a);
+				if (a != null) {
+					dict.add(a);
+				}
 			}
 		}
 		return dict;
@@ -94,6 +96,9 @@ public class ScopeParser {
 		}
 		int idStart = p.getItem1();
 		int idStop = p.getItem2();
+		if (idStart < 0 || idStop < 0) {
+			return null;
+		}
 
 		attr.decl = decl.getItem1();
 
@@ -163,7 +168,10 @@ public class ScopeParser {
 			start = 0;
 		}
 		if (start < 0) {
-			g.tool.errMgr.grammarError(ErrorType.CANNOT_FIND_ATTRIBUTE_NAME_IN_DECL, g.fileName, a.token, decl);
+			org.antlr.runtime.Token token = a == null ? null : a.token;
+			g.tool.errMgr.grammarError(ErrorType.CANNOT_FIND_ATTRIBUTE_NAME_IN_DECL, g.fileName, token, decl);
+			attr.name = "";
+			return Tuple.create(-1, -1);
 		}
 
 		// walk forward looking for end of an ID
@@ -212,8 +220,10 @@ public class ScopeParser {
 		}
 
 		if (start == -1) {
-			start = 0;
-			g.tool.errMgr.grammarError(ErrorType.CANNOT_FIND_ATTRIBUTE_NAME_IN_DECL, g.fileName, a.token, decl);
+			org.antlr.runtime.Token token = a == null ? null : a.token;
+			g.tool.errMgr.grammarError(ErrorType.CANNOT_FIND_ATTRIBUTE_NAME_IN_DECL, g.fileName, token, decl);
+			attr.name = "";
+			return Tuple.create(-1, -1);
 		}
 
 		// look for stop of name
@@ -265,6 +275,27 @@ public class ScopeParser {
 		return args;
 	}
 
+	/**
+	 * Advance past a quoted literal that opened at {@code open}. A backslash
+	 * escapes the next character, including a quote and another backslash, so
+	 * a literal that ends in {@code \\} keeps its closer.
+	 */
+	private static int scanQuoted(String text, int open, char quote) {
+		int n = text.length();
+		int p = open + 1;
+		while (p < n && text.charAt(p) != quote) {
+			if (text.charAt(p) == '\\' && p + 1 < n) {
+				p += 2;
+				continue;
+			}
+			p++;
+		}
+		if (p < n) {
+			p++;
+		}
+		return p;
+	}
+
 	public static int _splitArgumentList(String actionText,
 	                                     int start,
 	                                     int targetChar,
@@ -283,26 +314,10 @@ public class ScopeParser {
 			int c = actionText.charAt(p);
 			switch (c) {
 				case '\'':
-					p++;
-					while (p < n && actionText.charAt(p) != '\'') {
-						if (actionText.charAt(p) == '\\' && (p + 1) < n &&
-								actionText.charAt(p + 1) == '\'') {
-							p++; // skip escaped quote
-						}
-						p++;
-					}
-					p++;
+					p = scanQuoted(actionText, p, '\'');
 					break;
 				case '"':
-					p++;
-					while (p < n && actionText.charAt(p) != '\"') {
-						if (actionText.charAt(p) == '\\' && (p + 1) < n &&
-								actionText.charAt(p + 1) == '\"') {
-							p++; // skip escaped quote
-						}
-						p++;
-					}
-					p++;
+					p = scanQuoted(actionText, p, '"');
 					break;
 				case '(':
 					p = _splitArgumentList(actionText, p + 1, ')', separatorChar, args);

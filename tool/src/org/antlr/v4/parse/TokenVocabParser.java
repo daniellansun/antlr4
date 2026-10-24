@@ -74,7 +74,6 @@ public class TokenVocabParser {
 					tool.log("grammar", "import "+tokenID+"="+tokenType);
 					tokens.put(tokenID, tokenType);
 					maxTokenType = Math.max(maxTokenType,tokenType);
-					lineNum++;
 				}
 				else {
 					if ( tokenDef.length()>0 ) { // ignore blank lines
@@ -84,6 +83,7 @@ public class TokenVocabParser {
 											  lineNum);
 					}
 				}
+				lineNum++;
 				tokenDef = br.readLine();
 			}
 		}
@@ -111,6 +111,7 @@ public class TokenVocabParser {
 		finally {
 			try {
 				if ( br!=null ) br.close();
+				else if ( fis!=null ) fis.close();
 			}
 			catch (IOException ioe) {
 				tool.errMgr.toolError(ErrorType.ERROR_READING_TOKENS_FILE,

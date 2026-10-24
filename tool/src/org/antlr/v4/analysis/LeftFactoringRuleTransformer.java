@@ -230,7 +230,9 @@ public class LeftFactoringRuleTransformer {
 				GrammarAST factoredAlt = translateLeftFactoredAlternative(alternative, factoredRule, variant, mode == DecisionFactorMode.COMBINED_FACTOR ? DecisionFactorMode.PARTIAL_FACTORED : DecisionFactorMode.FULL_FACTOR, includeFactoredElement);
 				factoredAlternatives[i] = factoredAlt;
 				if (factoredAlt != null) {
-					factoredIntervals.add(alternative.getChildIndex());
+					// Ordinal in the ALT list. getChildIndex() counts a leading
+					// options or action child and then drops the first alt.
+					factoredIntervals.add(i);
 				}
 			}
 		}
@@ -248,7 +250,7 @@ public class LeftFactoringRuleTransformer {
 					adaptor.addChild(translatedAlt, adaptor.create(ANTLRParser.EPSILON, "EPSILON"));
 				}
 
-				adaptor.setChild(block, i, translatedAlt);
+				adaptor.setChild(block, alternatives.get(i).getChildIndex(), translatedAlt);
 			}
 
 			return true;
@@ -260,7 +262,7 @@ public class LeftFactoringRuleTransformer {
 					adaptor.addChild(translatedAlt, adaptor.create(ANTLRParser.EPSILON, "EPSILON"));
 				}
 
-				adaptor.setChild(block, i, translatedAlt);
+				adaptor.setChild(block, alternatives.get(i).getChildIndex(), translatedAlt);
 			}
 
 			return true;

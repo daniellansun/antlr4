@@ -209,6 +209,10 @@ public class Tool {
 				handleOptionSetArg(arg);
 				continue;
 			}
+			if ( arg.isEmpty() ) {
+				errMgr.toolError(ErrorType.INVALID_CMDLINE_ARG, arg);
+				continue;
+			}
 			if ( arg.charAt(0)!='-' ) { // file name
 				if ( !grammarFiles.contains(arg) ) grammarFiles.add(arg);
 				continue;
@@ -219,6 +223,10 @@ public class Tool {
 					found = true;
 					String argValue = null;
 					if ( o.argType==OptionArgType.STRING ) {
+						if ( i>=args.length ) {
+							errMgr.toolError(ErrorType.INVALID_CMDLINE_ARG, arg);
+							return;
+						}
 						argValue = args[i];
 						i++;
 					}
@@ -322,7 +330,8 @@ public class Tool {
 				System.out.println(dep.getDependencies().render());
 
 			}
-			else if (errMgr.getNumErrors() == 0) {
+			else {
+				// A syntax error in an earlier file must not hide a later grammar.
 				process(g, true);
 			}
 		}
@@ -395,7 +404,7 @@ public class Tool {
 
 		if ( generate_ATN_dot ) generateATNs(g);
 
-		if (gencode && g.tool.getNumErrors()==0 ) generateInterpreterData(g);
+		if (gencode && errMgr.getNumErrors()==prevErrors ) generateInterpreterData(g);
 
 		// PERFORM GRAMMAR ANALYSIS ON ATN: BUILD DECISION DFAs
 		AnalysisPipeline anal = new AnalysisPipeline(g);
@@ -492,9 +501,14 @@ public class Tool {
 		Graph<String> g = new Graph<String>();
 		List<GrammarRootAST> roots = new ArrayList<GrammarRootAST>();
 		for (String fileName : fileNames) {
+			int errorsBefore = errMgr.getNumErrors();
 			GrammarAST t = parseGrammar(fileName);
 			if ( t==null || t instanceof GrammarASTErrorNode) continue; // came back as error node
 			if ( ((GrammarRootAST)t).hasErrors ) continue;
+			// A syntax diagnostic can be reported without hasErrors, for example
+			// an unterminated string. Building an ATN from that tree crashes.
+			// A later file that parsed cleanly is still processed.
+			if ( errMgr.getNumErrors() > errorsBefore ) continue;
 			GrammarRootAST root = (GrammarRootAST)t;
 			roots.add(root);
 			root.fileName = fileName;
@@ -630,8 +644,9 @@ public class Tool {
 
 			String absolutePath = importedFile.getAbsolutePath();
 			ANTLRFileStream in = new ANTLRFileStream(absolutePath, grammarEncoding);
+			int errorsBefore = errMgr.getNumErrors();
 			GrammarRootAST root = parse(g.fileName, in);
-			if (root == null) {
+			if (root == null || root.hasErrors || errMgr.getNumErrors() > errorsBefore) {
 				return null;
 			}
 
@@ -726,10 +741,13 @@ public class Tool {
 
 		if ( g.isLexer() ) {
 			content.append("channel names:\n");
+			// Indexes 0 and 1 of channelValueToNameList are null placeholders.
+			// Writing them after the two real names shifts every user channel.
 			content.append("DEFAULT_TOKEN_CHANNEL\n");
 			content.append("HIDDEN\n");
-			for (String channel : g.channelValueToNameList) {
-				content.append(channel).append("\n");
+			for (int c = 2; c < g.channelValueToNameList.size(); c++) {
+				String channel = g.channelValueToNameList.get(c);
+				content.append(channel == null ? "" : channel).append("\n");
 			}
 			content.append("\n");
 
