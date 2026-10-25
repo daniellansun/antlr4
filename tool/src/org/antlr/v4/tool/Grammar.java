@@ -1152,6 +1152,36 @@ public class Grammar implements AttributeResolver {
 		}
 	}
 
+	/**
+	 * Channel names for {@code .interp} and {@link org.antlr.v4.runtime.LexerInterpreter}.
+	 * Index 0 is {@code DEFAULT_TOKEN_CHANNEL} and index 1 is {@code HIDDEN}.
+	 * A hole left by {@link #defineChannelName(String, int)} is the empty string,
+	 * so a later channel keeps the index the lexer assigned.
+	 */
+	public List<String> getInterpreterChannelNames() {
+		List<String> names = new ArrayList<String>();
+		names.add("DEFAULT_TOKEN_CHANNEL");
+		names.add("HIDDEN");
+		for (int i = 2; i < channelValueToNameList.size(); i++) {
+			String channel = channelValueToNameList.get(i);
+			names.add(channel == null ? "" : channel);
+		}
+		return names;
+	}
+
+	/**
+	 * One {@code .interp} channel line. A hole is two quote characters.
+	 * A blank line would end the channel section and drop the mode names.
+	 * The word {@code null} is not used: older files already store that
+	 * text as a channel name, and this method must leave those lines alone.
+	 */
+	public static String interpreterChannelLine(String name) {
+		if (name == null || name.isEmpty()) {
+			return "\"\"";
+		}
+		return name;
+	}
+
 	// no isolated attr at grammar action level
 	@Override
 	public Attribute resolveToAttribute(String x, ActionAST node) {
@@ -1381,15 +1411,7 @@ public class Grammar implements AttributeResolver {
 
 		char[] serializedAtn = ATNSerializer.getSerializedAsChars(atn, Arrays.asList(getRuleNames()));
 		ATN deserialized = new ATNDeserializer().deserialize(serializedAtn);
-		List<String> allChannels = new ArrayList<String>();
-		allChannels.add("DEFAULT_TOKEN_CHANNEL");
-		allChannels.add("HIDDEN");
-		if (channelValueToNameList != null) {
-			for (int i = 2; i < channelValueToNameList.size(); i++) {
-				String channel = channelValueToNameList.get(i);
-				allChannels.add(channel == null ? "" : channel);
-			}
-		}
+		List<String> allChannels = getInterpreterChannelNames();
 		java.util.Collection<String> modeNames = java.util.Collections.emptyList();
 		if (this instanceof LexerGrammar && ((LexerGrammar)this).modes != null) {
 			modeNames = ((LexerGrammar)this).modes.keySet();

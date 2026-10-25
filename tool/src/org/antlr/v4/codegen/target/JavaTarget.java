@@ -113,22 +113,37 @@ public class JavaTarget extends Target {
 						break;
 
 					case    'u':    // Either unnnn or u{nnnnnn}
-						if (is.charAt(i+toAdvance) == '{') {
-							while (is.charAt(i+toAdvance) != '}') {
+						int closer = is.length() - 1;
+						boolean braced = i + toAdvance < closer && is.charAt(i + toAdvance) == '{';
+						if ( braced ) {
+							while ( i + toAdvance < closer && is.charAt(i + toAdvance) != '}' ) {
 								toAdvance++;
 							}
-							toAdvance++;
-						} else {
-							toAdvance += 4;
+							if ( i + toAdvance < closer && is.charAt(i + toAdvance) == '}' ) {
+								toAdvance++;
+							}
 						}
-						if ( i+toAdvance <= is.length() ) { // we might have an invalid \\uAB or something
+						else {
+							int hex = 0;
+							while ( hex < 4 && i + toAdvance < closer && isHexDigit(is.charAt(i + toAdvance)) ) {
+								toAdvance++;
+								hex++;
+							}
+						}
+						if ( i + toAdvance <= closer ) {
 							String fullEscape = is.substring(i, i + toAdvance);
-							// javac rewrites \\u000A, \\u000D, \\u0022, and \\u005C
-							// before it tokenizes the string, so those code
-							// points must use the short escapes.
-							appendJavaStringCodePoint(
-									CharSupport.getCharValueFromCharInGrammarLiteral(fullEscape),
-									sb);
+							int decoded = CharSupport.getCharValueFromCharInGrammarLiteral(fullEscape);
+							if ( decoded < 0 || decoded > Character.MAX_CODE_POINT ) {
+								// Keep the grammar text. Each character is encoded
+								// so a later quote or unicode escape stays data.
+								appendJavaStringLiteralText(fullEscape, sb);
+							}
+							else {
+								// javac rewrites U+000A, U+000D, U+0022, and U+005C
+								// before it tokenizes the string, so those code
+								// points must use the short escapes.
+								appendJavaStringCodePoint(decoded, sb);
+							}
 						}
 						break;
 					default:
@@ -220,13 +235,35 @@ public class JavaTarget extends Target {
 	}
 
 	/**
+	 * Append grammar text that is not a Unicode scalar. Backslash and quote
+	 * are escaped so javac does not treat a later quote or unicode escape as syntax.
+	 */
+	private void appendJavaStringLiteralText(String text, StringBuilder sb) {
+		for (int k = 0; k < text.length(); ) {
+			int cp = text.codePointAt(k);
+			appendJavaStringCodePoint(cp, sb);
+			k += Character.charCount(cp);
+		}
+	}
+
+	private static boolean isHexDigit(char c) {
+		return (c >= '0' && c <= '9')
+			|| (c >= 'a' && c <= 'f')
+			|| (c >= 'A' && c <= 'F');
+	}
+
+	/**
 	 * Append one code point inside a Java double-quoted literal.
-	 * Code points that javac treats as raw characters even inside {@code \\u}
-	 * use a short escape instead.
+	 * Code points that javac treats as raw characters even inside a {@code \\u}
+	 * escape use a short escape instead.
+	 *
+	 * @param codePoint a Unicode scalar value, {@code 0..Character.MAX_CODE_POINT}
+	 * @throws IllegalArgumentException when {@code codePoint} is not a scalar.
+	 *   Callers preserve an undecodable grammar escape as source text instead.
 	 */
 	private void appendJavaStringCodePoint(int codePoint, StringBuilder sb) {
 		if (codePoint < 0 || codePoint > Character.MAX_CODE_POINT) {
-			return;
+			throw new IllegalArgumentException("invalid Java string code point " + codePoint);
 		}
 		switch (codePoint) {
 			case '\n':

@@ -151,14 +151,18 @@ public class TestCodeGeneration extends BaseTest {
 			"A : 'a' ;\n" +
 			"B : 'b' ;\n";
 		String source = generateParserSource(g, false);
-		assertTrue("set match must fetch LT(1) once",
-			source.contains("Token _st = _input.LT(1)"));
 		assertTrue("set match must consume the already-fetched token",
 			source.contains("consume(_st)"));
 		assertFalse("must not consume() without the looked-up token",
 			source.contains("consume();"));
-		assertTrue("success path calls reportMatch for a custom strategy or while recovering",
-			source.contains("if (reportMatchRequired || errorRecoveryMode)"));
+		int setStart = source.indexOf("Token _st = _input.LT(1)");
+		assertTrue("set match must fetch LT(1) once", setStart >= 0);
+		int setEnd = source.indexOf("consume(_st)", setStart);
+		assertTrue(setEnd > setStart);
+		String setBody = source.substring(setStart, setEnd);
+		assertTrue("set match must gate reportMatch itself",
+			setBody.contains("if (reportMatchRequired || errorRecoveryMode)"));
+		assertTrue(setBody.contains("_errHandler.reportMatch(this)"));
 		assertFalse("set without EOF must not store matchedEOF",
 			source.contains("matchedEOF = true") && source.contains("_st.getType() == Token.EOF"));
 	}

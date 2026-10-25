@@ -124,6 +124,40 @@ public class TestInterpreterDataReader {
 	}
 
 	@Test
+	public void channelHoleDoesNotEndTheSection() throws IOException {
+		String atnLine = readAtnLineFromClasspathXPathLexer();
+		File f = tmp.newFile("lexer-hole.interp");
+		String content =
+			"token literal names:\n" +
+			"null\n" +
+			"\n" +
+			"token symbolic names:\n" +
+			"ID\n" +
+			"\n" +
+			"rule names:\n" +
+			"ID\n" +
+			"\n" +
+			"channel names:\n" +
+			"DEFAULT_TOKEN_CHANNEL\n" +
+			"HIDDEN\n" +
+			"A\n" +
+			"\"\"\n" +
+			"Z\n" +
+			"null\n" +
+			"\n" +
+			"mode names:\n" +
+			"DEFAULT_MODE\n" +
+			"\n" +
+			"atn:\n" +
+			atnLine + "\n";
+		write(f, content);
+		InterpreterDataReader.InterpreterData data = InterpreterDataReader.parseFile(f.getAbsolutePath());
+		assertEquals(Arrays.asList("DEFAULT_TOKEN_CHANNEL", "HIDDEN", "A", "", "Z", "null"), data.channels);
+		assertEquals(Collections.singletonList("DEFAULT_MODE"), data.modes);
+		assertNotNull(data.atn);
+	}
+
+	@Test
 	public void lexerLayoutRejectsMissingModeHeader() throws IOException {
 		String atnLine = readAtnLineFromClasspathXPathLexer();
 		File f = tmp.newFile("lexer-bad-mode.interp");

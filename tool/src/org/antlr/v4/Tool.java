@@ -225,7 +225,8 @@ public class Tool {
 					if ( o.argType==OptionArgType.STRING ) {
 						if ( i>=args.length ) {
 							errMgr.toolError(ErrorType.INVALID_CMDLINE_ARG, arg);
-							return;
+							// Leave the field unset so the defaults below still run.
+							continue;
 						}
 						argValue = args[i];
 						i++;
@@ -741,13 +742,11 @@ public class Tool {
 
 		if ( g.isLexer() ) {
 			content.append("channel names:\n");
-			// Indexes 0 and 1 of channelValueToNameList are null placeholders.
-			// Writing them after the two real names shifts every user channel.
-			content.append("DEFAULT_TOKEN_CHANNEL\n");
-			content.append("HIDDEN\n");
-			for (int c = 2; c < g.channelValueToNameList.size(); c++) {
-				String channel = g.channelValueToNameList.get(c);
-				content.append(channel == null ? "" : channel).append("\n");
+			// Indexes 0 and 1 are placeholders. getInterpreterChannelNames
+			// starts user channels at index 2. A hole is the two-quote line,
+			// never a blank line, because a blank line ends this section.
+			for (String channel : g.getInterpreterChannelNames()) {
+				content.append(Grammar.interpreterChannelLine(channel)).append("\n");
 			}
 			content.append("\n");
 

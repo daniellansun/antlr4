@@ -41,6 +41,9 @@ public class InterpreterDataReader {
 	 *
 	 * channel names:
 	 * ...
+	 * A line of two quote characters is a hole and is stored as an empty name,
+	 * so the indexes stay aligned with the lexer. A blank line still ends the
+	 * section. The word null is kept as text; older files used it for placeholders.
 	 *
 	 * mode names:
 	 * ...
@@ -97,7 +100,7 @@ public class InterpreterDataReader {
 				while ((line = br.readLine()) != null) {
 					if (line.isEmpty())
 						break;
-					result.channels.add(line);
+					result.channels.add("\"\"".equals(line) ? "" : line);
 				}
 
 				line = br.readLine();

@@ -155,6 +155,27 @@ public class TestParserHotPath {
 	}
 
 	@Test
+	public void matchWildcardDoesNotCallReportMatchWhenNotRecovering() {
+		ParserInterpreter p = parser(1);
+		p.setBuildParseTree(false);
+		p.setState(p.getATN().ruleToStartState[0].stateNumber);
+		p.setContext(new InterpreterRuleContext(null, -1, 0));
+		final int[] reports = new int[1];
+		p.setErrorHandler(new DefaultErrorStrategy() {
+			@Override
+			public void reportMatch(Parser recognizer) {
+				reports[0]++;
+				super.reportMatch(recognizer);
+			}
+		});
+		assertFalse(p.errorRecoveryMode);
+		assertFalse(p.reportMatchRequired);
+		Token w = p.matchWildcard();
+		assertEquals(1, w.getType());
+		assertEquals("success path must skip reportMatch", 0, reports[0]);
+	}
+
+	@Test
 	public void matchWildcardRecoversOnNonPositiveType() {
 		ParserInterpreter p = parser();
 		p.setBuildParseTree(true);
