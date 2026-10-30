@@ -8,6 +8,7 @@ package org.antlr.v4.runtime.atn;
 
 import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.CharStreams;
+import org.antlr.v4.runtime.IntStream;
 import org.antlr.v4.runtime.Lexer;
 import org.antlr.v4.runtime.dfa.DFA;
 import org.antlr.v4.runtime.dfa.DFAState;
@@ -91,6 +92,125 @@ public class TestLexerATNSimulatorHotPaths {
 		sim.consume(input);
 		assertEquals(2, sim.getLine());
 		assertEquals(1, sim.getCharPositionInLine());
+	}
+
+	/**
+	 * GROOVY-12435: a bare CR (next char is not LF, including EOF) is a line
+	 * ending. The package-private overload is the one the DFA walk calls.
+	 */
+	@Test
+	public void consumeBareCrAdvancesLineWhenNextIsNotLf() {
+		ATN atn = buildTinyLexerAtn();
+		LexerATNSimulator sim = new LexerATNSimulator(atn);
+
+		CharStream followed = CharStreams.fromString("\rx");
+		assertTrue(followed.LA(2) != '\n');
+		sim.consume(followed, '\r');
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(1, followed.index());
+
+		sim.reset();
+		CharStream atEof = CharStreams.fromString("\r");
+		assertEquals(IntStream.EOF, atEof.LA(2));
+		sim.consume(atEof, '\r');
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(1, atEof.index());
+	}
+
+	/**
+	 * CR+LF is a single line break: the CR only advances the column, and the
+	 * following LF performs the one line increment.
+	 */
+	@Test
+	public void consumeCrLfAdvancesLineOnlyOnLf() {
+		ATN atn = buildTinyLexerAtn();
+		LexerATNSimulator sim = new LexerATNSimulator(atn);
+		CharStream input = CharStreams.fromString("\r\n");
+		assertEquals('\n', input.LA(2));
+
+		sim.consume(input, '\r');
+		assertEquals(1, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+		assertEquals(1, input.index());
+
+		sim.consume(input, '\n');
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(2, input.index());
+	}
+
+	/**
+	 * The DFA walk calls package-private {@code consume(input, curChar)} directly.
+	 * A public {@code consume(CharStream)} override would not see these tokens.
+	 * Cold and warm matches must agree: bare CR breaks the line, CR+LF once.
+	 */
+	@Test
+	public void dfaWalkTreatsBareCrAsLineEndingAndCrLfAsOneBreak() {
+		ATN atn = buildCrWhitespaceLexer();
+		LexerATNSimulator sim = new LexerATNSimulator(atn);
+		for (int pass = 0; pass < 2; pass++) {
+			CharStream bare = CharStreams.fromString("\rx");
+			assertEquals(1, sim.match(bare, Lexer.DEFAULT_MODE));
+			assertEquals(1, bare.index());
+			assertEquals(2, sim.getLine());
+			assertEquals(0, sim.getCharPositionInLine());
+			sim.reset();
+
+			CharStream atEof = CharStreams.fromString("\r");
+			assertEquals(1, sim.match(atEof, Lexer.DEFAULT_MODE));
+			assertEquals(1, atEof.index());
+			assertEquals(2, sim.getLine());
+			assertEquals(0, sim.getCharPositionInLine());
+			sim.reset();
+
+			CharStream crlf = CharStreams.fromString("\r\n");
+			assertEquals(1, sim.match(crlf, Lexer.DEFAULT_MODE));
+			assertEquals(2, crlf.index());
+			assertEquals(2, sim.getLine());
+			assertEquals(0, sim.getCharPositionInLine());
+			sim.reset();
+
+			CharStream lf = CharStreams.fromString("\n");
+			assertEquals(1, sim.match(lf, Lexer.DEFAULT_MODE));
+			assertEquals(1, lf.index());
+			assertEquals(2, sim.getLine());
+			assertEquals(0, sim.getCharPositionInLine());
+			sim.reset();
+		}
+	}
+
+	/** WS : [\r\n]+ ; */
+	private static ATN buildCrWhitespaceLexer() {
+		ATN atn = new ATN(ATNType.LEXER, Character.MAX_CODE_POINT);
+		TokensStartState tokensStart = new TokensStartState();
+		tokensStart.ruleIndex = -1;
+		atn.addState(tokensStart);
+
+		RuleStartState wsStart = new RuleStartState();
+		wsStart.ruleIndex = 0;
+		atn.addState(wsStart);
+		BasicState wsMid = new BasicState();
+		wsMid.ruleIndex = 0;
+		atn.addState(wsMid);
+		RuleStopState wsStop = new RuleStopState();
+		wsStop.ruleIndex = 0;
+		atn.addState(wsStop);
+		wsStart.stopState = wsStop;
+		IntervalSet wsSet = new IntervalSet();
+		wsSet.add('\r');
+		wsSet.add('\n');
+		wsStart.addTransition(new SetTransition(wsMid, wsSet));
+		wsMid.addTransition(new SetTransition(wsMid, wsSet));
+		wsMid.addTransition(new EpsilonTransition(wsStop));
+
+		tokensStart.addTransition(new EpsilonTransition(wsStart));
+		atn.ruleToStartState = new RuleStartState[] { wsStart };
+		atn.ruleToStopState = new RuleStopState[] { wsStop };
+		atn.ruleToTokenType = new int[] { 1 };
+		atn.defineMode("DEFAULT_MODE", tokensStart);
+		return atn;
 	}
 
 	@Test

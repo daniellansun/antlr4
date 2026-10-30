@@ -307,7 +307,7 @@ public class LexerATNSimulator extends ATNSimulator {
 	 * @param curChar the code point just matched; must not be EOF
 	 */
 	final void consume(@NotNull CharStream input, int curChar) {
-		if ( curChar=='\n' ) {
+		if ( curChar=='\n' || (curChar=='\r' && input.LA(2)!='\n') ) {
 			line++;
 			charPositionInLine=0;
 		} else {
