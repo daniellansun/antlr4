@@ -10,10 +10,18 @@ import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.IntStream;
 import org.antlr.v4.runtime.Lexer;
+import org.antlr.v4.runtime.LexerInterpreter;
+import org.antlr.v4.runtime.Token;
+import org.antlr.v4.runtime.UnbufferedCharStream;
+import org.antlr.v4.runtime.VocabularyImpl;
 import org.antlr.v4.runtime.dfa.DFA;
 import org.antlr.v4.runtime.dfa.DFAState;
 import org.antlr.v4.runtime.misc.IntervalSet;
 import org.junit.Test;
+
+import java.io.StringReader;
+import java.util.Arrays;
+import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -24,7 +32,8 @@ import static org.junit.Assert.assertTrue;
 
 /**
  * Hot-path tests for {@link LexerATNSimulator}: retained reach buffer,
- * capacity-aware start-state construction, and epsilon-target handling.
+ * capacity-aware start-state construction, epsilon-target handling,
+ * and line/column tracking on the DFA walk.
  * Uses package-private observation hooks (not reflection).
  */
 public class TestLexerATNSimulatorHotPaths {
@@ -95,8 +104,9 @@ public class TestLexerATNSimulatorHotPaths {
 	}
 
 	/**
-	 * GROOVY-12435: a bare CR (next char is not LF, including EOF) is a line
-	 * ending. The package-private overload is the one the DFA walk calls.
+	 * GROOVY-12435: a bare CR (next code point is not LF, including EOF)
+	 * is a line ending. The package-private overload is the one the DFA
+	 * walk calls. The public overload delegates to it.
 	 */
 	@Test
 	public void consumeBareCrAdvancesLineWhenNextIsNotLf() {
@@ -104,11 +114,16 @@ public class TestLexerATNSimulatorHotPaths {
 		LexerATNSimulator sim = new LexerATNSimulator(atn);
 
 		CharStream followed = CharStreams.fromString("\rx");
-		assertTrue(followed.LA(2) != '\n');
+		assertEquals('\r', followed.LA(1));
+		assertEquals('x', followed.LA(2));
 		sim.consume(followed, '\r');
 		assertEquals(2, sim.getLine());
 		assertEquals(0, sim.getCharPositionInLine());
 		assertEquals(1, followed.index());
+		sim.consume(followed);
+		assertEquals(2, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+		assertEquals(2, followed.index());
 
 		sim.reset();
 		CharStream atEof = CharStreams.fromString("\r");
@@ -117,17 +132,59 @@ public class TestLexerATNSimulatorHotPaths {
 		assertEquals(2, sim.getLine());
 		assertEquals(0, sim.getCharPositionInLine());
 		assertEquals(1, atEof.index());
+
+		sim.reset();
+		CharStream pair = CharStreams.fromString("\r\r");
+		sim.consume(pair, '\r');
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		sim.consume(pair);
+		assertEquals(3, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(2, pair.index());
+
+		sim.reset();
+		CharStream afterText = CharStreams.fromString("a\rb");
+		sim.consume(afterText);
+		assertEquals(1, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+		sim.consume(afterText, '\r');
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		sim.consume(afterText);
+		assertEquals(2, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+
+		// Buffer of one code point: LA(2) has to pull the following character.
+		sim.reset();
+		UnbufferedCharStream unbuffered = new UnbufferedCharStream(new StringReader("\rx"), 1);
+		assertEquals('\r', unbuffered.LA(1));
+		sim.consume(unbuffered, '\r');
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(1, unbuffered.index());
+		assertEquals('x', unbuffered.LA(1));
+
+		sim.reset();
+		UnbufferedCharStream unbufferedEof = new UnbufferedCharStream(new StringReader("\r"), 1);
+		assertEquals(IntStream.EOF, unbufferedEof.LA(2));
+		sim.consume(unbufferedEof, '\r');
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(1, unbufferedEof.index());
 	}
 
 	/**
 	 * CR+LF is a single line break: the CR only advances the column, and the
-	 * following LF performs the one line increment.
+	 * following LF performs the one line increment. A CR after that pair,
+	 * and a CR after a lone LF, are further breaks.
 	 */
 	@Test
 	public void consumeCrLfAdvancesLineOnlyOnLf() {
 		ATN atn = buildTinyLexerAtn();
 		LexerATNSimulator sim = new LexerATNSimulator(atn);
 		CharStream input = CharStreams.fromString("\r\n");
+		assertEquals('\r', input.LA(1));
 		assertEquals('\n', input.LA(2));
 
 		sim.consume(input, '\r');
@@ -139,78 +196,39 @@ public class TestLexerATNSimulatorHotPaths {
 		assertEquals(2, sim.getLine());
 		assertEquals(0, sim.getCharPositionInLine());
 		assertEquals(2, input.index());
-	}
 
-	/**
-	 * The DFA walk calls package-private {@code consume(input, curChar)} directly.
-	 * A public {@code consume(CharStream)} override would not see these tokens.
-	 * Cold and warm matches must agree: bare CR breaks the line, CR+LF once.
-	 */
-	@Test
-	public void dfaWalkTreatsBareCrAsLineEndingAndCrLfAsOneBreak() {
-		ATN atn = buildCrWhitespaceLexer();
-		LexerATNSimulator sim = new LexerATNSimulator(atn);
-		for (int pass = 0; pass < 2; pass++) {
-			CharStream bare = CharStreams.fromString("\rx");
-			assertEquals(1, sim.match(bare, Lexer.DEFAULT_MODE));
-			assertEquals(1, bare.index());
-			assertEquals(2, sim.getLine());
-			assertEquals(0, sim.getCharPositionInLine());
-			sim.reset();
+		sim.reset();
+		CharStream viaPublic = CharStreams.fromString("\r\n\r");
+		sim.consume(viaPublic);
+		assertEquals(1, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+		sim.consume(viaPublic);
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		sim.consume(viaPublic, '\r');
+		assertEquals(3, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(3, viaPublic.index());
 
-			CharStream atEof = CharStreams.fromString("\r");
-			assertEquals(1, sim.match(atEof, Lexer.DEFAULT_MODE));
-			assertEquals(1, atEof.index());
-			assertEquals(2, sim.getLine());
-			assertEquals(0, sim.getCharPositionInLine());
-			sim.reset();
+		sim.reset();
+		CharStream lfThenCr = CharStreams.fromString("\n\r");
+		sim.consume(lfThenCr, '\n');
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		sim.consume(lfThenCr, '\r');
+		assertEquals(3, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(2, lfThenCr.index());
 
-			CharStream crlf = CharStreams.fromString("\r\n");
-			assertEquals(1, sim.match(crlf, Lexer.DEFAULT_MODE));
-			assertEquals(2, crlf.index());
-			assertEquals(2, sim.getLine());
-			assertEquals(0, sim.getCharPositionInLine());
-			sim.reset();
-
-			CharStream lf = CharStreams.fromString("\n");
-			assertEquals(1, sim.match(lf, Lexer.DEFAULT_MODE));
-			assertEquals(1, lf.index());
-			assertEquals(2, sim.getLine());
-			assertEquals(0, sim.getCharPositionInLine());
-			sim.reset();
-		}
-	}
-
-	/** WS : [\r\n]+ ; */
-	private static ATN buildCrWhitespaceLexer() {
-		ATN atn = new ATN(ATNType.LEXER, Character.MAX_CODE_POINT);
-		TokensStartState tokensStart = new TokensStartState();
-		tokensStart.ruleIndex = -1;
-		atn.addState(tokensStart);
-
-		RuleStartState wsStart = new RuleStartState();
-		wsStart.ruleIndex = 0;
-		atn.addState(wsStart);
-		BasicState wsMid = new BasicState();
-		wsMid.ruleIndex = 0;
-		atn.addState(wsMid);
-		RuleStopState wsStop = new RuleStopState();
-		wsStop.ruleIndex = 0;
-		atn.addState(wsStop);
-		wsStart.stopState = wsStop;
-		IntervalSet wsSet = new IntervalSet();
-		wsSet.add('\r');
-		wsSet.add('\n');
-		wsStart.addTransition(new SetTransition(wsMid, wsSet));
-		wsMid.addTransition(new SetTransition(wsMid, wsSet));
-		wsMid.addTransition(new EpsilonTransition(wsStop));
-
-		tokensStart.addTransition(new EpsilonTransition(wsStart));
-		atn.ruleToStartState = new RuleStartState[] { wsStart };
-		atn.ruleToStopState = new RuleStopState[] { wsStop };
-		atn.ruleToTokenType = new int[] { 1 };
-		atn.defineMode("DEFAULT_MODE", tokensStart);
-		return atn;
+		sim.reset();
+		UnbufferedCharStream unbuffered = new UnbufferedCharStream(new StringReader("\r\n"), 1);
+		sim.consume(unbuffered, '\r');
+		assertEquals(1, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+		sim.consume(unbuffered, '\n');
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(2, unbuffered.index());
 	}
 
 	@Test
@@ -297,7 +315,7 @@ public class TestLexerATNSimulatorHotPaths {
 	}
 
 	/**
-	 * ID : [a-z]+ ; WS : [ \n]+ ;
+	 * ID : [a-z]+ ; WS : [ \r\n]+ ;
 	 * A warm DFA loop must leave the input index, line, and column on the
 	 * same character the slow loop would, including a newline inside WS.
 	 */
@@ -348,6 +366,152 @@ public class TestLexerATNSimulatorHotPaths {
 		assertEquals(1, sim.getCharPositionInLine());
 	}
 
+	/**
+	 * Same ATN as {@link #selfLoopRunKeepsIndexLineAndColumn}:
+	 * ID : [a-z]+ ; WS : [ \r\n]+ ;
+	 * GROOVY-12435. The DFA walk calls {@code consume(input, curChar)}.
+	 * The first match installs any missing edge; the second match of the
+	 * same text is the warm walk. A bare CR breaks the line and the next
+	 * token starts at column 0. CR at EOF reuses that edge and does the
+	 * same. Two bare CRs are two breaks. CR+LF is one break.
+	 */
+	@Test
+	public void selfLoopTreatsBareCrAsLineEndingAndCrLfAsOneBreak() {
+		ATN atn = buildSelfLoopLexer();
+		LexerATNSimulator sim = new LexerATNSimulator(atn);
+
+		CharStream bareCold = CharStreams.fromString("\rx");
+		assertEquals(2, sim.match(bareCold, Lexer.DEFAULT_MODE));
+		assertEquals(1, bareCold.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(1, sim.match(bareCold, Lexer.DEFAULT_MODE));
+		assertEquals(2, bareCold.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+		sim.reset();
+		CharStream bare = CharStreams.fromString("\rx");
+		assertEquals(2, sim.match(bare, Lexer.DEFAULT_MODE));
+		assertEquals(1, bare.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(1, sim.match(bare, Lexer.DEFAULT_MODE));
+		assertEquals(2, bare.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+		sim.reset();
+
+		CharStream atEof = CharStreams.fromString("\r");
+		assertEquals(2, sim.match(atEof, Lexer.DEFAULT_MODE));
+		assertEquals(1, atEof.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		sim.reset();
+
+		CharStream crcrCold = CharStreams.fromString("\r\r");
+		assertEquals(2, sim.match(crcrCold, Lexer.DEFAULT_MODE));
+		assertEquals(2, crcrCold.index());
+		assertEquals(3, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		sim.reset();
+		CharStream crcr = CharStreams.fromString("\r\r");
+		assertEquals(2, sim.match(crcr, Lexer.DEFAULT_MODE));
+		assertEquals(2, crcr.index());
+		assertEquals(3, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		sim.reset();
+
+		CharStream crlfCold = CharStreams.fromString("\r\nx");
+		assertEquals(2, sim.match(crlfCold, Lexer.DEFAULT_MODE));
+		assertEquals(2, crlfCold.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(1, sim.match(crlfCold, Lexer.DEFAULT_MODE));
+		assertEquals(3, crlfCold.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+		sim.reset();
+		CharStream crlf = CharStreams.fromString("\r\nx");
+		assertEquals(2, sim.match(crlf, Lexer.DEFAULT_MODE));
+		assertEquals(2, crlf.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(0, sim.getCharPositionInLine());
+		assertEquals(1, sim.match(crlf, Lexer.DEFAULT_MODE));
+		assertEquals(3, crlf.index());
+		assertEquals(2, sim.getLine());
+		assertEquals(1, sim.getCharPositionInLine());
+	}
+
+	/**
+	 * Token line and column for the same ATN. The token after a bare CR
+	 * starts at column 0 of the next line. CR+LF is one break. CR at EOF
+	 * puts the EOF token on the next line at column 0. Two bare CRs put
+	 * EOF two lines down.
+	 */
+	@Test
+	public void tokensAfterBareCrAndCrLfUseTheBreak() {
+		LexerInterpreter bare = newSelfLoopLexer("\rx");
+		Token cr = bare.nextToken();
+		assertEquals(2, cr.getType());
+		assertEquals("\r", cr.getText());
+		assertEquals(1, cr.getLine());
+		assertEquals(0, cr.getCharPositionInLine());
+		Token id = bare.nextToken();
+		assertEquals(1, id.getType());
+		assertEquals("x", id.getText());
+		assertEquals(2, id.getLine());
+		assertEquals(0, id.getCharPositionInLine());
+		Token eof = bare.nextToken();
+		assertEquals(Token.EOF, eof.getType());
+		assertEquals(2, eof.getLine());
+		assertEquals(1, eof.getCharPositionInLine());
+
+		LexerInterpreter crlf = newSelfLoopLexer("\r\nx");
+		Token ws = crlf.nextToken();
+		assertEquals(2, ws.getType());
+		assertEquals("\r\n", ws.getText());
+		assertEquals(1, ws.getLine());
+		assertEquals(0, ws.getCharPositionInLine());
+		Token x = crlf.nextToken();
+		assertEquals(1, x.getType());
+		assertEquals("x", x.getText());
+		assertEquals(2, x.getLine());
+		assertEquals(0, x.getCharPositionInLine());
+		Token eofAfterCrlf = crlf.nextToken();
+		assertEquals(Token.EOF, eofAfterCrlf.getType());
+		assertEquals(2, eofAfterCrlf.getLine());
+		assertEquals(1, eofAfterCrlf.getCharPositionInLine());
+
+		LexerInterpreter atEof = newSelfLoopLexer("\r");
+		Token only = atEof.nextToken();
+		assertEquals(2, only.getType());
+		assertEquals("\r", only.getText());
+		assertEquals(1, only.getLine());
+		assertEquals(0, only.getCharPositionInLine());
+		Token eofAfterCr = atEof.nextToken();
+		assertEquals(Token.EOF, eofAfterCr.getType());
+		assertEquals(2, eofAfterCr.getLine());
+		assertEquals(0, eofAfterCr.getCharPositionInLine());
+
+		LexerInterpreter two = newSelfLoopLexer("\r\r");
+		Token both = two.nextToken();
+		assertEquals(2, both.getType());
+		assertEquals("\r\r", both.getText());
+		assertEquals(1, both.getLine());
+		assertEquals(0, both.getCharPositionInLine());
+		Token eofAfterPair = two.nextToken();
+		assertEquals(Token.EOF, eofAfterPair.getType());
+		assertEquals(3, eofAfterPair.getLine());
+		assertEquals(0, eofAfterPair.getCharPositionInLine());
+	}
+
+	private static LexerInterpreter newSelfLoopLexer(String input) {
+		return new LexerInterpreter("L.g4", VocabularyImpl.EMPTY_VOCABULARY,
+			Arrays.asList("ID", "WS"), null,
+			Collections.singletonList("DEFAULT_MODE"),
+			buildSelfLoopLexer(), CharStreams.fromString(input));
+	}
+
 	private static ATN buildSelfLoopLexer() {
 		ATN atn = new ATN(ATNType.LEXER, Character.MAX_CODE_POINT);
 		TokensStartState tokensStart = new TokensStartState();
@@ -380,6 +544,7 @@ public class TestLexerATNSimulatorHotPaths {
 		wsStart.stopState = wsStop;
 		IntervalSet wsSet = new IntervalSet();
 		wsSet.add(' ');
+		wsSet.add('\r');
 		wsSet.add('\n');
 		wsStart.addTransition(new SetTransition(wsMid, wsSet));
 		wsMid.addTransition(new SetTransition(wsMid, wsSet));

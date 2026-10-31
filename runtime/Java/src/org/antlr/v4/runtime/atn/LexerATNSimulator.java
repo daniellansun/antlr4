@@ -299,12 +299,17 @@ public class LexerATNSimulator extends ATNSimulator {
 	}
 
 	/**
-	 * Consume {@code curChar} (already {@code input.LA(1)}) and update
-	 * line/column. Avoids a second {@link CharStream#LA} on the per-character
-	 * DFA walk.
+	 * Consume {@code curChar} and update the line and column.
 	 *
-	 * @param input character stream
-	 * @param curChar the code point just matched; must not be EOF
+	 * <p>{@code curChar} is already {@link CharStream#LA(int) LA(1)} and has
+	 * not been consumed. This method does not call {@code LA(1)}. It calls
+	 * {@code LA(2)} only when {@code curChar} is a carriage return, to tell a
+	 * bare CR from the CR of a CR/LF pair. CR at {@link IntStream#EOF} is a
+	 * bare CR, because {@code LA(2)} is not a line feed. Line endings match
+	 * {@link #consume(CharStream)}.</p>
+	 *
+	 * @param input character stream positioned at {@code curChar}
+	 * @param curChar the code point just matched; must not be {@link IntStream#EOF}
 	 */
 	final void consume(@NotNull CharStream input, int curChar) {
 		if ( curChar=='\n' || (curChar=='\r' && input.LA(2)!='\n') ) {
@@ -834,6 +839,20 @@ public class LexerATNSimulator extends ATNSimulator {
 		this.charPositionInLine = charPositionInLine;
 	}
 
+	/**
+	 * Consume the current input code point and update the line and column.
+	 *
+	 * <p>A line feed, and a carriage return that is not followed by a line
+	 * feed, increment the line and set the column to 0. A carriage return at
+	 * end of input is that bare carriage return. The carriage return of a
+	 * CR/LF pair only increments the column; the following line feed is the
+	 * one line break. Any other code point only increments the column.</p>
+	 *
+	 * <p>The per-character DFA walk calls {@link #consume(CharStream, int)}
+	 * and passes the code point it already loaded. That overload does not
+	 * call {@code LA(1)} again. It calls {@code LA(2)} only for a carriage
+	 * return.</p>
+	 */
 	public void consume(@NotNull CharStream input) {
 		consume(input, input.LA(1));
 	}

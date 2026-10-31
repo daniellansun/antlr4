@@ -299,6 +299,29 @@ public class TestLexerCoverage {
 		assertEquals(0, lexer.getInterpreter().getCharPositionInLine());
 	}
 
+	/**
+	 * GROOVY-12435. {@link Lexer#recover(RecognitionException)} consumes one
+	 * character and updates the line the same way a match does. A bare CR
+	 * breaks the line. The CR of a CR/LF pair only advances the column;
+	 * the following LF is the one line break.
+	 */
+	@Test
+	public void recoverRecognitionExceptionTracksBareCrAndCrLf() {
+		LexerInterpreter bare = lex(buildSkipLexer(), "\r", "A", "WS");
+		assertEquals(1, bare.getInterpreter().getLine());
+		bare.recover(new RecognitionException(bare, bare.getInputStream()));
+		assertEquals(2, bare.getInterpreter().getLine());
+		assertEquals(0, bare.getInterpreter().getCharPositionInLine());
+
+		LexerInterpreter crlf = lex(buildSkipLexer(), "\r\n", "A", "WS");
+		crlf.recover(new RecognitionException(crlf, crlf.getInputStream()));
+		assertEquals(1, crlf.getInterpreter().getLine());
+		assertEquals(1, crlf.getInterpreter().getCharPositionInLine());
+		crlf.recover(new RecognitionException(crlf, crlf.getInputStream()));
+		assertEquals(2, crlf.getInterpreter().getLine());
+		assertEquals(0, crlf.getInterpreter().getCharPositionInLine());
+	}
+
 	@Test
 	public void nextTokenRequiresInput() {
 		// construct then clear input via subclass trick
