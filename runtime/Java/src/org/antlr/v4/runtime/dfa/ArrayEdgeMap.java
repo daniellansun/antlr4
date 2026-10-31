@@ -90,7 +90,7 @@ public final class ArrayEdgeMap<T> extends AbstractEdgeMap<T> {
 			for (int i = 0; i < values.length; i++) {
 				T value = values[i];
 				if (value != null) {
-					result = result.put(keys.get(i), value);
+					result.put(keys.get(i), value);
 				}
 			}
 
@@ -105,7 +105,7 @@ public final class ArrayEdgeMap<T> extends AbstractEdgeMap<T> {
 				// put(key, null) clears the slot. Holes in the source must not
 				// delete keys the destination already holds.
 				if (value != null) {
-					result = result.put(i, value);
+					result.put(i, value);
 				}
 			}
 
@@ -121,7 +121,7 @@ public final class ArrayEdgeMap<T> extends AbstractEdgeMap<T> {
 				List<? extends T> values = other.getValues();
 				ArrayEdgeMap<T> result = this;
 				for (int i = 0; i < values.size(); i++) {
-					result = result.put(keys[i], values.get(i));
+					result.put(keys[i], values.get(i));
 				}
 				return result;
 			}
