@@ -8,6 +8,7 @@ package org.antlr.v4.runtime;
 
 import org.antlr.v4.runtime.atn.ATNConfig;
 import org.antlr.v4.runtime.atn.ATNConfigSet;
+import org.antlr.v4.runtime.atn.PredictionMode;
 import org.antlr.v4.runtime.atn.SimulatorState;
 import org.antlr.v4.runtime.dfa.DFA;
 import org.antlr.v4.runtime.misc.Interval;
@@ -147,11 +148,6 @@ public class DiagnosticErrorListener extends BaseErrorListener {
 			return reportedAlts;
 		}
 
-		BitSet result = new BitSet();
-		for (ATNConfig config : configs) {
-			result.set(config.getAlt());
-		}
-
-		return result;
+		return PredictionMode.getAlts(configs);
 	}
 }
