@@ -57,11 +57,7 @@ public class RuleDependencyChecker {
 					new LinkedHashMap<Class<? extends Recognizer<?, ?>>, List<Tuple2<RuleDependency, AnnotatedElement>>>();
 				for (Tuple2<RuleDependency, AnnotatedElement> dependency : dependencies) {
 					Class<? extends Recognizer<?, ?>> recognizer = dependency.getItem1().recognizer();
-					List<Tuple2<RuleDependency, AnnotatedElement>> group = byRecognizer.get(recognizer);
-					if (group == null) {
-						group = new ArrayList<Tuple2<RuleDependency, AnnotatedElement>>();
-						byRecognizer.put(recognizer, group);
-					}
+					List<Tuple2<RuleDependency, AnnotatedElement>> group = byRecognizer.computeIfAbsent(recognizer, k -> new ArrayList<>());
 					group.add(dependency);
 				}
 				for (Map.Entry<Class<? extends Recognizer<?, ?>>, List<Tuple2<RuleDependency, AnnotatedElement>>> entry : byRecognizer.entrySet()) {
