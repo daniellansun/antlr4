@@ -69,7 +69,7 @@ public class RuleDependencyChecker {
 			// retry skip the failure.
 			passed.add(clazz);
 		}
-		for (int i = 0; i < passed.size(); i++) {
+		for (int i = 0, n = passed.size(); i < n; i++) {
 			markChecked(passed.get(i));
 		}
 	}
