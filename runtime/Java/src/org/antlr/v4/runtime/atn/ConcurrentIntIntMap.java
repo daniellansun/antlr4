@@ -42,20 +42,44 @@ final class ConcurrentIntIntMap {
 
 	private static final int[] EMPTY_ENTRIES = new int[0];
 
-	private final Object lock = new Object();
-
 	/**
-	 * Published snapshot. Readers load once and consult the snapshot without
-	 * further synchronization.
+	 * Number of copy-on-write stripes (power of two). Reduces per-write clone
+	 * cost and lock contention during parallel cold DFA warmup by ~16x while
+	 * keeping reads lock-free and allocation-free.
 	 */
-	private volatile IntIntHashMap map = new IntIntHashMap();
+	private static final int STRIPE_COUNT = 16;
+	private static final int STRIPE_MASK = STRIPE_COUNT - 1;
+
+	private static final IntIntHashMap EMPTY_MAP = new IntIntHashMap(0);
+
+	private static final class Stripe {
+		volatile IntIntHashMap map = EMPTY_MAP;
+	}
+
+	private final Stripe[] stripes;
+
+	ConcurrentIntIntMap() {
+		Stripe[] s = new Stripe[STRIPE_COUNT];
+		for (int i = 0; i < STRIPE_COUNT; i++) {
+			s[i] = new Stripe();
+		}
+		this.stripes = s;
+	}
+
+	private Stripe stripeFor(int key) {
+		int h = key ^ (key >>> 16);
+		return stripes[h & STRIPE_MASK];
+	}
 
 	/**
 	 * @param key packed map key
 	 * @return stored value, or {@link #MISSING} if absent
 	 */
 	int get(int key) {
-		IntIntHashMap snapshot = map;
+		IntIntHashMap snapshot = stripeFor(key).map;
+		if (snapshot == EMPTY_MAP) {
+			return MISSING;
+		}
 		// indexOf avoids a second hash on the subsequent indexGet.
 		int index = snapshot.indexOf(key);
 		if (index < 0) {
@@ -71,25 +95,30 @@ final class ConcurrentIntIntMap {
 	 * if there was no mapping
 	 */
 	int put(int key, int value) {
+		Stripe stripe = stripeFor(key);
 		// Fast path: already present with the same value — no copy.
-		IntIntHashMap snapshot = map;
-		int index = snapshot.indexOf(key);
-		if (index >= 0 && snapshot.indexGet(index) == value) {
-			return value;
+		IntIntHashMap snapshot = stripe.map;
+		if (snapshot != EMPTY_MAP) {
+			int index = snapshot.indexOf(key);
+			if (index >= 0 && snapshot.indexGet(index) == value) {
+				return value;
+			}
 		}
-		synchronized (lock) {
-			snapshot = map;
-			index = snapshot.indexOf(key);
+		synchronized (stripe) {
+			snapshot = stripe.map;
 			int previous = MISSING;
-			if (index >= 0) {
-				previous = snapshot.indexGet(index);
-				if (previous == value) {
-					return previous;
+			if (snapshot != EMPTY_MAP) {
+				int index = snapshot.indexOf(key);
+				if (index >= 0) {
+					previous = snapshot.indexGet(index);
+					if (previous == value) {
+						return previous;
+					}
 				}
 			}
-			IntIntHashMap next = (IntIntHashMap) snapshot.clone();
+			IntIntHashMap next = snapshot == EMPTY_MAP ? new IntIntHashMap(8) : snapshot.clone();
 			next.put(key, value);
-			map = next;
+			stripe.map = next;
 			return previous;
 		}
 	}
@@ -105,15 +134,18 @@ final class ConcurrentIntIntMap {
 		if (existing != MISSING) {
 			return existing;
 		}
-		synchronized (lock) {
-			IntIntHashMap snapshot = map;
-			int index = snapshot.indexOf(key);
-			if (index >= 0) {
-				return snapshot.indexGet(index);
+		Stripe stripe = stripeFor(key);
+		synchronized (stripe) {
+			IntIntHashMap snapshot = stripe.map;
+			if (snapshot != EMPTY_MAP) {
+				int index = snapshot.indexOf(key);
+				if (index >= 0) {
+					return snapshot.indexGet(index);
+				}
 			}
-			IntIntHashMap next = (IntIntHashMap) snapshot.clone();
+			IntIntHashMap next = snapshot == EMPTY_MAP ? new IntIntHashMap(8) : snapshot.clone();
 			next.put(key, value);
-			map = next;
+			stripe.map = next;
 			return MISSING;
 		}
 	}
@@ -127,16 +159,20 @@ final class ConcurrentIntIntMap {
 		if (get(key) == MISSING) {
 			return MISSING;
 		}
-		synchronized (lock) {
-			IntIntHashMap snapshot = map;
+		Stripe stripe = stripeFor(key);
+		synchronized (stripe) {
+			IntIntHashMap snapshot = stripe.map;
+			if (snapshot == EMPTY_MAP) {
+				return MISSING;
+			}
 			int index = snapshot.indexOf(key);
 			if (index < 0) {
 				return MISSING;
 			}
 			int previous = snapshot.indexGet(index);
-			IntIntHashMap next = (IntIntHashMap) snapshot.clone();
+			IntIntHashMap next = snapshot.clone();
 			next.remove(key);
-			map = next;
+			stripe.map = next.isEmpty() ? EMPTY_MAP : next;
 			return previous;
 		}
 	}
@@ -154,15 +190,19 @@ final class ConcurrentIntIntMap {
 		if (get(key) != expectedValue) {
 			return false;
 		}
-		synchronized (lock) {
-			IntIntHashMap snapshot = map;
+		Stripe stripe = stripeFor(key);
+		synchronized (stripe) {
+			IntIntHashMap snapshot = stripe.map;
+			if (snapshot == EMPTY_MAP) {
+				return false;
+			}
 			int index = snapshot.indexOf(key);
 			if (index < 0 || snapshot.indexGet(index) != expectedValue) {
 				return false;
 			}
-			IntIntHashMap next = (IntIntHashMap) snapshot.clone();
+			IntIntHashMap next = snapshot.clone();
 			next.remove(key);
-			map = next;
+			stripe.map = next.isEmpty() ? EMPTY_MAP : next;
 			return true;
 		}
 	}
@@ -175,11 +215,15 @@ final class ConcurrentIntIntMap {
 	 */
 	boolean replace(int key, int oldValue, int newValue) {
 		if (oldValue == MISSING) {
-			// Domain invariant: stored values are always ≥ 1; treat as absent match.
+			// Domain invariant: stored values are always >= 1; treat as absent match.
 			return false;
 		}
-		synchronized (lock) {
-			IntIntHashMap snapshot = map;
+		Stripe stripe = stripeFor(key);
+		synchronized (stripe) {
+			IntIntHashMap snapshot = stripe.map;
+			if (snapshot == EMPTY_MAP) {
+				return false;
+			}
 			int index = snapshot.indexOf(key);
 			if (index < 0 || snapshot.indexGet(index) != oldValue) {
 				return false;
@@ -187,9 +231,9 @@ final class ConcurrentIntIntMap {
 			if (oldValue == newValue) {
 				return true;
 			}
-			IntIntHashMap next = (IntIntHashMap) snapshot.clone();
+			IntIntHashMap next = snapshot.clone();
 			next.put(key, newValue);
-			map = next;
+			stripe.map = next;
 			return true;
 		}
 	}
@@ -200,8 +244,12 @@ final class ConcurrentIntIntMap {
 	 * @return the previous value, or {@link #MISSING} if absent
 	 */
 	int replace(int key, int newValue) {
-		synchronized (lock) {
-			IntIntHashMap snapshot = map;
+		Stripe stripe = stripeFor(key);
+		synchronized (stripe) {
+			IntIntHashMap snapshot = stripe.map;
+			if (snapshot == EMPTY_MAP) {
+				return MISSING;
+			}
 			int index = snapshot.indexOf(key);
 			if (index < 0) {
 				return MISSING;
@@ -210,70 +258,91 @@ final class ConcurrentIntIntMap {
 			if (previous == newValue) {
 				return previous;
 			}
-			IntIntHashMap next = (IntIntHashMap) snapshot.clone();
+			IntIntHashMap next = snapshot.clone();
 			next.put(key, newValue);
-			map = next;
+			stripe.map = next;
 			return previous;
 		}
 	}
 
 	/** Drops every entry (used by {@link ATN#clearDFA()}). */
 	void clear() {
-		synchronized (lock) {
-			if (map.isEmpty()) {
-				return;
+		for (int i = 0; i < STRIPE_COUNT; i++) {
+			Stripe stripe = stripes[i];
+			if (stripe.map != EMPTY_MAP) {
+				synchronized (stripe) {
+					stripe.map = EMPTY_MAP;
+				}
 			}
-			map = new IntIntHashMap();
 		}
 	}
 
 	/** Approximate size of the published snapshot (for diagnostics/tests). */
 	int size() {
-		return map.size();
+		int total = 0;
+		for (int i = 0; i < STRIPE_COUNT; i++) {
+			total += stripes[i].map.size();
+		}
+		return total;
 	}
 
 	/**
 	 * Immutable snapshot of all entries as interleaved {@code key, value}
 	 * pairs (length {@code 2 * size()}). Used by
 	 * {@link ConcurrentIntIntMapView#entrySet()} so the JDK map façade can
-	 * iterate without exposing HPPC types. Safe under concurrent writers:
-	 * iteration walks a frozen array published with the volatile map load.
+	 * iterate without exposing HPPC types.
 	 */
 	int[] snapshotEntries() {
-		IntIntHashMap snapshot = map;
-		int n = snapshot.size();
+		IntIntHashMap[] snaps = new IntIntHashMap[STRIPE_COUNT];
+		int n = 0;
+		for (int i = 0; i < STRIPE_COUNT; i++) {
+			IntIntHashMap s = stripes[i].map;
+			snaps[i] = s;
+			n += s.size();
+		}
 		if (n == 0) {
 			return EMPTY_ENTRIES;
 		}
 		final int[] entries = new int[n << 1];
 		final int[] cursor = new int[1];
-		snapshot.forEach((IntIntProcedure) (key, value) -> {
-			int i = cursor[0];
-			entries[i] = key;
-			entries[i + 1] = value;
-			cursor[0] = i + 2;
-		});
+		for (int i = 0; i < STRIPE_COUNT; i++) {
+			IntIntHashMap s = snaps[i];
+			if (!s.isEmpty()) {
+				s.forEach((IntIntProcedure) (key, value) -> {
+					int c = cursor[0];
+					entries[c] = key;
+					entries[c + 1] = value;
+					cursor[0] = c + 2;
+				});
+			}
+		}
 		return entries;
 	}
 
 	/**
 	 * Whether any published entry has the given value. Scans the current
-	 * snapshot (lock-free). Used by the JDK view's {@code containsValue}.
+	 * snapshots (lock-free). Used by the JDK view's {@code containsValue}.
 	 */
 	boolean containsValue(int value) {
 		if (value == MISSING) {
 			return false;
 		}
-		IntIntHashMap snapshot = map;
 		final boolean[] found = new boolean[1];
-		// Predicate forEach stops early when apply returns false.
-		snapshot.forEach((IntIntPredicate) (key, v) -> {
-			if (v == value) {
-				found[0] = true;
-				return false;
+		for (int i = 0; i < STRIPE_COUNT; i++) {
+			IntIntHashMap s = stripes[i].map;
+			if (!s.isEmpty()) {
+				s.forEach((IntIntPredicate) (key, v) -> {
+					if (v == value) {
+						found[0] = true;
+						return false;
+					}
+					return true;
+				});
+				if (found[0]) {
+					return true;
+				}
 			}
-			return true;
-		});
-		return found[0];
+		}
+		return false;
 	}
 }

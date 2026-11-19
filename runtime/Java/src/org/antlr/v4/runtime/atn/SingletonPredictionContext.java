@@ -85,7 +85,7 @@ public class SingletonPredictionContext extends PredictionContext {
 		}
 
 		return returnState == other.returnState
-			&& parent.equals(other.parent);
+			&& (parent == other.parent || parent.equals(other.parent));
 	}
 
 }

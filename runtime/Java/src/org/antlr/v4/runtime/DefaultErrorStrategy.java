@@ -275,7 +275,7 @@ public class DefaultErrorStrategy implements ANTLRErrorStrategy {
 		ATNState s = atn.states.get(recognizer.getState());
 //		System.err.println("sync @ "+s.stateNumber+"="+s.getClass().getSimpleName());
 
-		TokenStream tokens = recognizer.getInputStream();
+		TokenStream tokens = recognizer._input;
 		int la = tokens.LA(1);
 
 		// try cheaper subset first; might get lucky. seems to shave a wee bit off

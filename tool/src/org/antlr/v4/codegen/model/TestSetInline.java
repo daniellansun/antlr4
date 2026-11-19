@@ -37,7 +37,7 @@ public class TestSetInline extends SrcOp {
 			Bitset current = !bitsetList.isEmpty() ? bitsetList.get(bitsetList.size() - 1) : null;
 			if (current == null || ttype > (current.shift + wordSize-1)) {
 				current = new Bitset();
-				if (useZeroOffset && ttype >= 0 && ttype < wordSize-1) {
+				if (useZeroOffset && ttype >= 0 && ttype < wordSize) {
 					current.shift = 0;
 				}
 				else {

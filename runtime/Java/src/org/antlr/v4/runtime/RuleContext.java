@@ -131,12 +131,17 @@ public class RuleContext implements RuleNode {
 	 */
 	@Override
 	public String getText() {
-		if (getChildCount() == 0) {
+		int count = getChildCount();
+		if (count == 0) {
 			return "";
+		}
+		if (count == 1) {
+			String text = getChild(0).getText();
+			return text != null ? text : "null";
 		}
 
 		StringBuilder builder = new StringBuilder();
-		for (int i = 0; i < getChildCount(); i++) {
+		for (int i = 0; i < count; i++) {
 			builder.append(getChild(i).getText());
 		}
 

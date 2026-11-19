@@ -883,7 +883,7 @@ public class ATNDeserializer {
 				if (optimizedTransitions == null) {
 					optimizedTransitions = new ArrayList<>();
 					for (int j = 0; j < i; j++) {
-						optimizedTransitions.add(state.getOptimizedTransition(i));
+						optimizedTransitions.add(state.getOptimizedTransition(j));
 					}
 				}
 

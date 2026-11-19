@@ -106,10 +106,13 @@ public class ParserRuleContext extends RuleContext {
 		this.stop = ctx.stop;
 
 		// copy any error nodes to alt label node
-		if ( ctx.children!=null ) {
-			this.children = new ArrayList<>(Math.max(CHILDREN_INITIAL_CAPACITY, ctx.children.size()));
+		List<ParseTree> srcChildren = ctx.children;
+		if ( srcChildren!=null ) {
+			int n = srcChildren.size();
+			this.children = new ArrayList<>(Math.max(CHILDREN_INITIAL_CAPACITY, n));
 			// reset parent pointer for any error nodes
-			for (ParseTree child : ctx.children) {
+			for (int i = 0; i < n; i++) {
+				ParseTree child = srcChildren.get(i);
 				if (child instanceof ErrorNodeImpl) {
 					((ErrorNodeImpl)child).setParent(this);
 				}
@@ -147,11 +150,15 @@ public class ParserRuleContext extends RuleContext {
 	 *  @since 4.7
 	 */
 	public <T extends ParseTree> T addAnyChild(T t) {
-		assert t.getParent() == null || t.getParent() == this;
+		assert checkParentInvariant(t);
 
 		if ( children==null ) children = new ArrayList<>(CHILDREN_INITIAL_CAPACITY);
 		children.add(t);
 		return t;
+	}
+
+	private boolean checkParentInvariant(ParseTree t) {
+		return t.getParent() == null || t.getParent() == this;
 	}
 
 	public void addChild(RuleContext ruleInvocation) {
@@ -212,6 +219,22 @@ public class ParserRuleContext extends RuleContext {
 		}
 	}
 
+	/**
+	 * Replaces the most recently added child in place. Used by
+	 * {@link Parser#enterOuterAlt} when swapping a base rule context for a
+	 * labeled-alternative subclass, avoiding an {@link ArrayList#remove}
+	 * followed by {@link ArrayList#add}.
+	 */
+	void replaceLastChild(ParseTree t) {
+		assert checkParentInvariant(t);
+		if ( children!=null && !children.isEmpty() ) {
+			children.set(children.size()-1, t);
+		}
+		else {
+			addAnyChild(t);
+		}
+	}
+
 	@Override
 	/** Override to make type more specific */
 	public ParserRuleContext getParent() {
@@ -229,7 +252,8 @@ public class ParserRuleContext extends RuleContext {
 		}
 
 		int j = -1; // what element have we found with ctxType?
-		for (ParseTree o : children) {
+		for (int k = 0, n = children.size(); k < n; k++) {
+			ParseTree o = children.get(k);
 			if ( ctxType.isInstance(o) ) {
 				j++;
 				if ( j == i ) {
@@ -246,7 +270,8 @@ public class ParserRuleContext extends RuleContext {
 		}
 
 		int j = -1; // what token with ttype have we found?
-		for (ParseTree o : children) {
+		for (int k = 0, n = children.size(); k < n; k++) {
+			ParseTree o = children.get(k);
 			if ( o instanceof TerminalNode ) {
 				TerminalNode tnode = (TerminalNode)o;
 				Token symbol = tnode.getSymbol();
@@ -268,13 +293,14 @@ public class ParserRuleContext extends RuleContext {
 		}
 
 		List<TerminalNode> tokens = null;
-		for (ParseTree o : children) {
+		for (int k = 0, n = children.size(); k < n; k++) {
+			ParseTree o = children.get(k);
 			if ( o instanceof TerminalNode ) {
 				TerminalNode tnode = (TerminalNode)o;
 				Token symbol = tnode.getSymbol();
 				if ( symbol.getType()==ttype ) {
 					if ( tokens==null ) {
-						tokens = new ArrayList<>();
+						tokens = new ArrayList<>(CHILDREN_INITIAL_CAPACITY);
 					}
 					tokens.add(tnode);
 				}
@@ -298,10 +324,11 @@ public class ParserRuleContext extends RuleContext {
 		}
 
 		List<T> contexts = null;
-		for (ParseTree o : children) {
+		for (int k = 0, n = children.size(); k < n; k++) {
+			ParseTree o = children.get(k);
 			if ( ctxType.isInstance(o) ) {
 				if ( contexts==null ) {
-					contexts = new ArrayList<>();
+					contexts = new ArrayList<>(CHILDREN_INITIAL_CAPACITY);
 				}
 
 				contexts.add(ctxType.cast(o));

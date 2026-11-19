@@ -120,6 +120,13 @@ public abstract class ATNState {
 
 	public boolean epsilonOnlyTransitions = false;
 
+	/**
+	 * Cached {@link #getStateType()} value. All concrete {@link ATNState}
+	 * subclasses return a compile-time constant, so reading this package-private
+	 * field on hot closure/reach paths avoids megamorphic virtual dispatch.
+	 */
+	final int stateType = getStateType();
+
 	/** Track the transitions emanating from this ATN state. */
 	protected final List<Transition> transitions =
 		new ArrayList<>(INITIAL_NUM_TRANSITIONS);
@@ -149,7 +156,7 @@ public abstract class ATNState {
 	}
 
 	/** Used to cache lookahead during parsing, not used during construction */
-    public IntervalSet nextTokenWithinRule;
+    public volatile IntervalSet nextTokenWithinRule;
 
 	/**
 	 * Gets the state number.

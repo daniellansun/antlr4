@@ -151,7 +151,7 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 
 	protected final IntegerStack _precedenceStack;
 	{
-		_precedenceStack = new IntegerStack();
+		_precedenceStack = new IntegerStack(8);
 		_precedenceStack.push(0);
 	}
 	/**
@@ -639,36 +639,44 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 			_input.consume();
 		}
 		lastConsumed = o;
-		// Common path: build parse trees with no listeners. Empty listener lists
-		// are normalized to null by removeParseListener(s), so a non-null
-		// reference means "notify". The default strategy uses the cached
-		// {@link #errorRecoveryMode} field (one boolean load). A strategy that
-		// returns true from {@link ANTLRErrorStrategy#isReportMatchRequired()}
-		// is asked {@link ANTLRErrorStrategy#inErrorRecoveryMode} instead.
+		// Common path: build parse trees with no listeners and not in error recovery.
+		// Cold error-recovery and listener notification paths are outlined so this
+		// hot method stays compact for inlining into match() and generated matchers.
 		List<ParseTreeListener> listeners = _parseListeners;
-		if (_buildParseTrees || listeners != null) {
-			boolean recovering = reportMatchRequired
-				? _errHandler.inErrorRecoveryMode(this)
-				: errorRecoveryMode;
-			if ( recovering ) {
-				ErrorNode node = _ctx.addErrorNode(createErrorNode(_ctx,o));
-				if (listeners != null) {
-					for (ParseTreeListener listener : listeners) {
-						listener.visitErrorNode(node);
-					}
-				}
+		if (_buildParseTrees) {
+			if (!reportMatchRequired && !errorRecoveryMode && listeners == null) {
+				_ctx.addChild(createTerminalNode(_ctx, o));
+				return o;
 			}
-			else {
-				TerminalNode node = createTerminalNode(_ctx, o);
-				_ctx.addChild(node);
-				if (listeners != null) {
-					for (ParseTreeListener listener : listeners) {
-						listener.visitTerminal(node);
-					}
+			consumeBuildTreeSlow(o, listeners);
+		}
+		else if (listeners != null) {
+			consumeBuildTreeSlow(o, listeners);
+		}
+		return o;
+	}
+
+	private void consumeBuildTreeSlow(@NotNull Token o, @Nullable List<ParseTreeListener> listeners) {
+		boolean recovering = reportMatchRequired
+			? _errHandler.inErrorRecoveryMode(this)
+			: errorRecoveryMode;
+		if (recovering) {
+			ErrorNode node = _ctx.addErrorNode(createErrorNode(_ctx, o));
+			if (listeners != null) {
+				for (int i = 0, n = listeners.size(); i < n; i++) {
+					listeners.get(i).visitErrorNode(node);
 				}
 			}
 		}
-		return o;
+		else {
+			TerminalNode node = createTerminalNode(_ctx, o);
+			_ctx.addChild(node);
+			if (listeners != null) {
+				for (int i = 0, n = listeners.size(); i < n; i++) {
+					listeners.get(i).visitTerminal(node);
+				}
+			}
+		}
 	}
 
 	/** How to create a token leaf node associated with a parent.
@@ -677,9 +685,7 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	 * @since 4.7
 	 */
 	public TerminalNode createTerminalNode(ParserRuleContext parent, Token t) {
-		TerminalNodeImpl node = new TerminalNodeImpl(t);
-		node.setParent(parent);
-		return node;
+		return new TerminalNodeImpl(t, parent);
 	}
 
 	/** How to create an error node, given a token, associated with a parent.
@@ -734,34 +740,49 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 	}
 
     public void exitRule() {
+		if (!matchedEOF && _parseListeners == null) {
+			Token stop = lastConsumed;
+			if (stop != null && stop.getType() != Token.EOF) {
+				ParserRuleContext ctx = _ctx;
+				ctx.stop = stop;
+				setState(ctx.invokingState);
+				_ctx = (ParserRuleContext) ctx.parent;
+				return;
+			}
+		}
+		exitRuleSlow();
+    }
+
+	private void exitRuleSlow() {
 		if ( matchedEOF ) {
 			// if we have matched EOF, it cannot consume past EOF so we use LT(1) here
 			_ctx.stop = _input.LT(1); // LT(1) will be end of file
 		}
-		else if ( lastConsumed != null ) {
+		else if ( lastConsumed != null && lastConsumed.getType() != Token.EOF ) {
 			_ctx.stop = lastConsumed;
 		}
 		else {
 			_ctx.stop = _input.LT(-1); // stop node is what we just matched
 		}
-        // trigger event on _ctx, before it reverts to parent
-        if ( _parseListeners != null) triggerExitRuleEvent();
+		// trigger event on _ctx, before it reverts to parent
+		if ( _parseListeners != null ) triggerExitRuleEvent();
 		setState(_ctx.invokingState);
 		_ctx = (ParserRuleContext)_ctx.parent;
-    }
+	}
 
 	public void enterOuterAlt(ParserRuleContext localctx, int altNum) {
 		localctx.setAltNumber(altNum);
 		// if we have new localctx, make sure we replace existing ctx
 		// that is previous child of parse tree
-		if ( _buildParseTrees && _ctx != localctx ) {
-			ParserRuleContext parent = (ParserRuleContext)_ctx.parent;
-			if ( parent!=null )	{
-				parent.removeLastChild();
-				parent.addChild(localctx);
+		if ( _ctx != localctx ) {
+			if ( _buildParseTrees ) {
+				ParserRuleContext parent = (ParserRuleContext)_ctx.parent;
+				if ( parent!=null )	{
+					parent.replaceLastChild(localctx);
+				}
 			}
+			_ctx = localctx;
 		}
-		_ctx = localctx;
 	}
 
 	/**
@@ -804,7 +825,8 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 		ParserRuleContext previous = _ctx;
 		previous.parent = localctx;
 		previous.invokingState = state;
-		previous.stop = _input.LT(-1);
+		Token stop = lastConsumed;
+		previous.stop = (stop != null && stop.getType() != EOF) ? stop : _input.LT(-1);
 
 		_ctx = localctx;
 		_ctx.start = previous.start;
@@ -819,7 +841,8 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 
 	public void unrollRecursionContexts(ParserRuleContext _parentctx) {
 		_precedenceStack.pop();
-		_ctx.stop = _input.LT(-1);
+		Token stop = lastConsumed;
+		_ctx.stop = (stop != null && stop.getType() != EOF) ? stop : _input.LT(-1);
 		ParserRuleContext retctx = _ctx; // save current ctx (return value)
 
 		// unroll so _ctx is as it was before call to recursive method
@@ -864,8 +887,13 @@ public abstract class Parser extends Recognizer<Token, ParserATNSimulator> {
 		return precedence >= _precedenceStack.peek();
 	}
 
+	private static final ParserErrorListener EMPTY_PARSER_ERROR_LISTENER = new BaseErrorListener();
+
 	@Override
 	public ParserErrorListener getErrorListenerDispatch() {
+		if (hasNoErrorListeners()) {
+			return EMPTY_PARSER_ERROR_LISTENER;
+		}
 		return new ProxyParserErrorListener(getErrorListeners());
 	}
 

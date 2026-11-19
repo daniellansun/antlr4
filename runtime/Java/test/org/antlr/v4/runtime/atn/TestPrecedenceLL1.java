@@ -30,18 +30,19 @@ public class TestPrecedenceLL1 {
 	}
 
 	private static int nonzero(ATN atn) {
-		short[][] tables = atn.precedenceLL1;
+		ATN.PrecedenceTable[] tables = atn.precedenceLL1;
 		if (tables == null) {
 			return 0;
 		}
 		int n = 0;
 		for (int i = 0; i < tables.length; i++) {
-			short[] table = tables[i];
+			ATN.PrecedenceTable table = tables[i];
 			if (table == null) {
 				continue;
 			}
-			for (int j = 0; j < table.length; j++) {
-				if (table[j] != 0) {
+			short[] data = table.data;
+			for (int j = 0; j < data.length; j++) {
+				if (data[j] != 0) {
 					n++;
 				}
 			}
@@ -65,7 +66,7 @@ public class TestPrecedenceLL1 {
 		assertEquals(0, atn.cachedPrecedenceAlt(0, 1, 4));
 		assertEquals(1, nonzero(atn));
 
-		atn.precedenceLL1 = new short[][] { null, new short[0] };
+		atn.precedenceLL1 = new ATN.PrecedenceTable[] { null, new ATN.PrecedenceTable(new short[0], 0) };
 		assertEquals(0, atn.cachedPrecedenceAlt(0, 0, 0));
 		assertEquals(0, atn.cachedPrecedenceAlt(1, 0, 0));
 	}

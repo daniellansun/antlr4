@@ -6,7 +6,10 @@
 
 package org.antlr.v4.runtime.tree;
 
+import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.misc.NotNull;
+
+import java.util.List;
 
 public abstract class AbstractParseTreeVisitor<Result> implements ParseTreeVisitor<Result> {
 	/**
@@ -38,6 +41,20 @@ public abstract class AbstractParseTreeVisitor<Result> implements ParseTreeVisit
 	@Override
 	public Result visitChildren(@NotNull RuleNode node) {
 		Result result = defaultResult();
+		if (node instanceof ParserRuleContext) {
+			List<ParseTree> children = ((ParserRuleContext) node).children;
+			if (children == null) {
+				return result;
+			}
+			for (int i = 0, n = children.size(); i < n; i++) {
+				if (!shouldVisitNextChild(node, result)) {
+					break;
+				}
+				Result childResult = children.get(i).accept(this);
+				result = aggregateResult(result, childResult);
+			}
+			return result;
+		}
 		int n = node.getChildCount();
 		for (int i=0; i<n; i++) {
 			if (!shouldVisitNextChild(node, result)) {

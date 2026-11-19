@@ -67,6 +67,25 @@ public class RuleFunction extends OutputModelObject {
 	public boolean hasLookaheadBlock;
 	public String variantOf;
 
+	/**
+	 * Tier 2a: non-null when a single-alternative labeled rule constructs its
+	 * concrete alt-label context directly at rule entry.
+	 */
+	public String directAltLabel;
+
+	/**
+	 * Whether listener generation is enabled for this grammar (so streaming
+	 * {@code _parseListeners} must preserve base-context {@code enterRule}
+	 * dispatch semantics).
+	 */
+	public boolean directAltHasListener;
+
+	/**
+	 * Tier 2b: non-null when an LL(1) multi-alternative labeled rule defers
+	 * context allocation into each arm to avoid double context allocation.
+	 */
+	public LL1AltBlock deferredLL1Block;
+
 	@ModelElement public List<SrcOp> code;
 	@ModelElement public OrderedHashSet<Decl> locals; // TODO: move into ctx?
 	@ModelElement public Collection<AttributeDecl> args = null;

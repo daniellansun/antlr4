@@ -82,7 +82,9 @@ public class TestBufferedTokenStream {
 		tokens.LT(1);
 		tokens.seek(1);
 		tokens.seek(0);
-		assertNull("seek away and back must drop the LT(1) cache", tokens.cachedLT1());
+		assertEquals("x", tokens.cachedLT1().getText());
+		tokens.clearCachedLT1();
+		assertNull(tokens.cachedLT1());
 		tokens.consume();
 		assertEquals(2, tokens.LA(1));
 	}

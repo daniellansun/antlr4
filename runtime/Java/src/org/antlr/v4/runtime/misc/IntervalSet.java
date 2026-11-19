@@ -45,6 +45,17 @@ public class IntervalSet implements IntSet {
 
     protected boolean readonly;
 
+    /**
+     * Compact bitmask materialized when {@link #setReadonly(boolean) setReadonly(true)}
+     * is called on a multi-interval set whose elements fit in
+     * {@code [Token.EPSILON (-2), FAST_BITS_MAX_ELEMENT]}. Bit {@code (el + 2)}
+     * records membership so {@link #contains(int)} runs in O(1) without binary
+     * search or pointer chasing.
+     */
+    private static final int FAST_BITS_OFFSET = 2; // Token.EPSILON == -2 -> bit 0
+    private static final int FAST_BITS_MAX_ELEMENT = 511;
+    private long[] fastBits;
+
 	public IntervalSet(List<Interval> intervals) {
 		this.intervals = intervals;
 	}
@@ -381,6 +392,16 @@ public class IntervalSet implements IntSet {
     /** {@inheritDoc} */
     @Override
     public boolean contains(int el) {
+		long[] bits = fastBits;
+		if (bits != null) {
+			int bit = el + FAST_BITS_OFFSET;
+			int word = bit >>> 6;
+			return bit >= 0 && word < bits.length && (bits[word] & (1L << bit)) != 0L;
+		}
+		return containsSlow(el);
+    }
+
+	private boolean containsSlow(int el) {
 		final List<Interval> ivals = intervals;
 		final int n = ivals.size();
 		// PERF: FIRST/FOLLOW sets used by DefaultErrorStrategy.sync and
@@ -419,7 +440,7 @@ public class IntervalSet implements IntSet {
 		// Binary search for the element in the (sorted,
 		// disjoint) array of intervals.
 		while (l <= r) {
-			int m = (l + r) / 2;
+			int m = (l + r) >>> 1;
 			Interval I = ivals.get(m);
 			int a = I.a;
 			int b = I.b;
@@ -432,7 +453,7 @@ public class IntervalSet implements IntSet {
 			}
 		}
 		return false;
-    }
+	}
 
     /** {@inheritDoc} */
     @Override
@@ -702,6 +723,34 @@ public class IntervalSet implements IntSet {
 
     public void setReadonly(boolean readonly) {
         if ( this.readonly && !readonly ) throw new IllegalStateException("can't alter readonly IntervalSet");
+        if (readonly && !this.readonly) {
+            buildFastBits();
+        }
         this.readonly = readonly;
+    }
+
+    private void buildFastBits() {
+        List<Interval> ivals = intervals;
+        if (ivals == null || ivals.size() <= 2) {
+            return;
+        }
+        int min = ivals.get(0).a;
+        int max = ivals.get(ivals.size() - 1).b;
+        if (min < -FAST_BITS_OFFSET || max < min || max > FAST_BITS_MAX_ELEMENT) {
+            return;
+        }
+        int maxBit = max + FAST_BITS_OFFSET;
+        long[] bits = new long[(maxBit >>> 6) + 1];
+        for (int i = 0, n = ivals.size(); i < n; i++) {
+            Interval iv = ivals.get(i);
+            if (iv.a < -FAST_BITS_OFFSET || iv.b > max) {
+                return;
+            }
+            for (int el = iv.a; el <= iv.b; el++) {
+                int bit = el + FAST_BITS_OFFSET;
+                bits[bit >>> 6] |= (1L << bit);
+            }
+        }
+        this.fastBits = bits;
     }
 }

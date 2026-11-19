@@ -179,11 +179,12 @@ public enum CharStreams {
 	public static CodePointCharStream fromReader(Reader r, String sourceName) throws IOException {
 		try {
 			CodePointBuffer.Builder codePointBufferBuilder = CodePointBuffer.builder(DEFAULT_BUFFER_SIZE);
-			CharBuffer charBuffer = CharBuffer.allocate(DEFAULT_BUFFER_SIZE);
-			while ((r.read(charBuffer)) != -1) {
-				charBuffer.flip();
-				codePointBufferBuilder.append(charBuffer);
-				charBuffer.compact();
+			char[] buf = new char[DEFAULT_BUFFER_SIZE];
+			int n;
+			while ((n = r.read(buf, 0, buf.length)) != -1) {
+				if (n > 0) {
+					codePointBufferBuilder.append(buf, 0, n);
+				}
 			}
 			return CodePointCharStream.fromBuffer(codePointBufferBuilder.build(), sourceName);
 		}
@@ -203,20 +204,12 @@ public enum CharStreams {
 	 * Creates a {@link CharStream} given a {@link String} and the {@code sourceName}
 	 * from which it came.
 	 *
-	 * <p>UTF-16 code units are converted directly into {@link CodePointBuffer}'s
-	 * compact byte / char / int storage via
-	 * {@link CodePointBuffer.Builder#append(String)}. That path shares the same
-	 * conversion state machine as {@link CodePointBuffer.Builder#append(CharBuffer)}
-	 * (including read-only {@link CharBuffer#wrap(CharSequence)} views) and does
-	 * not allocate a temporary mutable {@link CharBuffer} or char array solely to
-	 * feed the builder.</p>
+	 * <p>UTF-16 code units are converted directly into compact byte / char / int
+	 * storage via {@code CodePointCharStream} without allocating intermediate
+	 * {@link CodePointBuffer} or {@link CharBuffer} wrappers.</p>
 	 */
 	public static CodePointCharStream fromString(String s, String sourceName) {
-		// Initial guess assumes no code points > U+FFFF: one code
-		// point for each code unit in the string
-		CodePointBuffer.Builder codePointBufferBuilder = CodePointBuffer.builder(s.length());
-		codePointBufferBuilder.append(s);
-		return CodePointCharStream.fromBuffer(codePointBufferBuilder.build(), sourceName);
+		return CodePointCharStream.fromString(s, sourceName);
 	}
 
 	/**

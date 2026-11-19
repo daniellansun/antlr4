@@ -293,4 +293,14 @@ public class JavaTarget extends Target {
 	protected void appendUnicodeEscapedCodePoint(int codePoint, StringBuilder sb) {
 		UnicodeEscapes.appendJavaStyleEscapedCodePoint(codePoint, sb);
 	}
+
+	@Override
+	public boolean supportsCompactSingleTokenStarLoop() {
+		return true;
+	}
+
+	@Override
+	public boolean supportsCompactLL1AltTests() {
+		return true;
+	}
 }

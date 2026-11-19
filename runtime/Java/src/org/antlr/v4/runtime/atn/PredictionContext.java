@@ -6,6 +6,7 @@
 
 package org.antlr.v4.runtime.atn;
 
+import com.carrotsearch.hppc.ObjectObjectIdentityHashMap;
 import org.antlr.v4.runtime.Recognizer;
 import org.antlr.v4.runtime.RuleContext;
 import org.antlr.v4.runtime.misc.AbstractEqualityComparator;
@@ -255,8 +256,8 @@ public abstract class PredictionContext {
 
 		boolean changed = false;
 		final int size = context.size();
-		PredictionContext[] parents = new PredictionContext[size];
-		for (int i = 0; i < parents.length; i++) {
+		PredictionContext[] parents = null;
+		for (int i = 0; i < size; i++) {
 			PredictionContext parent = getCachedContext(context.getParent(i), contextCache, visited);
 			if (changed || parent != context.getParent(i)) {
 				if (!changed) {
@@ -295,6 +296,89 @@ public abstract class PredictionContext {
 		visited.put(updated, canonical);
 		visited.put(context, canonical);
 
+		return canonical;
+	}
+
+	/**
+	 * Package-private fast path for {@link ATN#getCachedContext(PredictionContext)}
+	 * after an initial {@code isEmpty()} and {@code contextCache.get(context)}
+	 * check has missed. Uses a flat HPPC {@link ObjectObjectIdentityHashMap}
+	 * internally (never exposed on any public or protected signature) and
+	 * short-circuits depth-1 singletons without allocating a visited map.
+	 */
+	static PredictionContext getCachedContextInternal(
+		@NotNull PredictionContext context,
+		@NotNull ConcurrentMap<PredictionContext, PredictionContext> contextCache)
+	{
+		if (context instanceof SingletonPredictionContext) {
+			PredictionContext parent = ((SingletonPredictionContext) context).parent;
+			if (parent.isEmpty()) {
+				PredictionContext existing = contextCache.putIfAbsent(context, context);
+				return existing != null ? existing : context;
+			}
+		}
+		return getCachedContextHppc(context, contextCache,
+			new ObjectObjectIdentityHashMap<PredictionContext, PredictionContext>(8));
+	}
+
+	private static PredictionContext getCachedContextHppc(
+		@NotNull PredictionContext context,
+		@NotNull ConcurrentMap<PredictionContext, PredictionContext> contextCache,
+		@NotNull ObjectObjectIdentityHashMap<PredictionContext, PredictionContext> visited)
+	{
+		if (context.isEmpty()) {
+			return context;
+		}
+
+		PredictionContext existing = visited.get(context);
+		if (existing != null) {
+			return existing;
+		}
+
+		existing = contextCache.get(context);
+		if (existing != null) {
+			visited.put(context, existing);
+			return existing;
+		}
+
+		boolean changed = false;
+		final int size = context.size();
+		PredictionContext[] parents = null;
+		for (int i = 0; i < size; i++) {
+			PredictionContext origParent = context.getParent(i);
+			PredictionContext parent = getCachedContextHppc(origParent, contextCache, visited);
+			if (changed || parent != origParent) {
+				if (!changed) {
+					parents = new PredictionContext[size];
+					for (int j = 0; j < size; j++) {
+						parents[j] = context.getParent(j);
+					}
+					changed = true;
+				}
+				parents[i] = parent;
+			}
+		}
+
+		if (!changed) {
+			existing = contextCache.putIfAbsent(context, context);
+			PredictionContext canonical = existing != null ? existing : context;
+			visited.put(context, canonical);
+			return canonical;
+		}
+
+		PredictionContext updated;
+		if (parents.length == 1) {
+			updated = new SingletonPredictionContext(parents[0], context.getReturnState(0));
+		}
+		else {
+			ArrayPredictionContext arrayPredictionContext = (ArrayPredictionContext) context;
+			updated = new ArrayPredictionContext(parents, arrayPredictionContext.returnStates, context.cachedHashCode);
+		}
+
+		existing = contextCache.putIfAbsent(updated, updated);
+		PredictionContext canonical = existing != null ? existing : updated;
+		visited.put(updated, canonical);
+		visited.put(context, canonical);
 		return canonical;
 	}
 

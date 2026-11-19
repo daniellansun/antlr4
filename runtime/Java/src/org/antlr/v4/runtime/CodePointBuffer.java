@@ -298,6 +298,27 @@ public class CodePointBuffer {
 			}
 		}
 
+		/**
+		 * Appends UTF-16 code units directly from a {@code char[]} slice,
+		 * avoiding {@link CharBuffer} wrapper allocation in
+		 * {@link CharStreams#fromReader(java.io.Reader, String)}.
+		 */
+		void append(char[] in, int offset, int length) {
+			ensureRemaining(length);
+			int limit = offset + length;
+			switch (type) {
+				case BYTE:
+					appendArrayByte(in, offset, limit);
+					break;
+				case CHAR:
+					appendArrayChar(in, offset, limit);
+					break;
+				case INT:
+					appendArrayInt(in, offset, limit);
+					break;
+			}
+		}
+
 		// --- Monomorphic String Conversion Paths ---
 
 		private void appendStringByte(String utf16In, int start) {

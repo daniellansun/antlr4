@@ -8,6 +8,7 @@ package org.antlr.v4.codegen.model;
 
 import org.antlr.v4.codegen.OutputModelFactory;
 import org.antlr.v4.codegen.model.decl.Decl;
+import org.antlr.v4.runtime.Token;
 import org.antlr.v4.tool.Grammar;
 import org.antlr.v4.tool.ast.GrammarAST;
 import org.antlr.v4.tool.ast.TerminalAST;
@@ -19,12 +20,14 @@ import java.util.List;
 public class MatchToken extends RuleElement implements LabeledOp {
 	public String name;
 	public int ttype;
+	public boolean isEOF;
 	public List<Decl> labels = new ArrayList<Decl>();
 
 	public MatchToken(OutputModelFactory factory, TerminalAST ast) {
 		super(factory, ast);
 		Grammar g = factory.getGrammar();
 		ttype = g.getTokenType(ast.getText());
+		isEOF = (ttype == Token.EOF);
 		name = factory.getTarget().getTokenTypeAsTargetLabel(g, ttype);
 	}
 
