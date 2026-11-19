@@ -684,9 +684,10 @@ public class TestDFA {
 		state.setTarget(384, at384);
 		Field direct = DFAState.class.getDeclaredField("directValues");
 		direct.setAccessible(true);
-		Object[] table = (Object[]) direct.get(state);
+		java.util.concurrent.atomic.AtomicReferenceArray<?> table =
+			(java.util.concurrent.atomic.AtomicReferenceArray<?>) direct.get(state);
 		assertNotNull(table);
-		assertTrue(table.length > 200);
+		assertTrue(table.length() > 200);
 		assertSame(at128, state.getLexerTarget(128));
 		assertNull(state.getLexerTarget(200));
 	}

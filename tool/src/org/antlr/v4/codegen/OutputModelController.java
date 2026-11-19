@@ -15,6 +15,10 @@ import org.antlr.v4.codegen.model.BaseVisitorFile;
 import org.antlr.v4.codegen.model.Choice;
 import org.antlr.v4.codegen.model.CodeBlockForAlt;
 import org.antlr.v4.codegen.model.CodeBlockForOuterMostAlt;
+import org.antlr.v4.codegen.model.FlatActionCase;
+import org.antlr.v4.codegen.model.FlatSempredCase;
+import org.antlr.v4.codegen.model.FlatSempredHelper;
+import org.antlr.v4.codegen.model.LL1AltBlock;
 import org.antlr.v4.codegen.model.LabeledOp;
 import org.antlr.v4.codegen.model.LeftRecursiveRuleFunction;
 import org.antlr.v4.codegen.model.Lexer;
@@ -23,12 +27,17 @@ import org.antlr.v4.codegen.model.ListenerFile;
 import org.antlr.v4.codegen.model.OutputModelObject;
 import org.antlr.v4.codegen.model.Parser;
 import org.antlr.v4.codegen.model.ParserFile;
+import org.antlr.v4.codegen.model.Recognizer;
 import org.antlr.v4.codegen.model.RuleActionFunction;
 import org.antlr.v4.codegen.model.RuleFunction;
 import org.antlr.v4.codegen.model.RuleSempredFunction;
 import org.antlr.v4.codegen.model.SrcOp;
 import org.antlr.v4.codegen.model.StarBlock;
 import org.antlr.v4.codegen.model.VisitorFile;
+import org.antlr.v4.codegen.model.chunk.ActionChunk;
+import org.antlr.v4.codegen.model.chunk.ActionText;
+import org.antlr.v4.codegen.model.chunk.RulePropertyRef_parser;
+import org.antlr.v4.codegen.model.chunk.ThisRulePropertyRef_parser;
 import org.antlr.v4.codegen.model.decl.AltLabelStructDecl;
 import org.antlr.v4.codegen.model.decl.CodeBlock;
 import org.antlr.v4.codegen.model.decl.StructDecl;
@@ -51,6 +60,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Stack;
+import java.util.TreeMap;
 
 /** This receives events from SourceGenTriggers.g and asks factory to do work.
  *  Then runs extensions in order on resulting SrcOps to get final list.
@@ -96,6 +106,7 @@ public class OutputModelController {
 		for (Rule r : g.rules.values()) {
 			buildRuleFunction(file.parser, r);
 		}
+		populateFlatSempreds(file.parser, false);
 
 		return file;
 	}
@@ -110,6 +121,8 @@ public class OutputModelController {
 		for (Rule r : g.rules.values()) {
 			buildLexerRuleActions(file.lexer, r);
 		}
+		populateFlatActions(file.lexer);
+		populateFlatSempreds(file.lexer, true);
 
 		return file;
 	}
@@ -169,6 +182,7 @@ public class OutputModelController {
 		}
 		else {
 			buildNormalRuleFunction(r, function);
+			optimizeLabeledAltRule(r, function);
 		}
 
 		Grammar g = getGrammar();
@@ -329,6 +343,141 @@ public class OutputModelController {
 			// only add to lexer if the function actually contains actions
 			lexer.actionFuncs.put(r, raf);
 		}
+	}
+
+	private void optimizeLabeledAltRule(Rule r, RuleFunction function) {
+		Grammar g = getGrammar();
+		if (g.tool.force_atn
+				|| function.getClass() != RuleFunction.class
+				|| r.args != null || r.locals != null || r.retvals != null
+				|| r.namedActions.get("init") != null
+				|| !r.name.equals(r.getBaseContext())
+				|| function.code == null || function.code.size() != 1) {
+			return;
+		}
+		boolean hasListener = g.tool.gen_listener;
+		SrcOp rootOp = function.code.get(0);
+		if (rootOp instanceof CodeBlockForOuterMostAlt) {
+			CodeBlockForOuterMostAlt alt = (CodeBlockForOuterMostAlt) rootOp;
+			if (alt.altLabel != null) {
+				function.directAltLabel = alt.altLabel;
+				function.directAltHasListener = hasListener;
+				alt.directInit = true;
+				alt.directInitHasListener = hasListener;
+			}
+		}
+		else if (rootOp.getClass() == LL1AltBlock.class
+				&& (r.exceptions == null || r.exceptions.isEmpty()) && r.finallyAction == null) {
+			LL1AltBlock blk = (LL1AltBlock) rootOp;
+			if (blk.label == null
+					&& (blk.preamble == null || blk.preamble.isEmpty())
+					&& blk.alts != null && !blk.alts.isEmpty()) {
+				boolean anyLabeled = false;
+				for (CodeBlockForAlt a : blk.alts) {
+					if (!(a instanceof CodeBlockForOuterMostAlt)) {
+						return;
+					}
+					if (((CodeBlockForOuterMostAlt) a).altLabel != null) {
+						anyLabeled = true;
+					}
+				}
+				if (anyLabeled) {
+					function.deferredLL1Block = blk;
+					function.directAltHasListener = hasListener;
+					blk.deferredRule = function;
+					for (CodeBlockForAlt a : blk.alts) {
+						CodeBlockForOuterMostAlt oa = (CodeBlockForOuterMostAlt) a;
+						oa.deferredRule = function;
+						oa.deferredStateNumber = blk.stateNumber;
+					}
+				}
+			}
+		}
+	}
+
+	private void populateFlatActions(Lexer lexer) {
+		if (lexer.actionFuncs == null || lexer.actionFuncs.isEmpty()) {
+			return;
+		}
+		TreeMap<Integer, FlatActionCase> byIndex = new TreeMap<Integer, FlatActionCase>();
+		for (RuleActionFunction raf : lexer.actionFuncs.values()) {
+			for (Map.Entry<Integer, Action> entry : raf.actions.entrySet()) {
+				Integer idx = entry.getKey();
+				if (idx == null || byIndex.containsKey(idx)) {
+					return;
+				}
+				byIndex.put(idx, new FlatActionCase(delegate, idx, entry.getValue()));
+			}
+		}
+		if (!byIndex.isEmpty()) {
+			lexer.flatActions = new ArrayList<FlatActionCase>(byIndex.values());
+		}
+	}
+
+	private void populateFlatSempreds(Recognizer recog, boolean isLexer) {
+		if (recog.sempredFuncs == null || recog.sempredFuncs.isEmpty()) {
+			return;
+		}
+		TreeMap<Integer, FlatSempredCase> byIndex = new TreeMap<Integer, FlatSempredCase>();
+		TreeMap<Integer, FlatSempredHelper> helpersByIndex = new TreeMap<Integer, FlatSempredHelper>();
+		for (RuleSempredFunction rsf : recog.sempredFuncs.values()) {
+			for (Map.Entry<Integer, Action> entry : rsf.actions.entrySet()) {
+				Integer idx = entry.getKey();
+				if (idx == null || byIndex.containsKey(idx)) {
+					return;
+				}
+				Action act = entry.getValue();
+				boolean needsTypedCtx = !isLexer && actionReferencesLocalCtx(act);
+				if (needsTypedCtx && actionReferencesText(act, "predIndex")) {
+					return;
+				}
+				String helperCtxType = needsTypedCtx ? rsf.ctxType : "RuleContext";
+				byIndex.put(idx, new FlatSempredCase(delegate, idx, helperCtxType, needsTypedCtx, needsTypedCtx, needsTypedCtx ? null : act));
+				if (needsTypedCtx) {
+					helpersByIndex.put(idx, new FlatSempredHelper(delegate, idx, helperCtxType, act));
+				}
+			}
+		}
+		if (!byIndex.isEmpty()) {
+			recog.flatSempreds = new ArrayList<FlatSempredCase>(byIndex.values());
+			if (!helpersByIndex.isEmpty()) {
+				recog.flatSempredHelpers = new ArrayList<FlatSempredHelper>(helpersByIndex.values());
+			}
+		}
+	}
+
+	private static boolean actionReferencesText(Action action, String token) {
+		if (action == null || action.chunks == null) {
+			return false;
+		}
+		for (ActionChunk chunk : action.chunks) {
+			if (chunk instanceof ActionText) {
+				String text = ((ActionText) chunk).text;
+				if (text != null && text.contains(token)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private static boolean actionReferencesLocalCtx(Action action) {
+		if (action == null || action.chunks == null) {
+			return false;
+		}
+		for (ActionChunk chunk : action.chunks) {
+			if (chunk instanceof ActionText) {
+				String text = ((ActionText) chunk).text;
+				if (text != null && text.contains("_localctx")) {
+					return true;
+				}
+			}
+			else if (!(chunk instanceof ThisRulePropertyRef_parser)
+					&& !(chunk instanceof RulePropertyRef_parser)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public RuleFunction rule(Rule r) {

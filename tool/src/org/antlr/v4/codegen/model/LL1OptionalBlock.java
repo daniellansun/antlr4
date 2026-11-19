@@ -9,6 +9,7 @@ package org.antlr.v4.codegen.model;
 import org.antlr.v4.codegen.OutputModelFactory;
 import org.antlr.v4.tool.ast.GrammarAST;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /** An optional block is just an alternative block where the last alternative
@@ -19,5 +20,11 @@ import java.util.List;
 public class LL1OptionalBlock extends LL1AltBlock {
 	public LL1OptionalBlock(OutputModelFactory factory, GrammarAST blkAST, List<CodeBlockForAlt> alts) {
 		super(factory, blkAST, alts);
+		// Strip the trailing epsilon (FOLLOW-set) lookahead entry: the optional
+		// block's default branch already exits without matching, so emitting
+		// dozens of empty case labels for FOLLOW tokens only bloats bytecode.
+		if (altLook != null && altLook.size() > alts.size()) {
+			altLook = new ArrayList<String[]>(altLook.subList(0, alts.size()));
+		}
 	}
 }

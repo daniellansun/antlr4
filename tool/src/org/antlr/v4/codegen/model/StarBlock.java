@@ -14,6 +14,7 @@ import java.util.List;
 
 public class StarBlock extends Loop {
 	public String loopLabel;
+	private final MatchToken candidateSingleTokenMatch;
 
 	public StarBlock(OutputModelFactory factory,
 					 GrammarAST blkOrEbnfRootAST,
@@ -24,5 +25,21 @@ public class StarBlock extends Loop {
 		StarLoopEntryState star = (StarLoopEntryState)blkOrEbnfRootAST.atnState;
 		loopBackStateNumber = star.loopBackState.stateNumber;
 		decision = star.decision;
+		// Keep raw adaptivePredict loop when force_atn is active for diagnostics/tests.
+		candidateSingleTokenMatch = factory.getGrammar().tool.force_atn
+			? null
+			: extractSingleTokenMatch(alts);
+	}
+
+	/**
+	 * Returns the single unlabeled non-EOF {@link MatchToken} when this star
+	 * block has no extra iteration ops and can be emitted as a compact
+	 * {@code _matchStarPredict(...)} call.
+	 */
+	public MatchToken getSingleTokenMatch() {
+		if (candidateSingleTokenMatch != null && (iteration == null || iteration.isEmpty())) {
+			return candidateSingleTokenMatch;
+		}
+		return null;
 	}
 }

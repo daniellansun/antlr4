@@ -15,6 +15,8 @@ import java.util.List;
 
 /** */
 public class LL1StarBlockSingleAlt extends LL1Loop {
+	private final MatchToken singleTokenCandidate;
+
 	public LL1StarBlockSingleAlt(OutputModelFactory factory, GrammarAST starRoot, List<CodeBlockForAlt> alts) {
 		super(factory, starRoot, alts);
 
@@ -26,6 +28,30 @@ public class LL1StarBlockSingleAlt extends LL1Loop {
 		IntervalSet enterLook = altLookSets[0];
 		@SuppressWarnings("unused")
 		IntervalSet exitLook = altLookSets[1];
-		loopExpr = addCodeForLoopLookaheadTempVar(enterLook);
+		MatchToken candidate = factory.getGenerator().getTarget().supportsCompactSingleTokenStarLoop()
+				? extractSingleTokenMatch(alts)
+				: null;
+		if (candidate != null && enterLook.size() == 1 && enterLook.getMinElement() == candidate.ttype) {
+			singleTokenCandidate = candidate;
+		}
+		else {
+			singleTokenCandidate = null;
+			loopExpr = addCodeForLoopLookaheadTempVar(enterLook);
+		}
+	}
+
+	/**
+	 * Non-null when this star loop matches solely a single unlabeled non-EOF
+	 * token whose type equals the sole entry lookahead symbol (e.g. {@code NL*}),
+	 * and no extension has added preamble/iteration operations.
+	 */
+	public MatchToken getSingleTokenMatch() {
+		if (singleTokenCandidate == null) {
+			return null;
+		}
+		if ((preamble != null && !preamble.isEmpty()) || (iteration != null && !iteration.isEmpty())) {
+			return null;
+		}
+		return singleTokenCandidate;
 	}
 }

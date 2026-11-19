@@ -27,11 +27,11 @@ public class IntegerStack extends IntegerList {
 	}
 
 	public final int pop() {
-		return removeAt(size() - 1);
+		return removeLast();
 	}
 
 	public final int peek() {
-		return get(size() - 1);
+		return getLast();
 	}
 
 }

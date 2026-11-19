@@ -12,7 +12,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /**
  * Sparse open-addressed edge map used while a DFA state has only a few outgoing
@@ -25,6 +25,13 @@ import java.util.concurrent.atomic.AtomicIntegerArray;
  * {@link TreeMap} for stable {@link DFASerializer} output); hot emptiness
  * checks must use {@link #isEmpty()} directly rather than
  * {@code toMap().isEmpty()}.</p>
+ *
+ * <p>Thread safety / JMM: {@link #put} writes {@code keys[bucket]} before
+ * release-publishing the target via {@link AtomicReferenceArray#lazySet} on
+ * {@link #values}. Lock-free readers ({@link #get}, {@link #getDirect},
+ * {@link DFAState#getLexerTarget}) acquire-load from {@link #values} first,
+ * establishing release/acquire happens-before for both {@code keys[bucket]} and
+ * the published target object.</p>
  *
  * <p>Lexer maps whose keys all lie in {@code [0, tableLength)} may be stored
  * identity-indexed ({@link #isDirectIndex()}). {@link #get} does not branch
@@ -43,8 +50,8 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 	 */
 	private static final int DEFAULT_MAX_SIZE = 8;
 
-	private final AtomicIntegerArray keys;
-	private final T[] values;
+	private final int[] keys;
+	private final AtomicReferenceArray<T> values;
 	/**
 	 * Number of non-null slots. Updated only inside {@code synchronized (this)}
 	 * mutation paths; read without the monitor for O(1) {@link #size()} /
@@ -54,7 +61,7 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 
 	/**
 	 * When {@code true}, slot {@code i} holds key {@code i} and {@link #getDirect}
-	 * is a plain array load. Final: an out-of-range {@link #put} publishes a new
+	 * is a direct indexed load. Final: an out-of-range {@link #put} publishes a new
 	 * hashed map rather than flipping this flag. Public constructors stay hashed
 	 * so the first inserts mutate in place. Parser maps ({@code minIndex < 0},
 	 * EOF is a key) never set this.
@@ -65,11 +72,10 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 		this(minIndex, maxIndex, DEFAULT_MAX_SIZE);
 	}
 
-	@SuppressWarnings("unchecked")
 	public HashEdgeMap(int minIndex, int maxIndex, int maxSparseSize) {
 		super(minIndex, maxIndex);
-		this.keys = new AtomicIntegerArray(maxSparseSize);
-		this.values = (T[])new Object[maxSparseSize];
+		this.keys = new int[maxSparseSize];
+		this.values = new AtomicReferenceArray<>(maxSparseSize);
 		this.size = new AtomicInteger();
 		this.directIndex = false;
 	}
@@ -78,24 +84,24 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 		this(map, maxSparseSize, true);
 	}
 
-	@SuppressWarnings("unchecked")
 	private HashEdgeMap(@NotNull HashEdgeMap<T> map, int maxSparseSize, boolean allowDirect) {
 		super(map.minIndex, map.maxIndex);
 		synchronized (map) {
-			if (maxSparseSize < map.values.length) {
+			final int srcLen = map.values.length();
+			if (maxSparseSize < srcLen) {
 				throw new IllegalArgumentException();
 			}
 
-			keys = new AtomicIntegerArray(maxSparseSize);
-			values = (T[])new Object[maxSparseSize];
+			keys = new int[maxSparseSize];
+			values = new AtomicReferenceArray<>(maxSparseSize);
 			int occupied = 0;
-			for (int i = 0; i < map.values.length; i++) {
-				int key = map.keys.get(i);
-				T value = map.values[i];
+			for (int i = 0; i < srcLen; i++) {
+				T value = map.values.get(i);
 				if (value != null) {
+					int key = map.keys[i];
 					int bucket = bucket(key);
-					keys.set(bucket, key);
-					values[bucket] = value;
+					keys[bucket] = key;
+					values.lazySet(bucket, value);
 					occupied++;
 				}
 			}
@@ -111,14 +117,14 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 
 	/** Table length. Package-private; used by tests and {@link #getDirect}. */
 	int tableLength() {
-		return values.length;
+		return values.length();
 	}
 
 	/**
 	 * Values array for an identity-indexed map, or {@code null} when this map
 	 * is hashed. Slot {@code i} holds key {@code i}. Package-private.
 	 */
-	Object[] directArray() {
+	AtomicReferenceArray<T> directArray() {
 		return directIndex ? values : null;
 	}
 
@@ -128,20 +134,21 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 	 * so a hashed map must not be queried through this method.
 	 */
 	final T getDirect(int key) {
-		final T[] vals = values;
-		if (key >= 0 && key < vals.length) {
-			return vals[key];
+		final AtomicReferenceArray<T> vals = values;
+		if (key >= 0 && key < vals.length()) {
+			return vals.get(key);
 		}
 		return null;
 	}
 
 	private static boolean keysFit(HashEdgeMap<?> src, int length) {
-		Object[] vals = src.values;
-		for (int i = 0; i < vals.length; i++) {
-			if (vals[i] == null) {
+		AtomicReferenceArray<?> vals = src.values;
+		int[] srcKeys = src.keys;
+		for (int i = 0, len = vals.length(); i < len; i++) {
+			if (vals.get(i) == null) {
 				continue;
 			}
-			int key = src.keys.get(i);
+			int key = srcKeys[i];
 			if (key < 0 || key >= length) {
 				return false;
 			}
@@ -158,16 +165,16 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 	private int bucket(int key) {
 		// Note: this returns a valid array index even if key is outside the
 		// allowed range or the minIndex is negative.
-		return key & (values.length - 1);
+		return key & (values.length() - 1);
 	}
 
 	@NotNull
-	/*package*/ AtomicIntegerArray getKeys() {
+	/*package*/ int[] getKeys() {
 		return keys;
 	}
 
 	@NotNull
-	/*package*/ T[] getValues() {
+	/*package*/ AtomicReferenceArray<T> getValues() {
 		return values;
 	}
 
@@ -189,21 +196,15 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 	@Override
 	public T get(int key) {
 		// Hot path: DFA edge walk during adaptivePredict / lexer match.
-		// Do not gate on size.get() — that is an extra atomic read on every
-		// warm edge lookup; empty maps already miss via values[bucket] == null.
-		//
-		// PERF: Localize the values array and inline the power-of-two mask so
-		// the common miss (null slot) pays only a plain array load. Key check
-		// (AtomicIntegerArray) runs only after a non-null value is observed.
-		// Write order is key-then-value under the put monitor; readers observe
-		// value first so a non-null value implies a committed key.
-		final T[] vals = values;
-		final int bucket = key & (vals.length - 1);
-		final T value = vals[bucket];
+		// Acquire-load from AtomicReferenceArray first so a non-null value
+		// establishes happens-before for keys[bucket] and the target state.
+		final AtomicReferenceArray<T> vals = values;
+		final int bucket = key & (vals.length() - 1);
+		final T value = vals.get(bucket);
 		if (value == null) {
 			return null;
 		}
-		return keys.get(bucket) == key ? value : null;
+		return keys[bucket] == key ? value : null;
 	}
 
 	@Override
@@ -217,33 +218,37 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 		}
 
 		synchronized (this) {
+			final int len = values.length();
 			// Identity layout cannot hold this key. Publish a hashed map of the
 			// same length and insert there (that insert may resize further).
-			if (directIndex && (key < 0 || key >= values.length)) {
-				HashEdgeMap<T> hashed = new HashEdgeMap<T>(this, values.length, false);
+			if (directIndex && (key < 0 || key >= len)) {
+				HashEdgeMap<T> hashed = new HashEdgeMap<T>(this, len, false);
 				return hashed.put(key, value);
 			}
 
 			int bucket = bucket(key);
-			int currentKey = keys.get(bucket);
-			T currentValue = values[bucket];
+			T currentValue = values.get(bucket);
+			int currentKey = keys[bucket];
 			// Empty slots keep key word 0. A live replace requires a stored value,
 			// otherwise put(0) into an empty slot would skip the size update.
 			if (currentValue != null && currentKey == key) {
-				values[bucket] = value;
+				values.lazySet(bucket, value);
 				return this;
 			}
 
 			if (currentValue == null) {
-				// Write the key first
-				keys.set(bucket, key);
-				values[bucket] = value;
+				// Write the key before release-publishing the value.
+				// lazySet provides release ordering (StoreStore/LoadStore)
+				// without a per-write x86 StoreLoad fence; size.incrementAndGet()
+				// and monitor exit also provide full visibility.
+				keys[bucket] = key;
+				values.lazySet(bucket, value);
 				size.incrementAndGet();
 				return this;
 			}
 
 			// Resize on collision
-			int newSize = values.length;
+			int newSize = len;
 			while (true) {
 				newSize *= 2;
 				if (newSize >= (maxIndex - minIndex + 1) / 2) {
@@ -270,11 +275,11 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 			return this;
 		}
 
-		HashEdgeMap<T> result = new HashEdgeMap<>(this, values.length);
+		HashEdgeMap<T> result = new HashEdgeMap<>(this, values.length());
 		int bucket = result.bucket(key);
-		if (result.values[bucket] != null) {
-			result.keys.set(bucket, 0);
-			result.values[bucket] = null;
+		if (result.values.get(bucket) != null) {
+			result.values.lazySet(bucket, null);
+			result.keys[bucket] = 0;
 			result.size.decrementAndGet();
 		}
 		return result;
@@ -300,10 +305,10 @@ public final class HashEdgeMap<T> extends AbstractEdgeMap<T> {
 		// (use isEmpty()/size() instead; see DFA.isEmpty).
 		synchronized (this) {
 			Map<Integer, T> result = new TreeMap<>();
-			for (int i = 0; i < values.length; i++) {
-				T value = values[i];
+			for (int i = 0, len = values.length(); i < len; i++) {
+				T value = values.get(i);
 				if (value != null) {
-					result.put(keys.get(i), value);
+					result.put(keys[i], value);
 				}
 			}
 

@@ -7,8 +7,6 @@ package org.antlr.v4.runtime;
 
 import org.antlr.v4.runtime.misc.Interval;
 
-import java.nio.charset.StandardCharsets;
-
 /**
  * Alternative to {@link ANTLRInputStream} which treats the input
  * as a series of Unicode code points, instead of a series of UTF-16
@@ -38,6 +36,140 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 
 	// Visible for testing.
 	abstract Object getInternalStorage();
+
+	private static final String[] ASCII_STRINGS = new String[128];
+	private static final String CRLF = "\r\n";
+
+	static {
+		for (int i = 0; i < ASCII_STRINGS.length; i++) {
+			ASCII_STRINGS[i] = String.valueOf((char) i);
+		}
+	}
+
+	/**
+	 * Returns the UTF-16 encoded text spanning the inclusive code-point range
+	 * {@code [start..stop]}, avoiding an intermediate {@link Interval}
+	 * allocation on hot token and lexer paths.
+	 *
+	 * @since 4.13.2.19
+	 */
+	public abstract String getText(int start, int stop);
+
+	/**
+	 * Overflow-safe slice length for {@link #getText(int, int)}: computes
+	 * {@code min((long) stop - start + 1, size - startIdx)} without 32-bit
+	 * wraparound when {@code stop} is near {@link Integer#MIN_VALUE} or
+	 * {@link Integer#MAX_VALUE}.
+	 */
+	static int computeTextLength(int start, int stop, int startIdx, int size) {
+		long rawLen = (long) stop - (long) start + 1L;
+		long avail = (long) size - (long) startIdx;
+		long clamped = rawLen < avail ? rawLen : avail;
+		if (clamped < 0L || clamped > Integer.MAX_VALUE) {
+			return -1;
+		}
+		return (int) clamped;
+	}
+
+	/**
+	 * Direct {@link String} factory avoiding intermediate
+	 * {@link CodePointBuffer.Builder} / {@link java.nio.ByteBuffer} wrappers
+	 * on the dominant Latin-1 path while preserving exact Unicode widening
+	 * semantics when code points above {@code U+00FF} are encountered.
+	 */
+	static CodePointCharStream fromString(String s, String sourceName) {
+		final int len = s.length();
+		final byte[] out = new byte[len];
+		int i = 0;
+		final int limit = len - 3;
+		for (; i < limit; i += 4) {
+			char c0 = s.charAt(i);
+			char c1 = s.charAt(i + 1);
+			char c2 = s.charAt(i + 2);
+			char c3 = s.charAt(i + 3);
+			if (((c0 | c1 | c2 | c3) & 0xFF00) != 0) {
+				break;
+			}
+			out[i] = (byte) c0;
+			out[i + 1] = (byte) c1;
+			out[i + 2] = (byte) c2;
+			out[i + 3] = (byte) c3;
+		}
+		for (; i < len; i++) {
+			char c = s.charAt(i);
+			if ((c & 0xFF00) != 0) {
+				return fromStringNonLatin1(s, sourceName, out, i, len);
+			}
+			out[i] = (byte) c;
+		}
+		return new CodePoint8BitCharStream(0, len, sourceName, out, 0);
+	}
+
+	private static CodePointCharStream fromStringNonLatin1(String s, String sourceName, byte[] latinPrefix, int splitIndex, int len) {
+		char firstWide = s.charAt(splitIndex);
+		if (!Character.isHighSurrogate(firstWide)) {
+			final char[] out = new char[len];
+			s.getChars(0, len, out, 0);
+			for (int i = splitIndex + 1; i < len; i++) {
+				if (Character.isHighSurrogate(out[i])) {
+					return fromStringSurrogates(s, sourceName, out, i, len);
+				}
+			}
+			return new CodePoint16BitCharStream(0, len, sourceName, out, 0);
+		}
+		return fromStringSurrogatesFromBytes(s, sourceName, latinPrefix, splitIndex, len);
+	}
+
+	private static CodePointCharStream fromStringSurrogates(String s, String sourceName, char[] bmpPrefix, int splitIndex, int len) {
+		final int[] out = new int[len];
+		for (int i = 0; i < splitIndex; i++) {
+			out[i] = bmpPrefix[i];
+		}
+		int outIdx = appendCodePoints(s, splitIndex, len, out, splitIndex);
+		return new CodePoint32BitCharStream(0, outIdx, sourceName, out, 0);
+	}
+
+	private static CodePointCharStream fromStringSurrogatesFromBytes(String s, String sourceName, byte[] latinPrefix, int splitIndex, int len) {
+		final int[] out = new int[len];
+		for (int i = 0; i < splitIndex; i++) {
+			out[i] = latinPrefix[i] & 0xFF;
+		}
+		int outIdx = appendCodePoints(s, splitIndex, len, out, splitIndex);
+		return new CodePoint32BitCharStream(0, outIdx, sourceName, out, 0);
+	}
+
+	private static int appendCodePoints(String s, int start, int len, int[] out, int outIdx) {
+		int prevHigh = -1;
+		for (int i = start; i < len; i++) {
+			char c = s.charAt(i);
+			if (prevHigh != -1) {
+				if (Character.isLowSurrogate(c)) {
+					out[outIdx++] = Character.toCodePoint((char) prevHigh, c);
+					prevHigh = -1;
+				}
+				else {
+					out[outIdx++] = prevHigh;
+					if (Character.isHighSurrogate(c)) {
+						prevHigh = c;
+					}
+					else {
+						out[outIdx++] = c;
+						prevHigh = -1;
+					}
+				}
+			}
+			else if (Character.isHighSurrogate(c)) {
+				prevHigh = c;
+			}
+			else {
+				out[outIdx++] = c;
+			}
+		}
+		if (prevHigh != -1) {
+			out[outIdx++] = prevHigh;
+		}
+		return outIdx;
+	}
 
 	/**
 	 * Constructs a {@link CodePointCharStream} which provides access
@@ -91,10 +223,14 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 	@Override
 	public final void consume() {
 		if (size - position == 0) {
-			assert LA(1) == IntStream.EOF;
-			throw new IllegalStateException("cannot consume EOF");
+			rejectConsumeEof();
 		}
 		position = position + 1;
+	}
+
+	private void rejectConsumeEof() {
+		assert LA(1) == IntStream.EOF;
+		throw new IllegalStateException("cannot consume EOF");
 	}
 
 	@Override
@@ -144,7 +280,7 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 
 	@Override
 	public final String toString() {
-		return getText(Interval.of(0, size - 1));
+		return getText(0, size - 1);
 	}
 
 	@Override
@@ -166,21 +302,46 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 		/** Return the UTF-16 encoded string for the given interval */
 		@Override
 		public String getText(Interval interval) {
-			int startIdx = Math.min(interval.a, size);
-			int len = Math.min(interval.b - interval.a + 1, size - startIdx);
+			return getText(interval.a, interval.b);
+		}
 
-			// We know the maximum code point in byteArray is U+00FF,
-			// so we can treat this as if it were ISO-8859-1, aka Latin-1,
-			// which shares the same code points up to 0xFF.
-			return new String(byteArray, startIdx, len, StandardCharsets.ISO_8859_1);
+		@Override
+		public String getText(int start, int stop) {
+			int startIdx = Math.min(start, size);
+			int len = computeTextLength(start, stop, startIdx, size);
+			if (startIdx < 0 || len < 0 || startIdx > byteArray.length - len) {
+				throw new StringIndexOutOfBoundsException("start=" + startIdx + ", len=" + len);
+			}
+			if (len == 0) {
+				return "";
+			}
+			if (len == 1) {
+				int b = byteArray[startIdx] & 0xFF;
+				return b < 128 ? ASCII_STRINGS[b] : String.valueOf((char) b);
+			}
+			if (len == 2 && byteArray[startIdx] == '\r' && byteArray[startIdx + 1] == '\n') {
+				return CRLF;
+			}
+			// Direct Latin-1 widening avoids JDK 8 ISO_8859_1$Decoder allocation
+			// in String(byte[], int, int, Charset).
+			char[] chars = new char[len];
+			for (int i = 0; i < len; i++) {
+				chars[i] = (char) (byteArray[startIdx + i] & 0xFF);
+			}
+			return new String(chars);
 		}
 
 		@Override
 		public int LA(int i) {
-			// PERF: lexer/parser hot path is almost exclusively LA(1).
+			// PERF: Keep LA(1) compact for HotSpot inlining; outline non-1 lookahead.
 			if (i == 1) {
-				return position < size ? byteArray[position] & 0xFF : IntStream.EOF;
+				int p = position;
+				return p < size ? byteArray[p] & 0xFF : IntStream.EOF;
 			}
+			return laSlow(i);
+		}
+
+		private int laSlow(int i) {
 			int offset;
 			switch (Integer.signum(i)) {
 				case -1:
@@ -222,8 +383,27 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 		/** Return the UTF-16 encoded string for the given interval */
 		@Override
 		public String getText(Interval interval) {
-			int startIdx = Math.min(interval.a, size);
-			int len = Math.min(interval.b - interval.a + 1, size - startIdx);
+			return getText(interval.a, interval.b);
+		}
+
+		@Override
+		public String getText(int start, int stop) {
+			int startIdx = Math.min(start, size);
+			int len = computeTextLength(start, stop, startIdx, size);
+			if (startIdx >= 0 && len >= 0 && startIdx <= charArray.length - len) {
+				if (len == 0) {
+					return "";
+				}
+				if (len == 1) {
+					char c = charArray[startIdx];
+					if (c < 128) {
+						return ASCII_STRINGS[c];
+					}
+				}
+				else if (len == 2 && charArray[startIdx] == '\r' && charArray[startIdx + 1] == '\n') {
+					return CRLF;
+				}
+			}
 
 			// We know there are no surrogates in this
 			// array, since otherwise we would be given a
@@ -237,8 +417,13 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 		@Override
 		public int LA(int i) {
 			if (i == 1) {
-				return position < size ? charArray[position] & 0xFFFF : IntStream.EOF;
+				int p = position;
+				return p < size ? charArray[p] & 0xFFFF : IntStream.EOF;
 			}
+			return laSlow(i);
+		}
+
+		private int laSlow(int i) {
 			int offset;
 			switch (Integer.signum(i)) {
 				case -1:
@@ -280,8 +465,13 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 		/** Return the UTF-16 encoded string for the given interval */
 		@Override
 		public String getText(Interval interval) {
-			int startIdx = Math.min(interval.a, size);
-			int len = Math.min(interval.b - interval.a + 1, size - startIdx);
+			return getText(interval.a, interval.b);
+		}
+
+		@Override
+		public String getText(int start, int stop) {
+			int startIdx = Math.min(start, size);
+			int len = computeTextLength(start, stop, startIdx, size);
 
 			// Note that we pass the int[] code points to the String constructor --
 			// this is supported, and the constructor will convert to UTF-16 internally.
@@ -293,6 +483,10 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 			if (i == 1) {
 				return position < size ? intArray[position] : IntStream.EOF;
 			}
+			return laSlow(i);
+		}
+
+		private int laSlow(int i) {
 			int offset;
 			switch (Integer.signum(i)) {
 				case -1:

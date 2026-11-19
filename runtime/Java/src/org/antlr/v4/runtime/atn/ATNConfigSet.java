@@ -199,19 +199,21 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		if (readonly) {
 			this.mergedConfigs = null;
 			this.unmerged = null;
+			this.configs = (ArrayList<ATNConfig>)set.configs.clone();
+			this.configs.trimToSize();
 		} else if (!set.isReadOnly()) {
 			// Object.clone preserves ClearableLongObjectHashMap (package-private
 			// HPPC subclass); HPPC never appears on public/protected signatures.
 			this.mergedConfigs = (ClearableLongObjectHashMap<ATNConfig>)set.mergedConfigs.clone();
 			this.unmerged = (ArrayList<ATNConfig>)set.unmerged.clone();
+			this.configs = (ArrayList<ATNConfig>)set.configs.clone();
 		} else {
+			// Writable clone of a read-only set: clone(false) populates configs
+			// and mergedConfigs via addAll(), so start with an empty list to avoid
+			// duplicating every element.
 			this.mergedConfigs = new ClearableLongObjectHashMap<>(mergedMapExpectedElements(set.configs.size()));
 			this.unmerged = new ArrayList<>();
-		}
-
-		this.configs = (ArrayList<ATNConfig>)set.configs.clone();
-		if (readonly) {
-			this.configs.trimToSize();
+			this.configs = new ArrayList<>(set.configs.size());
 		}
 
 		this.dipsIntoOuterContext = set.dipsIntoOuterContext;
@@ -276,14 +278,27 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	}
 
 	public void optimizeConfigs(ATNSimulator interpreter) {
-		if (configs.isEmpty()) {
+		final int n = configs.size();
+		if (n == 0) {
 			return;
 		}
 
-        for (ATNConfig config : configs) {
-            config.setContext(interpreter.atn.getCachedContext(config.getContext()));
-        }
-		invalidateHash();
+		boolean changed = false;
+		final ATN atn = interpreter.atn;
+		for (int i = 0; i < n; i++) {
+			ATNConfig config = configs.get(i);
+			PredictionContext ctx = config.getContext();
+			if (!ctx.isEmpty()) {
+				PredictionContext cached = atn.getCachedContext(ctx);
+				if (cached != ctx) {
+					config.setContext(cached);
+					changed = true;
+				}
+			}
+		}
+		if (changed) {
+			invalidateHash();
+		}
 	}
 
 	public ATNConfigSet clone(boolean readonly) {
@@ -406,9 +421,13 @@ public class ATNConfigSet implements Set<ATNConfig> {
 	}
 
 	private boolean mergeConfigContext(ATNConfig e, @Nullable PredictionContextCache contextCache, ATNConfig unmergedConfig) {
+		boolean wasReaching = unmergedConfig.getReachesIntoOuterContext();
 		unmergedConfig.setOuterContextDepth(Math.max(unmergedConfig.getOuterContextDepth(), e.getOuterContextDepth()));
 		if (e.isPrecedenceFilterSuppressed()) {
 			unmergedConfig.setPrecedenceFilterSuppressed(true);
+		}
+		if (wasReaching != unmergedConfig.getReachesIntoOuterContext()) {
+			invalidateHash();
 		}
 
 		PredictionContext joined = PredictionContext.join(unmergedConfig.getContext(), e.getContext(), contextCache);
@@ -606,9 +625,32 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		}
 
 		ATNConfigSet other = (ATNConfigSet)obj;
-		return this.outermostConfigSet == other.outermostConfigSet
-			&& Utils.equals(conflictInfo, other.conflictInfo)
-			&& configs.equals(other.configs);
+		if (this.outermostConfigSet != other.outermostConfigSet) {
+			return false;
+		}
+		int h1 = this.cachedHashCode;
+		int h2 = other.cachedHashCode;
+		if (h1 != 0 && h2 != 0 && h1 != h2) {
+			return false;
+		}
+		if (!Utils.equals(conflictInfo, other.conflictInfo)) {
+			return false;
+		}
+		final ArrayList<ATNConfig> left = this.configs;
+		final ArrayList<ATNConfig> right = other.configs;
+		final int n = left.size();
+		if (n != right.size()) {
+			return false;
+		}
+		// Indexed loop avoids allocating two ArrayList$Itr objects on JDK 8.
+		for (int i = 0; i < n; i++) {
+			ATNConfig a = left.get(i);
+			ATNConfig b = right.get(i);
+			if (a != b && (a == null || !a.equals(b))) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	@Override
@@ -617,10 +659,29 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		if (hashCode != 0) {
 			return hashCode;
 		}
+		return computeHashCode();
+	}
 
-		hashCode = 1;
+	private int computeHashCode() {
+		// Indexed loop matches ArrayList/AbstractList.hashCode() exactly without
+		// allocating an ArrayList$Itr on JDK 8. Guarded on exact ArrayList class
+		// so subclass overrides (e.g. tests) still run their custom hashCode().
+		final ArrayList<ATNConfig> list = this.configs;
+		int listHash;
+		if (list.getClass() == ArrayList.class) {
+			listHash = 1;
+			for (int i = 0, n = list.size(); i < n; i++) {
+				ATNConfig c = list.get(i);
+				listHash = 31 * listHash + (c == null ? 0 : c.hashCode());
+			}
+		}
+		else {
+			listHash = list.hashCode();
+		}
+
+		int hashCode = 1;
 		hashCode = 5 * hashCode ^ (outermostConfigSet ? 1 : 0);
-		hashCode = 5 * hashCode ^ configs.hashCode();
+		hashCode = 5 * hashCode ^ listHash;
 		if (hashCode == 0) {
 			hashCode = 1;
 		}
@@ -720,8 +781,8 @@ public class ATNConfigSet implements Set<ATNConfig> {
 
 	public void remove(int index) {
 		ensureWritable();
-		final ATNConfig config = configs.get(index);
-		configs.remove(config);
+		final ATNConfig config = configs.remove(index);
+		invalidateHash();
 		long key = getKey(config);
 		int mapIndex = mergedConfigs.indexOf(key);
 		if (mapIndex >= 0 && mergedConfigs.indexGet(mapIndex) == config) {

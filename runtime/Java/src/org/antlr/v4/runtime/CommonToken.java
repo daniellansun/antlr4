@@ -35,12 +35,12 @@ public class CommonToken implements WritableToken, Serializable {
 	 * This is the backing field for {@link #getCharPositionInLine} and
 	 * {@link #setCharPositionInLine}.
 	 */
-	protected int charPositionInLine = -1; // set to invalid position
+	protected int charPositionInLine;
 	/**
 	 * This is the backing field for {@link #getChannel} and
 	 * {@link #setChannel}.
 	 */
-	protected int channel=DEFAULT_CHANNEL;
+	protected int channel;
 	/**
 	 * This is the backing field for {@link #getTokenSource} and
 	 * {@link #getInputStream}.
@@ -87,6 +87,8 @@ public class CommonToken implements WritableToken, Serializable {
 	 */
 	public CommonToken(int type) {
 		this.type = type;
+		this.charPositionInLine = -1;
+		this.channel = DEFAULT_CHANNEL;
 		this.source = EMPTY_SOURCE;
 	}
 
@@ -99,6 +101,9 @@ public class CommonToken implements WritableToken, Serializable {
 		if (source.getItem1() != null) {
 			this.line = source.getItem1().getLine();
 			this.charPositionInLine = source.getItem1().getCharPositionInLine();
+		}
+		else {
+			this.charPositionInLine = -1;
 		}
 	}
 
@@ -138,6 +143,7 @@ public class CommonToken implements WritableToken, Serializable {
 	 */
 	public CommonToken(int type, String text) {
 		this.type = type;
+		this.charPositionInLine = -1;
 		this.channel = DEFAULT_CHANNEL;
 		this.text = text;
 		this.source = EMPTY_SOURCE;
@@ -195,6 +201,9 @@ public class CommonToken implements WritableToken, Serializable {
 		if ( input==null ) return null;
 		int n = input.size();
 		if ( start<n && stop<n) {
+			if (input instanceof CodePointCharStream) {
+				return ((CodePointCharStream) input).getText(start, stop);
+			}
 			return input.getText(Interval.of(start,stop));
 		}
 		else {

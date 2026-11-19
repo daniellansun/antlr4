@@ -18,6 +18,16 @@ public class TerminalNodeImpl implements TerminalNode {
 
 	public TerminalNodeImpl(Token symbol) {	this.symbol = symbol;	}
 
+	/**
+	 * Constructs a terminal node with both its token symbol and parent rule node.
+	 *
+	 * @since 4.13.2.19
+	 */
+	public TerminalNodeImpl(Token symbol, RuleNode parent) {
+		this.symbol = symbol;
+		this.parent = parent;
+	}
+
 	@Override
 	public ParseTree getChild(int i) {return null;}
 

@@ -113,15 +113,128 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 	 */
 	@Override
 	public Token nextToken() {
-		if (_input == null) {
+		final CharStream input = _input;
+		if (input == null) {
 			throw new IllegalStateException("nextToken requires a non-null input stream.");
 		}
+		if (input instanceof CodePointCharStream) {
+			return nextTokenCodePoint((CodePointCharStream) input);
+		}
+		return nextTokenGeneric(input);
+	}
 
+	/**
+	 * Fast token loop for {@link CodePointCharStream}: avoids no-op
+	 * {@code mark}/{@code release} and their {@code try/finally} handler and
+	 * detects EOF via {@code input.position >= input.size} instead of an extra
+	 * virtual {@code LA(1)} call after every token.
+	 */
+	private Token nextTokenCodePoint(final CodePointCharStream initialInput) {
+		CodePointCharStream input = initialInput;
+		final LexerATNSimulator interp = _interp;
+		outer:
+		while (true) {
+			if (_hitEOF) {
+				emitEOF();
+				return _token;
+			}
+
+			_token = null;
+			_channel = Token.DEFAULT_CHANNEL;
+			_tokenStartCharIndex = input.position;
+			_tokenStartCharPositionInLine = interp.getCharPositionInLine();
+			_tokenStartLine = interp.getLine();
+			_text = null;
+			do {
+				_type = Token.INVALID_TYPE;
+				int ttype;
+				try {
+					ttype = interp.match(input, _mode);
+				}
+				catch (LexerNoViableAltException e) {
+					ttype = handleNoViableAlt(e);
+				}
+				CharStream currentInput = _input;
+				if (currentInput == input) {
+					if (input.position >= input.size) {
+						_hitEOF = true;
+					}
+				}
+				else {
+					if (currentInput.LA(1) == IntStream.EOF) {
+						_hitEOF = true;
+					}
+					if (_type == Token.INVALID_TYPE) {
+						_type = ttype;
+					}
+					if (_type == SKIP) {
+						if (currentInput instanceof CodePointCharStream) {
+							input = (CodePointCharStream) currentInput;
+							continue outer;
+						}
+						return nextTokenGeneric(currentInput);
+					}
+					if (_type == MORE) {
+						if (currentInput instanceof CodePointCharStream) {
+							input = (CodePointCharStream) currentInput;
+							continue;
+						}
+						return finishMoreGeneric(currentInput, interp);
+					}
+					break;
+				}
+				if (_type == Token.INVALID_TYPE) {
+					_type = ttype;
+				}
+				if (_type == SKIP) {
+					continue outer;
+				}
+			} while (_type == MORE);
+			if (_token == null) {
+				emit();
+			}
+			return _token;
+		}
+	}
+
+	private Token finishMoreGeneric(final CharStream markedInput, final LexerATNSimulator interp) {
+		int tokenStartMarker = markedInput.mark();
+		try {
+			do {
+				_type = Token.INVALID_TYPE;
+				int ttype;
+				try {
+					ttype = interp.match(_input, _mode);
+				}
+				catch (LexerNoViableAltException e) {
+					ttype = handleNoViableAlt(e);
+				}
+				if (_input.LA(1) == IntStream.EOF) {
+					_hitEOF = true;
+				}
+				if (_type == Token.INVALID_TYPE) {
+					_type = ttype;
+				}
+				if (_type == SKIP) {
+					return nextToken();
+				}
+			} while (_type == MORE);
+			if (_token == null) {
+				emit();
+			}
+			return _token;
+		}
+		finally {
+			markedInput.release(tokenStartMarker);
+		}
+	}
+
+	private Token nextTokenGeneric(final CharStream markedInput) {
 		// Mark start location in char stream so unbuffered streams are
 		// guaranteed at least have text of current token
-		int tokenStartMarker = _input.mark();
-		try{
-			LexerATNSimulator interp = _interp;
+		int tokenStartMarker = markedInput.mark();
+		try {
+			final LexerATNSimulator interp = _interp;
 			outer:
 			while (true) {
 				if (_hitEOF) {
@@ -137,35 +250,40 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 				_text = null;
 				do {
 					_type = Token.INVALID_TYPE;
-//				System.out.println("nextToken line "+tokenStartLine+" at "+((char)input.LA(1))+
-//								   " in mode "+mode+
-//								   " at index "+input.index());
 					int ttype;
 					try {
 						ttype = interp.match(_input, _mode);
 					}
 					catch (LexerNoViableAltException e) {
-						notifyListeners(e);		// report error
-						recover(e);
-						ttype = SKIP;
+						ttype = handleNoViableAlt(e);
 					}
-					if ( _input.LA(1)==IntStream.EOF ) {
+					if (_input.LA(1) == IntStream.EOF) {
 						_hitEOF = true;
 					}
-					if ( _type == Token.INVALID_TYPE ) _type = ttype;
-					if ( _type ==SKIP ) {
+					if (_type == Token.INVALID_TYPE) {
+						_type = ttype;
+					}
+					if (_type == SKIP) {
 						continue outer;
 					}
-				} while ( _type ==MORE );
-				if ( _token == null ) emit();
+				} while (_type == MORE);
+				if (_token == null) {
+					emit();
+				}
 				return _token;
 			}
 		}
 		finally {
 			// make sure we release marker after match or
 			// unbuffered char stream will keep buffering
-			_input.release(tokenStartMarker);
+			markedInput.release(tokenStartMarker);
 		}
+	}
+
+	private int handleNoViableAlt(LexerNoViableAltException e) {
+		notifyListeners(e); // report error
+		recover(e);
+		return SKIP;
 	}
 
 	/** Instruct the lexer to skip creating a token for current lexer rule
@@ -214,7 +332,7 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 		validateInputStream(getInterpreter().atn, input);
 
 		this._input = null;
-		this._tokenFactorySourcePair = Tuple.create(this, _input);
+		this._tokenFactorySourcePair = CommonToken.EMPTY_SOURCE;
 		reset();
 		this._input = input;
 		this._tokenFactorySourcePair = Tuple.create(this, _input);
@@ -258,8 +376,23 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 	 *  custom Token objects or provide a new factory.
 	 */
 	public Token emit() {
-		Token t = _factory.create(_tokenFactorySourcePair, _type, _text, _channel, _tokenStartCharIndex, getCharIndex()-1,
-								  _tokenStartLine, _tokenStartCharPositionInLine);
+		Token t;
+		if (_factory == CommonTokenFactory.DEFAULT) {
+			// PERF: Bypass invokeinterface TokenFactory.create -> covariant bridge ->
+			// CommonTokenFactory.create (2 stack frames off the MaxInlineLevel cliff),
+			// while still honoring getCharIndex() overrides via HotSpot CHA inlining.
+			CommonToken ct = new CommonToken(_tokenFactorySourcePair, _type, _channel,
+				_tokenStartCharIndex, getCharIndex() - 1,
+				_tokenStartLine, _tokenStartCharPositionInLine);
+			if (_text != null) {
+				ct.text = _text;
+			}
+			t = ct;
+		}
+		else {
+			t = _factory.create(_tokenFactorySourcePair, _type, _text, _channel, _tokenStartCharIndex, getCharIndex() - 1,
+				_tokenStartLine, _tokenStartCharPositionInLine);
+		}
 		emit(t);
 		return t;
 	}
@@ -267,8 +400,16 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 	public Token emitEOF() {
 		int cpos = getCharPositionInLine();
 		int line = getLine();
-		Token eof = _factory.create(_tokenFactorySourcePair, Token.EOF, null, Token.DEFAULT_CHANNEL, _input.index(), _input.index()-1,
-									line, cpos);
+		int idx = _input instanceof CodePointCharStream
+			? ((CodePointCharStream) _input).position
+			: _input.index();
+		Token eof;
+		if (_factory == CommonTokenFactory.DEFAULT) {
+			eof = new CommonToken(_tokenFactorySourcePair, Token.EOF, Token.DEFAULT_CHANNEL, idx, idx - 1, line, cpos);
+		}
+		else {
+			eof = _factory.create(_tokenFactorySourcePair, Token.EOF, null, Token.DEFAULT_CHANNEL, idx, idx - 1, line, cpos);
+		}
 		emit(eof);
 		return eof;
 	}

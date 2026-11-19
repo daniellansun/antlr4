@@ -68,6 +68,91 @@ public class CommonTokenStream extends BufferedTokenStream {
     }
 
 	@Override
+	public void seek(int index) {
+		if (getClass() == CommonTokenStream.class && tokens == fastTokens && p >= 0 && index >= 0 && index < fastTokens.size) {
+			if (index == p) {
+				if (cachedLT1 == null) {
+					cachedLT1 = fastTokens.getFast(p);
+				}
+				return;
+			}
+			Token t = fastTokens.getFast(index);
+			if (t.getChannel() == channel || t.getType() == EOF) {
+				p = index;
+				cachedLT1 = t;
+				cachedLTMinus1 = null;
+				return;
+			}
+		}
+		super.seek(index);
+	}
+
+	@Override
+	public void consume() {
+		if (getClass() == CommonTokenStream.class && tokens == fastTokens) {
+			Token current = cachedLT1;
+			if (current != null) {
+				if (current.getType() == EOF) {
+					throw new IllegalStateException("cannot consume EOF");
+				}
+				final TokenList list = fastTokens;
+				final int next = p + 1;
+				int sz = list.size;
+				final int ch = this.channel;
+				if (next < sz) {
+					Token t = list.getFast(next);
+					if (t.getChannel() == ch || t.getType() == EOF) {
+						p = next;
+						cachedLTMinus1 = current;
+						cachedLT1 = t;
+						return;
+					}
+				}
+				else if (next == sz && !fetchedEOF) {
+					// Fused frontier fetch: pulls directly from tokenSource into
+					// TokenList until an on-channel token or EOF arrives, avoiding
+					// sync/fetch/adjustSeekIndex/nextTokenOnChannel call frames.
+					final TokenSource src = tokenSource;
+					while (true) {
+						Token t = src.nextToken();
+						int type;
+						int tokCh;
+						if (t.getClass() == CommonToken.class) {
+							CommonToken ct = (CommonToken) t;
+							ct.index = sz;
+							type = ct.type;
+							tokCh = ct.channel;
+						}
+						else {
+							if (t instanceof WritableToken) {
+								((WritableToken) t).setTokenIndex(sz);
+							}
+							type = t.getType();
+							tokCh = t.getChannel();
+						}
+						list.appendFast(t);
+						if (type == EOF) {
+							fetchedEOF = true;
+							p = sz;
+							cachedLTMinus1 = current;
+							cachedLT1 = t;
+							return;
+						}
+						if (tokCh == ch) {
+							p = sz;
+							cachedLTMinus1 = current;
+							cachedLT1 = t;
+							return;
+						}
+						sz++;
+					}
+				}
+			}
+		}
+		super.consume();
+	}
+
+	@Override
 	protected int adjustSeekIndex(int i) {
 		return nextTokenOnChannel(i, channel);
 	}
@@ -85,15 +170,33 @@ public class CommonTokenStream extends BufferedTokenStream {
             n++;
         }
         if ( i<0 ) return null;
-        return tokens.get(i);
+        return tokens == fastTokens ? fastTokens.getFast(i) : tokens.get(i);
     }
 
     @Override
     public Token LT(int k) {
-		// PERF: LT(1)/LA(1)/enterRule/match — hit the base cachedLT1 path when
-		// the cursor is already on-channel (always true after adjustSeekIndex).
+		// PERF: Keep LT(1) <= 35B (HotSpot MaxInlineSize) without chaining
+		// through super.LT(1), and split the rare k==1 cache-miss path
+		// (ltOneSlow) from k!=1 (ltCommonSlow) so constant LT(1) call sites
+		// dead-code-eliminate ltCommonSlow and never inline 160B+ of slow IR.
 		if (k == 1) {
-			return super.LT(1);
+			Token t = cachedLT1;
+			if (t != null) {
+				return t;
+			}
+			return ltOneSlow();
+		}
+		return ltCommonSlow(k);
+	}
+
+	private Token ltCommonSlow(int k) {
+		if (getClass() == CommonTokenStream.class) {
+			if (k == -1 && cachedLTMinus1 != null) {
+				return cachedLTMinus1;
+			}
+			if (k > 1 && p >= 0 && tokens == fastTokens && p < fastTokens.size) {
+				return ltForwardFast(k);
+			}
 		}
         //System.out.println("enter LT("+k+")");
         lazyInit();
@@ -110,8 +213,79 @@ public class CommonTokenStream extends BufferedTokenStream {
             n++;
         }
 //		if ( i>range ) range = i;
-        return tokens.get(i);
+        return tokens == fastTokens ? fastTokens.getFast(i) : tokens.get(i);
     }
+
+	/**
+	 * Fast forward lookahead ({@code k > 1}) for base {@link CommonTokenStream}:
+	 * walks already-buffered tokens in {@link #fastTokens} directly without
+	 * {@code lazyInit}/{@code sync}/{@code nextTokenOnChannel} frames, and fuses
+	 * unbuffered frontier fetches directly from {@link #tokenSource}.
+	 */
+	private Token ltForwardFast(int k) {
+		final TokenList list = fastTokens;
+		final int ch = this.channel;
+		int sz = list.size;
+		int i = p;
+		int n = 1;
+		while (n < k) {
+			int j = i + 1;
+			while (j < sz) {
+				Token t = list.getFast(j);
+				int type = t.getType();
+				if (type == EOF) {
+					return t;
+				}
+				if (t.getChannel() == ch) {
+					i = j;
+					n++;
+					if (n == k) {
+						return t;
+					}
+					break;
+				}
+				j++;
+			}
+			if (j >= sz) {
+				if (fetchedEOF) {
+					return list.getFast(i);
+				}
+				final TokenSource src = tokenSource;
+				while (n < k) {
+					Token t = src.nextToken();
+					int type;
+					int tokCh;
+					if (t.getClass() == CommonToken.class) {
+						CommonToken ct = (CommonToken) t;
+						ct.index = sz;
+						type = ct.type;
+						tokCh = ct.channel;
+					}
+					else {
+						if (t instanceof WritableToken) {
+							((WritableToken) t).setTokenIndex(sz);
+						}
+						type = t.getType();
+						tokCh = t.getChannel();
+					}
+					list.appendFast(t);
+					sz++;
+					if (type == EOF) {
+						fetchedEOF = true;
+						return t;
+					}
+					if (tokCh == ch) {
+						i = sz - 1;
+						n++;
+						if (n == k) {
+							return t;
+						}
+					}
+				}
+			}
+		}
+		return list.getFast(i);
+	}
 
 	/** Count EOF just once. */
 	public int getNumberOfOnChannelTokens() {

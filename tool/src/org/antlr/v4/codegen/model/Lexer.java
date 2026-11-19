@@ -13,6 +13,7 @@ import org.antlr.v4.tool.Rule;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public class Lexer extends Recognizer {
@@ -22,6 +23,13 @@ public class Lexer extends Recognizer {
 
 	@ModelElement public LinkedHashMap<Rule, RuleActionFunction> actionFuncs =
 		new LinkedHashMap<Rule, RuleActionFunction>();
+
+	/**
+	 * Flat dense {@code switch (actionIndex)} cases populated when all lexer
+	 * action indices across rules are globally unique, avoiding nested
+	 * {@code switch (ruleIndex)} + per-rule wrapper methods.
+	 */
+	@ModelElement public List<FlatActionCase> flatActions;
 
 	public Lexer(OutputModelFactory factory, LexerFile file) {
 		super(factory);

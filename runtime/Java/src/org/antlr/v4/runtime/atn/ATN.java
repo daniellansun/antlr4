@@ -10,6 +10,7 @@ import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.RuleContext;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.dfa.DFA;
+import org.antlr.v4.runtime.dfa.DFAState;
 import org.antlr.v4.runtime.misc.Args;
 import org.antlr.v4.runtime.misc.IntervalSet;
 import org.antlr.v4.runtime.misc.NotNull;
@@ -129,11 +130,25 @@ public class ATN {
 	private static final int MAX_PRECEDENCE_LL1_STRIDE = 4096;
 
 	/**
+	 * Per-decision precedence LL(1) table holding the flat {@code short[]}
+	 * array together with its {@code stride}, avoiding an integer division by
+	 * {@code MAX_PRECEDENCE_LL1 + 1} on every hot precedence lookup.
+	 * Package-private; never exposed on any public or protected API.
+	 */
+	static final class PrecedenceTable {
+		final short[] data;
+		final int stride;
+
+		PrecedenceTable(short[] data, int stride) {
+			this.data = data;
+			this.stride = stride;
+		}
+	}
+
+	/**
 	 * Per-decision precedence LL(1) answers. For decision {@code d},
-	 * {@code precedenceLL1[d][precedence * stride + token]} is the
-	 * alternative, and zero is a miss. {@code stride} is
-	 * {@code table.length / (MAX_PRECEDENCE_LL1 + 1)} so a lookup does not
-	 * re-read {@link #ll1Stride}.
+	 * {@code precedenceLL1[d].data[precedence * stride + token]} is the
+	 * alternative, and zero is a miss.
 	 *
 	 * <p>Filled only when a precedence decision accepts without consuming
 	 * input and without semantic context, which is the steady state of
@@ -143,10 +158,20 @@ public class ATN {
 	 * the JVM); a racing reader may still observe zero and take the DFA.
 	 * Cleared by {@link #clearDFA()}.</p>
 	 */
-	volatile short[][] precedenceLL1;
+	volatile PrecedenceTable[] precedenceLL1;
 
 	/** Publish guard for {@link #precedenceLL1}. Lookups do not take it. */
 	private final Object precedenceLL1Lock = new Object();
+
+	/**
+	 * Per-mode cache of predicate-guarded ASCII lexer DFA edges, or {@code null}
+	 * for parser ATNs and lexers that never suppress a DFA edge on a predicate.
+	 * Package-private; cleared by {@link #clearDFA()}.
+	 */
+	volatile LexerPredEdgeTable[] modeToPredEdges;
+
+	/** Publish guard for {@link #modeToPredEdges}. Lookups do not take it. */
+	private final Object modeToPredEdgesLock = new Object();
 
 	/**
 	 * LL(1) prediction cache exposed as a JDK {@link ConcurrentMap} so
@@ -222,8 +247,59 @@ public class ATN {
 		contextCache.clear();
 		// Clears the single primitive store (LL1Table is a view over ll1Cache).
 		ll1Cache.clear();
-		precedenceLL1 = null;
+		synchronized (precedenceLL1Lock) {
+			precedenceLL1 = null;
+		}
+		synchronized (modeToPredEdgesLock) {
+			modeToPredEdges = null;
+		}
 		ensureLl1Dense(decisionCount);
+	}
+
+	/**
+	 * Returns the predicate-edge table for lexer {@code mode} if one exists and
+	 * still matches {@code ds0}; otherwise {@code null}. Lock-free on reads.
+	 */
+	@Nullable
+	LexerPredEdgeTable getLexerPredEdgeTable(int mode, @NotNull DFAState ds0) {
+		LexerPredEdgeTable[] tables = modeToPredEdges;
+		if (tables == null || mode < 0 || mode >= tables.length) {
+			return null;
+		}
+		LexerPredEdgeTable table = tables[mode];
+		return table != null && table.dfaS0 == ds0 ? table : null;
+	}
+
+	/**
+	 * Returns or creates the predicate-edge table for lexer {@code mode} bound
+	 * to {@code ds0}. Publishes via copy-on-write so lock-free readers always
+	 * observe a fully initialized table with proper JMM happens-before.
+	 */
+	@NotNull
+	LexerPredEdgeTable getOrCreateLexerPredEdgeTable(int mode, @NotNull DFAState ds0) {
+		LexerPredEdgeTable existing = getLexerPredEdgeTable(mode, ds0);
+		if (existing != null) {
+			return existing;
+		}
+		synchronized (modeToPredEdgesLock) {
+			LexerPredEdgeTable[] tables = modeToPredEdges;
+			if (tables != null && mode < tables.length) {
+				LexerPredEdgeTable current = tables[mode];
+				if (current != null && current.dfaS0 == ds0) {
+					return current;
+				}
+			}
+			int modeCount = Math.max(modeToDFA.length, mode + 1);
+			int nextLen = tables != null ? Math.max(tables.length, modeCount) : modeCount;
+			LexerPredEdgeTable[] next = new LexerPredEdgeTable[nextLen];
+			if (tables != null) {
+				System.arraycopy(tables, 0, next, 0, tables.length);
+			}
+			LexerPredEdgeTable table = new LexerPredEdgeTable(ds0);
+			next[mode] = table;
+			modeToPredEdges = next;
+			return table;
+		}
 	}
 
 	/**
@@ -231,23 +307,20 @@ public class ATN {
 	 * or {@link #INVALID_ALT_NUMBER} on a miss.
 	 */
 	final int cachedPrecedenceAlt(int decision, int precedence, int token) {
-		short[][] tables = precedenceLL1;
+		PrecedenceTable[] tables = precedenceLL1;
 		if (tables == null || decision < 0 || decision >= tables.length) {
 			return INVALID_ALT_NUMBER;
 		}
-		short[] table = tables[decision];
-		if (table == null || precedence < 0 || precedence > MAX_PRECEDENCE_LL1 || token < 0) {
+		PrecedenceTable table = tables[decision];
+		if (table == null || precedence < 0 || precedence > MAX_PRECEDENCE_LL1 || token < 0 || token >= table.stride) {
 			return INVALID_ALT_NUMBER;
 		}
-		int stride = table.length / (MAX_PRECEDENCE_LL1 + 1);
-		if (stride <= 0 || token >= stride) {
+		int idx = precedence * table.stride + token;
+		short[] data = table.data;
+		if (idx >= data.length) {
 			return INVALID_ALT_NUMBER;
 		}
-		int idx = precedence * stride + token;
-		if (idx >= table.length) {
-			return INVALID_ALT_NUMBER;
-		}
-		return table[idx];
+		return data[idx];
 	}
 
 	/**
@@ -268,24 +341,24 @@ public class ATN {
 		}
 		int slots = (MAX_PRECEDENCE_LL1 + 1) * stride;
 		synchronized (precedenceLL1Lock) {
-			short[][] tables = precedenceLL1;
+			PrecedenceTable[] tables = precedenceLL1;
 			int width = decisionToDFA == null ? 0 : decisionToDFA.length;
 			if (tables == null || decision >= tables.length) {
 				int n = Math.max(decision + 1, width);
-				short[][] grow = new short[n][];
+				PrecedenceTable[] grow = new PrecedenceTable[n];
 				if (tables != null) {
 					System.arraycopy(tables, 0, grow, 0, tables.length);
 				}
 				tables = grow;
 			}
-			short[] table = tables[decision];
-			if (table == null || table.length != slots) {
-				table = new short[slots];
+			PrecedenceTable table = tables[decision];
+			if (table == null || table.stride != stride || table.data.length != slots) {
+				table = new PrecedenceTable(new short[slots], stride);
 				tables[decision] = table;
 			}
 			int idx = precedence * stride + token;
-			if (table[idx] == 0) {
-				table[idx] = (short) alt;
+			if (table.data[idx] == 0) {
+				table.data[idx] = (short) alt;
 			}
 			// Volatile store after the short write. A lookup that sees this
 			// reference also sees the table and the alternative.
@@ -361,7 +434,14 @@ public class ATN {
 	}
 
 	public PredictionContext getCachedContext(PredictionContext context) {
-		return PredictionContext.getCachedContext(context, contextCache, new PredictionContext.IdentityHashMap());
+		if (context.isEmpty()) {
+			return context;
+		}
+		PredictionContext existing = contextCache.get(context);
+		if (existing != null) {
+			return existing;
+		}
+		return PredictionContext.getCachedContextInternal(context, contextCache);
 	}
 
 	public final DFA[] getDecisionToDFA() {
@@ -389,10 +469,12 @@ public class ATN {
      */
 	@NotNull
     public IntervalSet nextTokens(@NotNull ATNState s) {
-        if ( s.nextTokenWithinRule != null ) return s.nextTokenWithinRule;
-        s.nextTokenWithinRule = nextTokens(s, PredictionContext.EMPTY_LOCAL);
-        s.nextTokenWithinRule.setReadonly(true);
-        return s.nextTokenWithinRule;
+        IntervalSet existing = s.nextTokenWithinRule;
+        if ( existing != null ) return existing;
+        IntervalSet next = nextTokens(s, PredictionContext.EMPTY_LOCAL);
+        next.setReadonly(true);
+        s.nextTokenWithinRule = next;
+        return next;
     }
 
 	public void addState(@Nullable ATNState state) {

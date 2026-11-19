@@ -130,12 +130,14 @@ final class ReachComputation {
 				List<ATNConfig> skippedStopStates = null;
 
 				final int configCount = configs.size();
+				final boolean directClosure = simulator.useDirectClosure;
+				final int maxTokenType = simulator.atn.maxTokenType;
 				for (int ci = 0; ci < configCount; ci++) {
 					ATNConfig c = configs.get(ci);
 					/*if ( debug ) System.out.println("testing "+getTokenName(t)+" at "+c.toString());*/
 
 					ATNState cState = c.getState();
-					if (cState.getStateType() == ATNState.RULE_STOP) {
+					if (cState.stateType == ATNState.RULE_STOP) {
 						assert c.getContext().isEmpty();
 						if (useContext && !c.getReachesIntoOuterContext() || t == IntStream.EOF) {
 							if (skippedStopStates == null) {
@@ -152,9 +154,27 @@ final class ReachComputation {
 					int n = frozen != null ? frozen.length : cState.getNumberOfOptimizedTransitions();
 					for (int ti = 0; ti < n; ti++) {               // for each optimized transition
 						Transition trans = frozen != null ? frozen[ti] : cState.getOptimizedTransition(ti);
-						ATNState target = simulator.getReachableTarget(c, trans, t);
+						ATNState target;
+						if (directClosure) {
+							if (trans.epsilon) {
+								continue;
+							}
+							int stype = trans.serializationType;
+							if (stype == Transition.ATOM) {
+								target = ((AtomTransition) trans).label == t ? trans.target : null;
+							}
+							else if (stype == Transition.SET) {
+								target = ((SetTransition) trans).set.contains(t) ? trans.target : null;
+							}
+							else {
+								target = trans.matches(t, 0, maxTokenType) ? trans.target : null;
+							}
+						}
+						else {
+							target = simulator.getReachableTarget(c, trans, t);
+						}
 						if (target != null) {
-							intermediate.add(c.transform(target, false), contextCache);
+							intermediate.add(directClosure ? c.transformParser(target) : c.transform(target, false), contextCache);
 						}
 					}
 				}
@@ -180,7 +200,13 @@ final class ReachComputation {
 				 */
 				final boolean collectPredicates = false;
 				boolean treatEofAsEpsilon = t == Token.EOF;
-				simulator.closure(intermediate, reach, collectPredicates, hasMoreContext, contextCache, treatEofAsEpsilon);
+				if (directClosure) {
+					simulator.epsilonClosure().close(intermediate, reach, collectPredicates, hasMoreContext,
+						contextCache != null ? contextCache : PredictionContextCache.UNCACHED, treatEofAsEpsilon);
+				}
+				else {
+					simulator.closure(intermediate, reach, collectPredicates, hasMoreContext, contextCache, treatEofAsEpsilon);
+				}
 				stepIntoGlobal = reach.getDipsIntoOuterContext();
 
 				if (t == IntStream.EOF) {

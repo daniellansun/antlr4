@@ -101,10 +101,13 @@ public class ArrayPredictionContext extends PredictionContext {
 
 	@Override
 	public PredictionContext appendContext(PredictionContext suffix, PredictionContextCache contextCache) {
-		return appendContext(this, suffix, new PredictionContext.IdentityHashMap());
+		if (contextCache == null) {
+			contextCache = PredictionContextCache.UNCACHED;
+		}
+		return appendContext(this, suffix, new PredictionContext.IdentityHashMap(), contextCache);
 	}
 
-	private static PredictionContext appendContext(PredictionContext context, PredictionContext suffix, PredictionContext.IdentityHashMap visited) {
+	private static PredictionContext appendContext(PredictionContext context, PredictionContext suffix, PredictionContext.IdentityHashMap visited, PredictionContextCache contextCache) {
 		if (suffix.isEmpty()) {
 			if (isEmptyLocal(suffix)) {
 				if (context.hasEmpty()) {
@@ -139,7 +142,7 @@ public class ArrayPredictionContext extends PredictionContext {
 				}
 
 				for (int i = 0; i < parentCount; i++) {
-					updatedParents[i] = appendContext(context.getParent(i), suffix, visited);
+					updatedParents[i] = appendContext(context.getParent(i), suffix, visited, contextCache);
 				}
 
 				if (updatedParents.length == 1) {
@@ -151,7 +154,7 @@ public class ArrayPredictionContext extends PredictionContext {
 				}
 
 				if (context.hasEmpty()) {
-					result = PredictionContext.join(result, suffix);
+					result = PredictionContext.join(result, suffix, contextCache);
 				}
 			}
 
@@ -175,6 +178,27 @@ public class ArrayPredictionContext extends PredictionContext {
 		}
 
 		ArrayPredictionContext other = (ArrayPredictionContext)o;
+		if (!Arrays.equals(this.returnStates, other.returnStates)) {
+			return false;
+		}
+		// Zero-allocation fast path: interned parent graphs typically share
+		// identical references, or differ in a child hashCode before recursing.
+		PredictionContext[] p1 = this.parents;
+		PredictionContext[] p2 = other.parents;
+		boolean allSameRef = true;
+		for (int i = 0; i < p1.length; i++) {
+			PredictionContext a = p1[i];
+			PredictionContext b = p2[i];
+			if (a != b) {
+				if (a.hashCode() != b.hashCode()) {
+					return false;
+				}
+				allSameRef = false;
+			}
+		}
+		if (allSameRef) {
+			return true;
+		}
 		return equals(other, new HashSet<>());
 	}
 

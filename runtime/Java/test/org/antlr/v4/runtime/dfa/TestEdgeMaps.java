@@ -439,7 +439,7 @@ public class TestEdgeMaps {
 		assertTrue(direct.isDirectIndex());
 		assertTrue(direct.tableLength() > 40);
 		assertSame(direct.directArray(), direct.directArray());
-		assertEquals(direct.tableLength(), direct.directArray().length);
+		assertEquals(direct.tableLength(), direct.directArray().length());
 		for (int i = 1; i <= 40; i++) {
 			assertEquals("v" + i, direct.get(i));
 			assertEquals(direct.get(i), direct.getDirect(i));

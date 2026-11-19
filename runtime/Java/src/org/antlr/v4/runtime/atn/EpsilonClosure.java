@@ -6,6 +6,7 @@
 
 package org.antlr.v4.runtime.atn;
 
+import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.dfa.DFA;
 import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
@@ -108,14 +109,22 @@ final class EpsilonClosure {
 
 		// Single ownership of cleanup: drop config-graph refs after work while
 		// keeping busy-set / ATNConfigSet capacity for the next close.
+		final boolean direct = simulator.useDirectClosure;
 		try {
 			if (collectPredicates) {
 				// Predicate path: follow rule transitions immediately (no BFS layer).
-				// Dispatch through simulator.closure so subclasses that override
-				// the recursive entry point still participate in every step.
-				// Index walk avoids Iterator allocation on the source set.
-				for (int i = 0; i < sourceSize; i++) {
-					simulator.closure(sourceConfigs.get(i), configs, null, closureBusy, true, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
+				// Base / non-overriding simulators recurse directly without virtual
+				// dispatch through simulator.closure / getEpsilonTarget; subclasses
+				// overriding those hooks still participate in every step.
+				if (direct) {
+					for (int i = 0; i < sourceSize; i++) {
+						closeOneDirect(sourceConfigs.get(i), configs, null, closureBusy, true, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
+					}
+				}
+				else {
+					for (int i = 0; i < sourceSize; i++) {
+						simulator.closure(sourceConfigs.get(i), configs, null, closureBusy, true, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
+					}
 				}
 				return;
 			}
@@ -129,8 +138,15 @@ final class EpsilonClosure {
 			next.clear();
 
 			while (true) {
-				for (int i = 0, n = current.size(); i < n; i++) {
-					simulator.closure(current.get(i), configs, next, closureBusy, false, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
+				if (direct) {
+					for (int i = 0, n = current.size(); i < n; i++) {
+						closeOneDirect(current.get(i), configs, next, closureBusy, false, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
+					}
+				}
+				else {
+					for (int i = 0, n = current.size(); i < n; i++) {
+						simulator.closure(current.get(i), configs, next, closureBusy, false, hasMoreContext, contextCache, 0, treatEofAsEpsilon);
+					}
 				}
 
 				if (next.isEmpty()) {
@@ -208,6 +224,268 @@ final class EpsilonClosure {
 	}
 
 	/**
+	 * Direct monomorphic epsilon-closure recursion used when no protected
+	 * closure / transition hook is overridden on {@link ParserATNSimulator}.
+	 * Reads cached {@link ATNState#stateType}, {@link Transition#epsilon}, and
+	 * {@link Transition#serializationType} directly, uses parser-only
+	 * {@link ATNConfig#transformParser} helpers (no lexer branches), and
+	 * outlines cold rule-stop/precedence/predicate helpers so this method stays
+	 * well below HotSpot's {@code DesiredMethodLimit}.
+	 */
+	private void closeOneDirect(@NotNull ATNConfig config,
+								@NotNull ATNConfigSet configs,
+								@Nullable ATNConfigSet intermediate,
+								@NotNull Set<ATNConfig> closureBusy,
+								boolean collectPredicates,
+								boolean hasMoreContexts,
+								@NotNull PredictionContextCache contextCache,
+								int depth,
+								boolean treatEofAsEpsilon)
+	{
+		final PredictionContext predictionContext = config.getContext();
+		ATNState configState = config.getState();
+		int stateType = configState.stateType;
+		if (stateType == ATNState.RULE_STOP) {
+			config = closeRuleStopDirect(config, configState, predictionContext, configs, intermediate,
+				closureBusy, collectPredicates, hasMoreContexts, contextCache, depth, treatEofAsEpsilon);
+			if (config == null) {
+				return;
+			}
+			configState = config.getState();
+			stateType = configState.stateType;
+		}
+
+		final ATNState p = configState;
+		if (!p.onlyHasEpsilonTransitions()) {
+			configs.add(config, contextCache);
+		}
+
+		final Transition[] frozen = p.frozenOptimizedTransitions();
+		final int n = frozen != null ? frozen.length : p.getNumberOfOptimizedTransitions();
+		final boolean configAtRuleStop = stateType == ATNState.RULE_STOP;
+		final boolean maybeSuppressPrecedenceEdge = n > 0
+			&& stateType == ATNState.STAR_LOOP_ENTRY
+			&& ((StarLoopEntryState) p).precedenceRuleDecision
+			&& !predictionContext.hasEmpty();
+
+		for (int i = 0; i < n; i++) {
+			if (i == 0 && maybeSuppressPrecedenceEdge
+				&& shouldSuppressPrecedenceEdge((StarLoopEntryState) p, predictionContext)) {
+				continue;
+			}
+
+			Transition t = frozen != null ? frozen[i] : p.getOptimizedTransition(i);
+			if (!treatEofAsEpsilon && !t.epsilon) {
+				continue;
+			}
+
+			final int transitionType = t.serializationType;
+			if (transitionType == Transition.EPSILON) {
+				ATNConfig c = config.transformParser(t.target);
+				int newDepth = depth;
+				if (configAtRuleStop) {
+					DFA dfa = simulator.getDfaForClosure();
+					if (dfa != null && dfa.isPrecedenceDfa()) {
+						int outermostPrecedenceReturn = ((EpsilonTransition) t).outermostPrecedenceReturn();
+						if (outermostPrecedenceReturn == dfa.atnStartState.ruleIndex) {
+							c.setPrecedenceFilterSuppressed(true);
+						}
+					}
+					c.setOuterContextDepth(c.getOuterContextDepth() + 1);
+					if (!closureBusy.add(c)) {
+						continue;
+					}
+					assert newDepth > Integer.MIN_VALUE;
+					newDepth--;
+				}
+				closeOneDirect(c, configs, intermediate, closureBusy, collectPredicates, hasMoreContexts, contextCache, newDepth, treatEofAsEpsilon);
+			}
+			else if (transitionType == Transition.RULE) {
+				RuleTransition ruleTransition = (RuleTransition) t;
+				PredictionContext configContext = config.getContext();
+				boolean optimizeTailCalls = simulator.optimize_tail_calls;
+				boolean tailCallPreservesSll = simulator.tail_call_preserves_sll;
+				boolean tailCall = optimizeTailCalls
+					&& ruleTransition.optimizedTailCall
+					&& (!tailCallPreservesSll || !PredictionContext.isEmptyLocal(configContext));
+				PredictionContext newContext = tailCall
+					? configContext
+					: contextCache.getChild(configContext, ruleTransition.followState.stateNumber);
+				ATNConfig c = config.transformParser(ruleTransition.target, newContext);
+				if (intermediate != null && !collectPredicates) {
+					intermediate.add(c, contextCache);
+					continue;
+				}
+				int newDepth = depth;
+				if (configAtRuleStop) {
+					c.setOuterContextDepth(c.getOuterContextDepth() + 1);
+					if (!closureBusy.add(c)) {
+						continue;
+					}
+					assert newDepth > Integer.MIN_VALUE;
+					newDepth--;
+				}
+				else if (optimizeTailCalls && ruleTransition.optimizedTailCall
+					&& (!tailCallPreservesSll || !PredictionContext.isEmptyLocal(predictionContext))) {
+					assert c.getContext() == predictionContext;
+					if (newDepth == 0) {
+						newDepth--;
+						if (!tailCallPreservesSll && PredictionContext.isEmptyLocal(predictionContext)) {
+							c.setOuterContextDepth(c.getOuterContextDepth() + 1);
+						}
+					}
+				}
+				else if (newDepth >= 0) {
+					newDepth++;
+				}
+				closeOneDirect(c, configs, intermediate, closureBusy, collectPredicates, hasMoreContexts, contextCache, newDepth, treatEofAsEpsilon);
+			}
+			else {
+				closeRareTransitionDirect(config, t, transitionType, configAtRuleStop,
+					configs, intermediate, closureBusy, collectPredicates, hasMoreContexts, contextCache, depth, treatEofAsEpsilon);
+			}
+		}
+	}
+
+	@Nullable
+	private ATNConfig closeRuleStopDirect(@NotNull ATNConfig config,
+										  @NotNull ATNState configState,
+										  @NotNull PredictionContext predictionContext,
+										  @NotNull ATNConfigSet configs,
+										  @Nullable ATNConfigSet intermediate,
+										  @NotNull Set<ATNConfig> closureBusy,
+										  boolean collectPredicates,
+										  boolean hasMoreContexts,
+										  @NotNull PredictionContextCache contextCache,
+										  int depth,
+										  boolean treatEofAsEpsilon)
+	{
+		if (!predictionContext.isEmpty()) {
+			final ATN atn = simulator.atn;
+			boolean hasEmpty = predictionContext.hasEmpty();
+			int nonEmptySize = predictionContext.size() - (hasEmpty ? 1 : 0);
+			final int alt = config.getAlt();
+			final SemanticContext semanticContext = config.getSemanticContext();
+			final int outerContextDepth = config.getOuterContextDepth();
+			final boolean precedenceFilterSuppressed = config.isPrecedenceFilterSuppressed();
+			for (int i = 0; i < nonEmptySize; i++) {
+				PredictionContext newContext = predictionContext.getParent(i);
+				ATNState returnState = atn.getCachedState(predictionContext.getReturnState(i));
+				ATNConfig c = ATNConfig.create(returnState, alt, newContext, semanticContext);
+				c.setOuterContextDepth(outerContextDepth);
+				c.setPrecedenceFilterSuppressed(precedenceFilterSuppressed);
+				assert depth > Integer.MIN_VALUE;
+				closeOneDirect(c, configs, intermediate, closureBusy, collectPredicates, hasMoreContexts, contextCache, depth - 1, treatEofAsEpsilon);
+			}
+
+			if (!hasEmpty || !hasMoreContexts) {
+				return null;
+			}
+
+			return config.transformParser(configState, PredictionContext.EMPTY_LOCAL);
+		}
+		else if (!hasMoreContexts) {
+			configs.add(config, contextCache);
+			return null;
+		}
+		else {
+			if (predictionContext == PredictionContext.EMPTY_FULL) {
+				return config.transformParser(configState, PredictionContext.EMPTY_LOCAL);
+			}
+			else if (!config.getReachesIntoOuterContext() && PredictionContext.isEmptyLocal(predictionContext)) {
+				configs.add(config, contextCache);
+			}
+			return config;
+		}
+	}
+
+	private static boolean shouldSuppressPrecedenceEdge(@NotNull StarLoopEntryState precedenceDecision,
+														@NotNull PredictionContext predictionContext)
+	{
+		for (int j = 0, predictionContextSize = predictionContext.size(); j < predictionContextSize; j++) {
+			if (!precedenceDecision.precedenceLoopbackStates.get(predictionContext.getReturnState(j))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private void closeRareTransitionDirect(@NotNull ATNConfig config,
+										   @NotNull Transition t,
+										   int transitionType,
+										   boolean configAtRuleStop,
+										   @NotNull ATNConfigSet configs,
+										   @Nullable ATNConfigSet intermediate,
+										   @NotNull Set<ATNConfig> closureBusy,
+										   boolean collectPredicates,
+										   boolean hasMoreContexts,
+										   @NotNull PredictionContextCache contextCache,
+										   int depth,
+										   boolean treatEofAsEpsilon)
+	{
+		final boolean inContext = depth == 0;
+		boolean continueCollecting = collectPredicates;
+		ATNConfig c;
+		switch (transitionType) {
+		case Transition.PREDICATE: {
+			PredicateTransition pt = (PredicateTransition) t;
+			if (collectPredicates && (!pt.isCtxDependent || inContext)) {
+				SemanticContext newSemCtx = SemanticContext.and(config.getSemanticContext(), pt.getPredicate());
+				c = config.transformParser(pt.target, newSemCtx);
+			}
+			else {
+				c = config.transformParser(pt.target);
+			}
+			break;
+		}
+
+		case Transition.ACTION:
+			continueCollecting = false;
+			c = config.transformParser(t.target);
+			break;
+
+		case Transition.PRECEDENCE: {
+			PrecedencePredicateTransition pt = (PrecedencePredicateTransition) t;
+			if (collectPredicates && inContext) {
+				SemanticContext newSemCtx = SemanticContext.and(config.getSemanticContext(), pt.getPredicate());
+				c = config.transformParser(pt.target, newSemCtx);
+			}
+			else {
+				c = config.transformParser(pt.target);
+			}
+			break;
+		}
+
+		case Transition.ATOM:
+		case Transition.RANGE:
+		case Transition.SET:
+			if (treatEofAsEpsilon && t.matches(Token.EOF, 0, 1)) {
+				c = config.transformParser(t.target);
+				break;
+			}
+			return;
+
+		default:
+			return;
+		}
+
+		int newDepth = depth;
+		if (configAtRuleStop) {
+			c.setOuterContextDepth(c.getOuterContextDepth() + 1);
+			if (!closureBusy.add(c)) {
+				return;
+			}
+			assert newDepth > Integer.MIN_VALUE;
+			newDepth--;
+		}
+		else if (!t.epsilon && !closureBusy.add(c)) {
+			return;
+		}
+
+		closeOneDirect(c, configs, intermediate, closureBusy, continueCollecting, hasMoreContexts, contextCache, newDepth, treatEofAsEpsilon);
+	}
+
+	/**
 	 * Recursive helper: walk epsilon edges from {@code config}, adding leaf
 	 * configurations to {@code configs} and optionally deferring rule
 	 * transitions to {@code intermediate} for breadth-first processing.
@@ -227,6 +505,13 @@ final class EpsilonClosure {
 				  int depth,
 				  boolean treatEofAsEpsilon)
 	{
+		if (contextCache == null) {
+			contextCache = PredictionContextCache.UNCACHED;
+		}
+		if (simulator.useDirectClosure) {
+			closeOneDirect(config, configs, intermediate, closureBusy, collectPredicates, hasMoreContexts, contextCache, depth, treatEofAsEpsilon);
+			return;
+		}
 		final ATN atn = simulator.atn;
 		final DFA dfa = simulator.getDfaForClosure();
 		final boolean optimizeTailCalls = simulator.optimize_tail_calls;
@@ -237,7 +522,8 @@ final class EpsilonClosure {
 		// for precedence suppression and tail-call decisions (existing semantics).
 		final PredictionContext predictionContext = config.getContext();
 		ATNState configState = config.getState();
-		if (configState.getStateType() == ATNState.RULE_STOP) {
+		int stateType = configState.stateType;
+		if (stateType == ATNState.RULE_STOP) {
 			// We hit rule end. If we have context info, use it
 			if (!predictionContext.isEmpty()) {
 				boolean hasEmpty = predictionContext.hasEmpty();
@@ -265,6 +551,7 @@ final class EpsilonClosure {
 
 				config = config.transform(configState, PredictionContext.EMPTY_LOCAL, false);
 				configState = config.getState();
+				stateType = configState.stateType;
 			}
 			else if (!hasMoreContexts) {
 				configs.add(config, contextCache);
@@ -276,6 +563,7 @@ final class EpsilonClosure {
 					// no need to keep full context overhead when we step out
 					config = config.transform(configState, PredictionContext.EMPTY_LOCAL, false);
 					configState = config.getState();
+					stateType = configState.stateType;
 				}
 				else if (!config.getReachesIntoOuterContext() && PredictionContext.isEmptyLocal(predictionContext)) {
 					// add stop state when leaving decision rule for the first time
@@ -295,11 +583,11 @@ final class EpsilonClosure {
 		final Transition[] frozen = p.frozenOptimizedTransitions();
 		final int n = frozen != null ? frozen.length : p.getNumberOfOptimizedTransitions();
 		final boolean inContext = depth == 0;
-		final boolean configAtRuleStop = p.getStateType() == ATNState.RULE_STOP;
+		final boolean configAtRuleStop = stateType == ATNState.RULE_STOP;
 		// Hoist precedence-DFA suppress check operands; the suppress block only
 		// applies to the first outgoing edge of a precedence star-loop entry.
 		final boolean maybeSuppressPrecedenceEdge = n > 0
-			&& p.getStateType() == ATNState.STAR_LOOP_ENTRY
+			&& stateType == ATNState.STAR_LOOP_ENTRY
 			&& ((StarLoopEntryState)p).precedenceRuleDecision
 			&& !predictionContext.hasEmpty();
 
@@ -330,13 +618,12 @@ final class EpsilonClosure {
 			Transition t = frozen != null ? frozen[i] : p.getOptimizedTransition(i);
 			// PERF: When EOF is not treated as epsilon, non-epsilon edges can
 			// never produce a closure target — skip getEpsilonTarget
-			// (common on mixed epsilon/consume states). Use the frozen
-			// {@link Transition#epsilon} flag on production ATNs.
-			if (!treatEofAsEpsilon && !t.isEpsilon()) {
+			// (common on mixed epsilon/consume states).
+			if (!treatEofAsEpsilon && !t.epsilon) {
 				continue;
 			}
 
-			final int transitionType = t.getSerializationType();
+			final int transitionType = t.serializationType;
 			boolean continueCollecting =
 				transitionType != Transition.ACTION && collectPredicates;
 			ATNConfig c = simulator.getEpsilonTarget(config, t, continueCollecting, inContext, contextCache, treatEofAsEpsilon);
@@ -395,7 +682,7 @@ final class EpsilonClosure {
 					}
 				}
 				else {
-					if (!t.isEpsilon() && !closureBusy.add(c)) {
+					if (!t.epsilon && !closureBusy.add(c)) {
 						// avoid infinite recursion for EOF* and EOF+
 						continue;
 					}

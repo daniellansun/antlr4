@@ -73,4 +73,48 @@ public abstract class Choice extends RuleElement {
 												IntervalSet expecting) {
 		return new ThrowNoViableAlt(factory, blkAST, expecting);
 	}
+
+	/**
+	 * Extracts the sole unlabeled non-EOF {@link MatchToken} when {@code alts}
+	 * contains a single alternative whose body reduces (through any empty
+	 * nested {@link CodeBlockForAlt} wrappers) to that token match alone.
+	 */
+	static MatchToken extractSingleTokenMatch(List<CodeBlockForAlt> alts) {
+		if (alts == null || alts.size() != 1) {
+			return null;
+		}
+		SrcOp cur = alts.get(0);
+		while (cur != null && cur.getClass() == CodeBlockForAlt.class) {
+			CodeBlockForAlt blk = (CodeBlockForAlt) cur;
+			if ((blk.locals != null && !blk.locals.isEmpty())
+					|| (blk.preamble != null && !blk.preamble.isEmpty())
+					|| blk.ops == null || blk.ops.isEmpty()) {
+				return null;
+			}
+			// DefaultOutputModelFactory.list(matchOp, null) places trailing nulls in ops.
+			SrcOp sole = null;
+			for (int i = 0, n = blk.ops.size(); i < n; i++) {
+				SrcOp op = blk.ops.get(i);
+				if (op == null) {
+					continue;
+				}
+				if (sole != null) {
+					return null;
+				}
+				sole = op;
+			}
+			if (sole == null) {
+				return null;
+			}
+			cur = sole;
+		}
+		if (cur != null && cur.getClass() == MatchToken.class) {
+			MatchToken mt = (MatchToken) cur;
+			if ((mt.labels == null || mt.labels.isEmpty()) && !mt.isEOF
+					&& mt.name != null && mt.ttype > 0) {
+				return mt;
+			}
+		}
+		return null;
+	}
 }

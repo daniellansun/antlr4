@@ -13,7 +13,6 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /**
@@ -84,13 +83,13 @@ public final class ArrayEdgeMap<T> extends AbstractEdgeMap<T> {
 
 		if (m instanceof HashEdgeMap<?>) {
 			HashEdgeMap<? extends T> other = (HashEdgeMap<? extends T>)m;
-			AtomicIntegerArray keys = other.getKeys();
-			T[] values = other.getValues();
+			int[] keys = other.getKeys();
+			AtomicReferenceArray<? extends T> values = other.getValues();
 			ArrayEdgeMap<T> result = this;
-			for (int i = 0; i < values.length; i++) {
-				T value = values[i];
+			for (int i = 0, len = values.length(); i < len; i++) {
+				T value = values.get(i);
 				if (value != null) {
-					result.put(keys.get(i), value);
+					result.put(keys[i], value);
 				}
 			}
 
