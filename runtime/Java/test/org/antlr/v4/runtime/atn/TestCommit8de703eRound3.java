@@ -110,9 +110,9 @@ public class TestCommit8de703eRound3 {
 		atn.ll1Dense = new short[4];
 		atn.ll1Stride = Integer.MAX_VALUE;
 		java.lang.reflect.Method tryLl1 = ParserATNSimulator.class
-			.getDeclaredMethod("tryLL1Prediction", org.antlr.v4.runtime.TokenStream.class, int.class);
+			.getDeclaredMethod("tryLL1Prediction", int.class, int.class);
 		tryLl1.setAccessible(true);
-		Object miss = tryLl1.invoke(sim, p.getInputStream(), 2);
+		Object miss = tryLl1.invoke(sim, p.getInputStream().LA(1), 2);
 		assertEquals(ATN.INVALID_ALT_NUMBER, ((Integer) miss).intValue());
 	}
 

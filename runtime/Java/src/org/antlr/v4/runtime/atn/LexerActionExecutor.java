@@ -28,6 +28,20 @@ import java.util.Arrays;
  * @since 4.2
  */
 public class LexerActionExecutor {
+	private static final byte MODE_SLOW = 0;
+	private static final byte MODE_SINGLE = 1;
+	private static final byte MODE_MULTI = 2;
+
+	private static final byte KIND_NONE = 0;
+	private static final byte KIND_SKIP = 1;
+	private static final byte KIND_MORE = 2;
+	private static final byte KIND_TYPE = 3;
+	private static final byte KIND_CHANNEL = 4;
+	private static final byte KIND_MODE = 5;
+	private static final byte KIND_PUSH_MODE = 6;
+	private static final byte KIND_POP_MODE = 7;
+	private static final byte KIND_CUSTOM = 8;
+
 	@NotNull
 	private final LexerAction[] lexerActions;
 	/**
@@ -37,6 +51,30 @@ public class LexerActionExecutor {
 	private final int hashCode;
 
 	/**
+	 * {@code true} iff at least one action in {@link #lexerActions} is
+	 * position-dependent and not already wrapped in a
+	 * {@link LexerIndexedCustomAction}. Allows {@link #fixOffsetBeforeMatch}
+	 * to return {@code this} in O(1) without scanning or megamorphic dispatch.
+	 */
+	private final boolean hasUnfixedPositionDependent;
+
+	/**
+	 * Compiled execution mode for built-in non-indexed {@link LexerAction}
+	 * sequences. Avoids megamorphic {@code invokeinterface} dispatch on
+	 * {@link LexerAction#isPositionDependent()} and {@link LexerAction#execute}
+	 * as well as redundant {@link IntStream#seek} / {@code try-finally} work
+	 * when no {@link LexerIndexedCustomAction} is present.
+	 */
+	private final byte fastMode;
+	private final byte singleKind;
+	private final int singleArg1;
+	private final int singleArg2;
+	private final byte[] actionKinds;
+	private final int[] actionArg1;
+	private final int[] actionArg2;
+	private final boolean hasMultipleCustomActions;
+
+	/**
 	 * Constructs an executor for a sequence of {@link LexerAction} actions.
 	 * @param lexerActions The lexer actions to execute.
 	 */
@@ -44,11 +82,131 @@ public class LexerActionExecutor {
 		this.lexerActions = lexerActions;
 
 		int hash = MurmurHash.initialize();
-		for (LexerAction lexerAction : lexerActions) {
+		boolean unfixedPosDep = false;
+		boolean allBuiltInNonIndexed = true;
+		int customCount = 0;
+		final int len = lexerActions.length;
+		for (int i = 0; i < len; i++) {
+			LexerAction lexerAction = lexerActions[i];
 			hash = MurmurHash.update(hash, lexerAction);
+			if (lexerAction.isPositionDependent() && !(lexerAction instanceof LexerIndexedCustomAction)) {
+				unfixedPosDep = true;
+			}
+			byte kind = classifyBuiltIn(lexerAction);
+			if (kind == KIND_NONE) {
+				allBuiltInNonIndexed = false;
+			}
+			else if (kind == KIND_CUSTOM) {
+				customCount++;
+			}
 		}
 
-		this.hashCode = MurmurHash.finish(hash, lexerActions.length);
+		this.hashCode = MurmurHash.finish(hash, len);
+		this.hasUnfixedPositionDependent = unfixedPosDep;
+
+		if (len == 0) {
+			this.fastMode = MODE_SINGLE;
+			this.singleKind = KIND_NONE;
+			this.singleArg1 = 0;
+			this.singleArg2 = 0;
+			this.actionKinds = null;
+			this.actionArg1 = null;
+			this.actionArg2 = null;
+			this.hasMultipleCustomActions = false;
+		}
+		else if (allBuiltInNonIndexed && len == 1) {
+			LexerAction a = lexerActions[0];
+			this.fastMode = MODE_SINGLE;
+			this.singleKind = classifyBuiltIn(a);
+			this.singleArg1 = extractArg1(a, this.singleKind);
+			this.singleArg2 = extractArg2(a, this.singleKind);
+			this.actionKinds = null;
+			this.actionArg1 = null;
+			this.actionArg2 = null;
+			this.hasMultipleCustomActions = false;
+		}
+		else if (allBuiltInNonIndexed) {
+			byte[] kinds = new byte[len];
+			int[] a1 = new int[len];
+			int[] a2 = customCount > 0 ? new int[len] : null;
+			for (int i = 0; i < len; i++) {
+				LexerAction a = lexerActions[i];
+				byte k = classifyBuiltIn(a);
+				kinds[i] = k;
+				a1[i] = extractArg1(a, k);
+				if (a2 != null) {
+					a2[i] = extractArg2(a, k);
+				}
+			}
+			this.fastMode = MODE_MULTI;
+			this.singleKind = KIND_NONE;
+			this.singleArg1 = 0;
+			this.singleArg2 = 0;
+			this.actionKinds = kinds;
+			this.actionArg1 = a1;
+			this.actionArg2 = a2;
+			this.hasMultipleCustomActions = customCount > 1;
+		}
+		else {
+			this.fastMode = MODE_SLOW;
+			this.singleKind = KIND_NONE;
+			this.singleArg1 = 0;
+			this.singleArg2 = 0;
+			this.actionKinds = null;
+			this.actionArg1 = null;
+			this.actionArg2 = null;
+			this.hasMultipleCustomActions = false;
+		}
+	}
+
+	private static byte classifyBuiltIn(LexerAction action) {
+		if (action == LexerSkipAction.INSTANCE) {
+			return KIND_SKIP;
+		}
+		if (action == LexerMoreAction.INSTANCE) {
+			return KIND_MORE;
+		}
+		if (action == LexerPopModeAction.INSTANCE) {
+			return KIND_POP_MODE;
+		}
+		Class<?> cls = action.getClass();
+		if (cls == LexerCustomAction.class) {
+			return KIND_CUSTOM;
+		}
+		if (cls == LexerTypeAction.class) {
+			return KIND_TYPE;
+		}
+		if (cls == LexerPushModeAction.class) {
+			return KIND_PUSH_MODE;
+		}
+		if (cls == LexerChannelAction.class) {
+			return KIND_CHANNEL;
+		}
+		if (cls == LexerModeAction.class) {
+			return KIND_MODE;
+		}
+		return KIND_NONE;
+	}
+
+	private static int extractArg1(LexerAction action, byte kind) {
+		switch (kind) {
+		case KIND_TYPE:
+			return ((LexerTypeAction) action).getType();
+		case KIND_CHANNEL:
+			return ((LexerChannelAction) action).getChannel();
+		case KIND_MODE:
+			return ((LexerModeAction) action).getMode();
+		case KIND_PUSH_MODE:
+			return ((LexerPushModeAction) action).getMode();
+		case KIND_CUSTOM:
+			return ((LexerCustomAction) action).getRuleIndex();
+		default:
+			return 0;
+		}
+	}
+
+	private static int extractArg2(LexerAction action, byte kind) {
+		return kind == KIND_CUSTOM ? ((LexerCustomAction) action).getActionIndex() : 0;
 	}
 
 	/**
@@ -107,6 +265,9 @@ public class LexerActionExecutor {
 	 * for all position-dependent lexer actions.
 	 */
 	public LexerActionExecutor fixOffsetBeforeMatch(int offset) {
+		if (!hasUnfixedPositionDependent) {
+			return this;
+		}
 		LexerAction[] updatedLexerActions = null;
 		for (int i = 0; i < lexerActions.length; i++) {
 			if (lexerActions[i].isPositionDependent() && !(lexerActions[i] instanceof LexerIndexedCustomAction)) {
@@ -135,6 +296,16 @@ public class LexerActionExecutor {
 	}
 
 	/**
+	 * Returns {@code true} iff this executor consists of a single built-in
+	 * {@link LexerSkipAction} (no custom or position-dependent actions).
+	 * Package-private fast check used by {@link LexerATNSimulator} to fuse
+	 * consecutive {@code -> skip} rules without returning to {@link Lexer#nextToken}.
+	 */
+	boolean isSingleSkip() {
+		return fastMode == MODE_SINGLE && singleKind == KIND_SKIP;
+	}
+
+	/**
 	 * Execute the actions encapsulated by this executor within the context of a
 	 * particular {@link Lexer}.
 	 *
@@ -154,6 +325,80 @@ public class LexerActionExecutor {
 	 * of the token.
 	 */
 	public void execute(@NotNull Lexer lexer, CharStream input, int startIndex) {
+		if (fastMode == MODE_SINGLE) {
+			byte kind = singleKind;
+			if (kind == KIND_SKIP) {
+				lexer.skip();
+				return;
+			}
+			executeBuiltIn(lexer, kind, singleArg1, singleArg2);
+			return;
+		}
+		if (fastMode == MODE_MULTI) {
+			executeMultiBuiltIn(lexer, input);
+			return;
+		}
+		executeSlow(lexer, input, startIndex);
+	}
+
+	private static void executeBuiltIn(@NotNull Lexer lexer, byte kind, int arg1, int arg2) {
+		switch (kind) {
+		case KIND_SKIP:
+			lexer.skip();
+			break;
+		case KIND_MORE:
+			lexer.more();
+			break;
+		case KIND_TYPE:
+			lexer.setType(arg1);
+			break;
+		case KIND_CHANNEL:
+			lexer.setChannel(arg1);
+			break;
+		case KIND_MODE:
+			lexer.mode(arg1);
+			break;
+		case KIND_PUSH_MODE:
+			lexer.pushMode(arg1);
+			break;
+		case KIND_POP_MODE:
+			lexer.popMode();
+			break;
+		case KIND_CUSTOM:
+			lexer.action(null, arg1, arg2);
+			break;
+		default:
+			break;
+		}
+	}
+
+	private void executeMultiBuiltIn(@NotNull Lexer lexer, CharStream input) {
+		final byte[] kinds = this.actionKinds;
+		final int[] a1 = this.actionArg1;
+		final int[] a2 = this.actionArg2;
+		final int len = kinds.length;
+		if (!hasMultipleCustomActions) {
+			for (int i = 0; i < len; i++) {
+				byte kind = kinds[i];
+				executeBuiltIn(lexer, kind, a1[i], a2 != null ? a2[i] : 0);
+			}
+			return;
+		}
+		int stopIndex = input.index();
+		boolean ranCustom = false;
+		for (int i = 0; i < len; i++) {
+			byte kind = kinds[i];
+			if (kind == KIND_CUSTOM) {
+				if (ranCustom && input.index() != stopIndex) {
+					input.seek(stopIndex);
+				}
+				ranCustom = true;
+			}
+			executeBuiltIn(lexer, kind, a1[i], a2[i]);
+		}
+	}
+
+	private void executeSlow(@NotNull Lexer lexer, CharStream input, int startIndex) {
 		boolean requiresSeek = false;
 		int stopIndex = input.index();
 		try {

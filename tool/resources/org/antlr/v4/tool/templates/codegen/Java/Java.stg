@@ -201,11 +201,11 @@ fileHeader(grammarFileName, ANTLRVersion) ::= <<
 // Generated from <grammarFileName; format="java-escape"> by ANTLR <ANTLRVersion>
 >>
 
-Parser(parser, funcs, atn, sempredFuncs, superClass) ::= <<
+Parser(parser, funcs, atn, sempredFuncs, flatSempreds, flatSempredHelpers, superClass) ::= <<
 <Parser_(ctor="parser_ctor", ...)>
 >>
 
-Parser_(parser, funcs, atn, sempredFuncs, ctor, superClass) ::= <<
+Parser_(parser, funcs, atn, sempredFuncs, flatSempreds, flatSempredHelpers, ctor, superClass) ::= <<
 public <if(parser.abstractRecognizer)>abstract <endif>class <parser.name> extends <superClass; null="Parser"> {
 	<if(parser.tokens)>
 	public static final int
@@ -279,30 +279,22 @@ public <if(parser.abstractRecognizer)>abstract <endif>class <parser.name> extend
 	}
 
 	/**
-	 * Monomorphic match used by generated token sites. Public
+	 * Monomorphic match used by generated non-EOF token sites. Public
 	 * {@link #match(int)} remains for handwritten callers and subclasses.
 	 * {@code reportMatchRequired} is false for {@link DefaultErrorStrategy},
-	 * so the success path is a field check. A custom strategy that returns
-	 * true from {@link ANTLRErrorStrategy#isReportMatchRequired()} is notified
-	 * on every successful match.
+	 * so the success path is a field check; inline recovery is outlined to
+	 * {@link #_matchRecover()} to keep the hot path compact for C2 inlining.
 	 */
 	private Token _match(int ttype) {
 		Token t = _input.LT(1);
 		if ( t.getType()==ttype ) {
-			if ( ttype==Token.EOF ) {
-				matchedEOF = true;
-			}
 			if (reportMatchRequired || errorRecoveryMode) {
 				_errHandler.reportMatch(this);
 			}
 			consume(t);
 			return t;
 		}
-		t = _errHandler.recoverInline(this);
-		if ( _buildParseTrees && t.getTokenIndex()==-1 ) {
-			_ctx.addErrorNode(createErrorNode(_ctx,t));
-		}
-		return t;
+		return _matchRecover();
 	}
 
 	/**
@@ -313,11 +305,89 @@ public <if(parser.abstractRecognizer)>abstract <endif>class <parser.name> extend
 		return p \>= _precedenceStack.peek();
 	}
 
+	/**
+	 * Dedicated EOF match helper so {@link #_match(int)} does not pay an
+	 * {@code if (ttype == Token.EOF)} branch on every non-EOF token match.
+	 */
+	private Token _matchEOF() {
+		Token t = _input.LT(1);
+		if ( t.getType()==EOF ) {
+			matchedEOF = true;
+			if (reportMatchRequired || errorRecoveryMode) {
+				_errHandler.reportMatch(this);
+			}
+			consume(t);
+			return t;
+		}
+		return _matchRecover();
+	}
+
+	private Token _matchRecover() {
+		Token t = _errHandler.recoverInline(this);
+		if ( _buildParseTrees && t.getTokenIndex()==-1 ) {
+			_ctx.addErrorNode(createErrorNode(_ctx,t));
+		}
+		return t;
+	}
+
+	/**
+	 * Compact LL(1) zero-or-more single-token loop helper (e.g. {@code NL*}).
+	 * Preserves exact {@code setState}/{@code _sync}/{@code _match} semantics
+	 * while shrinking generated rule bytecode dramatically.
+	 */
+	private void _matchStar(int startState, int matchState, int loopBackState, int ttype) {
+		setState(startState);
+		_sync();
+		if ( _input.LA(1)==ttype ) {
+			do {
+				setState(matchState);
+				_match(ttype);
+				setState(loopBackState);
+				_sync();
+			} while ( _input.LA(1)==ttype );
+		}
+	}
+
+	/**
+	 * Compact LL(*) zero-or-more single-token loop helper.
+	 */
+	private void _matchStarPredict(int startState, int matchState, int loopBackState, int decision, int continueAlt, int ttype) {
+		setState(startState);
+		_sync();
+		int _alt = _adaptivePredict(decision);
+		while ( _alt==continueAlt ) {
+			setState(matchState);
+			_match(ttype);
+			setState(loopBackState);
+			_sync();
+			_alt = _adaptivePredict(decision);
+		}
+	}
+
+	/**
+	 * Compact deferred rule-entry helper for LL(1) labeled-alt rules.
+	 */
+	private void _enterDeferred(ParserRuleContext localctx, int startState, int ruleIndex, int decState) {
+		enterRule(localctx, startState, ruleIndex);
+		setState(decState);
+		_sync();
+	}
+
 	<namedActions.members>
 	<parser:(ctor)()>
 	<funcs; separator="\n">
 
-<if(sempredFuncs)>
+<if(flatSempreds)>
+	@Override
+	public boolean sempred(RuleContext _localctx, int _ruleIndex, int predIndex) {
+		switch (predIndex) {
+		<flatSempreds; separator="\n">
+		}
+		return true;
+	}
+	<flatSempredHelpers; separator="\n">
+<elseif(sempredFuncs)>
+	@Override
 	public boolean sempred(RuleContext _localctx, int ruleIndex, int predIndex) {
 		switch (ruleIndex) {
 		<parser.sempredFuncs.values:{f|
@@ -380,8 +450,15 @@ public Vocabulary getVocabulary() {
 }
 >>
 
-dumpActions(recog, argFuncs, actionFuncs, sempredFuncs) ::= <<
-<if(actionFuncs)>
+dumpActions(recog, argFuncs, actionFuncs, sempredFuncs, flatActions, flatSempreds, flatSempredHelpers) ::= <<
+<if(flatActions)>
+@Override
+public void action(RuleContext _localctx, int _ruleIndex, int actionIndex) {
+	switch (actionIndex) {
+	<flatActions; separator="\n">
+	}
+}
+<elseif(actionFuncs)>
 @Override
 public void action(RuleContext _localctx, int ruleIndex, int actionIndex) {
 	switch (ruleIndex) {
@@ -393,7 +470,16 @@ case <f.ruleIndex>:
 }
 <actionFuncs.values; separator="\n">
 <endif>
-<if(sempredFuncs)>
+<if(flatSempreds)>
+@Override
+public boolean sempred(RuleContext _localctx, int _ruleIndex, int predIndex) {
+	switch (predIndex) {
+	<flatSempreds; separator="\n">
+	}
+	return true;
+}
+<flatSempredHelpers; separator="\n">
+<elseif(sempredFuncs)>
 @Override
 public boolean sempred(RuleContext _localctx, int ruleIndex, int predIndex) {
 	switch (ruleIndex) {
@@ -405,6 +491,24 @@ case <f.ruleIndex>:
 }
 <sempredFuncs.values; separator="\n">
 <endif>
+>>
+
+FlatActionCase(c, action) ::= <<
+case <c.index>: {
+	<action>
+	}
+	break;
+>>
+
+FlatSempredCase(c, action) ::= <<
+case <c.index>:
+	return <if(c.outlined)>_sempred_<c.index>(<if(c.needsTypedCtx)>(<c.ctxType>)<endif>_localctx)<else><action><endif>;
+>>
+
+FlatSempredHelper(c, action) ::= <<
+private boolean _sempred_<c.index>(<c.ctxType> _localctx) {
+	return <action>;
+}
 >>
 
 parser_ctor(p) ::= <<
@@ -451,7 +555,54 @@ RuleFunction(currentRule,args,code,locals,ruleCtx,altLabelCtxs,namedActions,fina
 
 @RuleVersion(<namedActions.version; null="0">)
 <if(currentRule.modifiers)><currentRule.modifiers:{f | <f> }><else>public final <endif><currentRule.ctxType> <currentRule.name>(<args; separator=",">) throws RecognitionException {
+<if(currentRule.deferredLL1Block)>
+	int _parentState = getState();
+	<currentRule.ctxType> _localctx = <if(currentRule.directAltHasListener)>_parseListeners != null ? new <currentRule.ctxType>(_ctx, _parentState) : null<else>null<endif>;
+	boolean _synced = false;
+<if(currentRule.directAltHasListener)>
+	if (_localctx != null) {
+		_enterDeferred(_localctx, <currentRule.startState>, RULE_<currentRule.name>, <currentRule.deferredLL1Block.stateNumber>);
+		_synced = true;
+	}
+<endif>
+	<locals; separator="\n">
+	try {
+<if(currentRule.hasLookaheadBlock)>
+		int _alt;
+<endif>
+		for (;;) {
+			<code>
+			break;
+		}
+		<postamble; separator="\n">
+		<namedActions.after>
+	}
+	<if(exceptions)>
+	<exceptions; separator="\n">
+	<else>
+	catch (RecognitionException re) {
+		if (_localctx == null) {
+			_localctx = new <currentRule.ctxType>(_ctx, _parentState);
+			enterRule(_localctx, <currentRule.startState>, RULE_<currentRule.name>);
+		}
+		_localctx.exception = re;
+		_errHandler.reportError(this, re);
+		_errHandler.recover(this, re);
+	}
+	<endif>
+	finally {
+		<finallyAction>
+		if (_localctx != null) {
+			exitRule();
+		}
+	}
+	return _localctx;
+<else>
+<if(currentRule.directAltLabel)>
+	<currentRule.ctxType> _localctx = <if(currentRule.directAltHasListener)>_parseListeners == null ? new <currentRule.directAltLabel; format="cap">Context(_ctx, getState()) : new <currentRule.ctxType>(_ctx, getState())<else>new <currentRule.directAltLabel; format="cap">Context(_ctx, getState())<endif>;
+<else>
 	<currentRule.ctxType> _localctx = new <currentRule.ctxType>(_ctx, getState()<currentRule.args:{a | , <a.name>}>);
+<endif>
 	enterRule(_localctx, <currentRule.startState>, RULE_<currentRule.name>);
 	<namedActions.init>
 	<locals; separator="\n">
@@ -477,6 +628,7 @@ RuleFunction(currentRule,args,code,locals,ruleCtx,altLabelCtxs,namedActions,fina
 		exitRule();
 	}
 	return _localctx;
+<endif>
 }
 >>
 
@@ -584,9 +736,24 @@ private <currentRule.ctxType> <currentRule.name>(int _p<args:{a | , <a>}>) throw
 >>
 
 CodeBlockForOuterMostAlt(currentOuterMostAltCodeBlock, locals, preamble, ops) ::= <<
+<if(currentOuterMostAltCodeBlock.deferredRule)>
+if (_localctx == null) {
+	_localctx = new <if(currentOuterMostAltCodeBlock.altLabel)><currentOuterMostAltCodeBlock.altLabel; format="cap">Context<else><currentOuterMostAltCodeBlock.deferredRule.ctxType><endif>(_ctx, _parentState);
+	_enterDeferred(_localctx, <currentOuterMostAltCodeBlock.deferredRule.startState>, RULE_<currentOuterMostAltCodeBlock.deferredRule.name>, <currentOuterMostAltCodeBlock.deferredStateNumber>);
+}<if(currentOuterMostAltCodeBlock.altLabel)> else {
+	_localctx = new <currentOuterMostAltCodeBlock.altLabel; format="cap">Context(_localctx);
+}<endif>
+enterOuterAlt(_localctx, <currentOuterMostAltCodeBlock.alt.altNum>);
+<CodeBlockForAlt(currentAltCodeBlock=currentOuterMostAltCodeBlock, ...)>
+<elseif(currentOuterMostAltCodeBlock.directInit)>
+<if(currentOuterMostAltCodeBlock.directInitHasListener)>if (!(_localctx instanceof <currentOuterMostAltCodeBlock.altLabel; format="cap">Context)) _localctx = new <currentOuterMostAltCodeBlock.altLabel; format="cap">Context(_localctx);<endif>
+enterOuterAlt(_localctx, <currentOuterMostAltCodeBlock.alt.altNum>);
+<CodeBlockForAlt(currentAltCodeBlock=currentOuterMostAltCodeBlock, ...)>
+<else>
 <if(currentOuterMostAltCodeBlock.altLabel)>_localctx = new <currentOuterMostAltCodeBlock.altLabel; format="cap">Context(_localctx);<endif>
 enterOuterAlt(_localctx, <currentOuterMostAltCodeBlock.alt.altNum>);
 <CodeBlockForAlt(currentAltCodeBlock=currentOuterMostAltCodeBlock, ...)>
+<endif>
 >>
 
 CodeBlockForAlt(currentAltCodeBlock, locals, preamble, ops) ::= <<
@@ -597,23 +764,63 @@ CodeBlockForAlt(currentAltCodeBlock, locals, preamble, ops) ::= <<
 }
 >>
 
-LL1AltBlock(choice, preamble, alts, error) ::= <<
+LL1AltBlock(choice, preamble, alts, error, altTests) ::= <<
+<if(!choice.deferredRule)>
 setState(<choice.stateNumber>);
 _sync();
+<endif>
 <if(choice.label)><labelref(choice.label)> = _input.LT(1);<endif>
 <preamble; separator="\n">
+<if(altTests)>
+_la = _input.LA(1);
+if (<first(altTests)>) {
+	<first(alts)>
+}
+<rest(altTests),rest(alts):{test,alt| else if (<test>) {
+	<alt>
+\}}; separator="\n">
+else {
+<if(choice.deferredRule)>
+	if (!_synced) {
+		_synced = true;
+		_localctx = new <choice.deferredRule.ctxType>(_ctx, _parentState);
+		_enterDeferred(_localctx, <choice.deferredRule.startState>, RULE_<choice.deferredRule.name>, <choice.stateNumber>);
+		continue;
+	}
+<endif>
+	<error>
+}
+<else>
 switch (_input.LA(1)) {
 <choice.altLook,alts:{look,alt| <cases(ttypes=look)>
 	<alt>
 	break;}; separator="\n">
 default:
+<if(choice.deferredRule)>
+	if (!_synced) {
+		_synced = true;
+		_localctx = new <choice.deferredRule.ctxType>(_ctx, _parentState);
+		_enterDeferred(_localctx, <choice.deferredRule.startState>, RULE_<choice.deferredRule.name>, <choice.stateNumber>);
+		continue;
+	}
+<endif>
 	<error>
 }
+<endif>
 >>
 
-LL1OptionalBlock(choice, alts, error) ::= <<
+LL1OptionalBlock(choice, alts, error, altTests) ::= <<
 setState(<choice.stateNumber>);
 _sync();
+<if(altTests)>
+_la = _input.LA(1);
+if (<first(altTests)>) {
+	<first(alts)>
+}
+<rest(altTests),rest(alts):{test,alt| else if (<test>) {
+	<alt>
+\}}; separator="\n">
+<else>
 switch (_input.LA(1)) {
 <choice.altLook,alts:{look,alt| <cases(ttypes=look)>
 	<alt>
@@ -621,6 +828,7 @@ switch (_input.LA(1)) {
 default:
 	break;
 }
+<endif>
 >>
 
 LL1OptionalBlockSingleAlt(choice, expr, alts, preamble, error, followExpr) ::= <<
@@ -634,6 +842,9 @@ if (<expr>) {
 >>
 
 LL1StarBlockSingleAlt(choice, loopExpr, alts, preamble, iteration) ::= <<
+<if(choice.singleTokenMatch)>
+_matchStar(<choice.stateNumber>, <choice.singleTokenMatch.stateNumber>, <choice.loopBackStateNumber>, <choice.singleTokenMatch.name>);
+<else>
 setState(<choice.stateNumber>);
 _sync();
 <preamble; separator="\n">
@@ -643,6 +854,7 @@ while (<loopExpr>) {
 	_sync();
 	<iteration>
 }
+<endif>
 >>
 
 LL1PlusBlockSingleAlt(choice, loopExpr, alts, preamble, iteration) ::= <<
@@ -675,15 +887,24 @@ case <i>:
 OptionalBlock(choice, alts, error) ::= <<
 setState(<choice.stateNumber>);
 _sync();
+<if(!rest(alts))>
+if ( _adaptivePredict(<choice.decision>)==<if(choice.ast.greedy)>1<else>2<endif> ) {
+	<first(alts)>
+}
+<else>
 switch ( _adaptivePredict(<choice.decision>) ) {
 <alts:{alt |
 case <i><if(!choice.ast.greedy)>+1<endif>:
 	<alt>
 	break;}; separator="\n">
 }
+<endif>
 >>
 
 StarBlock(choice, alts, sync, iteration) ::= <<
+<if(choice.singleTokenMatch)>
+_matchStarPredict(<choice.stateNumber>, <choice.singleTokenMatch.stateNumber>, <choice.loopBackStateNumber>, <choice.decision>, <choice.continueAlt>, <choice.singleTokenMatch.name>);
+<else>
 setState(<choice.stateNumber>);
 _sync();
 _alt = _adaptivePredict(<choice.decision>);
@@ -694,12 +915,15 @@ while (_alt==<choice.continueAlt>) {
 	_sync();
 	_alt = _adaptivePredict(<choice.decision>);
 }
+<endif>
 >>
 
 PlusBlock(choice, alts, error) ::= <<
 setState(<choice.blockStartStateNumber>); <! alt block decision !>
 _sync();
+<if(rest(alts))>
 _alt = <choice.continueAlt>;
+<endif>
 do {
 <if(rest(alts))>
 	switch (_alt) {
@@ -762,7 +986,7 @@ setState(<r.stateNumber>);
 
 MatchToken(m) ::= <<
 setState(<m.stateNumber>);
-<if(m.labels)><m.labels:{l | <labelref(l)> = }><endif>_match(<m.name>);
+<if(m.labels)><m.labels:{l | <labelref(l)> = }><endif><if(m.isEOF)>_matchEOF()<else>_match(<m.name>)<endif>;
 >>
 
 MatchSet(m, expr, capture) ::= "<CommonSetStuff(m, expr, capture, false)>"
@@ -989,15 +1213,19 @@ pushNewRecursionContext(_localctx, _startState, RULE_<ruleName>);
 >>
 
 recRuleLabeledAltStartAction(ruleName, ctxName, currentAltLabel, label, isListLabel) ::= <<
-_localctx = new <currentAltLabel; format="cap">Context(_parentctx, _parentState);
 <if(label)>
+<currentAltLabel; format="cap">Context _altctx = new <currentAltLabel; format="cap">Context(_parentctx, _parentState);
+_localctx = _altctx;
 <if(isListLabel)>
-((<currentAltLabel; format="cap">Context)_localctx).<label>.add(_prevctx);
+_altctx.<label>.add(_prevctx);
 <else>
-((<currentAltLabel; format="cap">Context)_localctx).<label> = _prevctx;
+_altctx.<label> = _prevctx;
 <endif>
-<endif>
+pushNewRecursionContext(_altctx, _startState, RULE_<ruleName>);
+<else>
+_localctx = new <currentAltLabel; format="cap">Context(_parentctx, _parentState);
 pushNewRecursionContext(_localctx, _startState, RULE_<ruleName>);
+<endif>
 >>
 
 recRuleReplaceContext(ctxName) ::= <<
@@ -1030,7 +1258,7 @@ import org.antlr.v4.runtime.misc.*;
 <lexer>
 >>
 
-Lexer(lexer, atn, actionFuncs, sempredFuncs, superClass) ::= <<
+Lexer(lexer, atn, actionFuncs, sempredFuncs, flatActions, flatSempreds, flatSempredHelpers, superClass) ::= <<
 public <if(lexer.abstractRecognizer)>abstract <endif>class <lexer.name> extends <superClass; null="Lexer"> {
 	<if(lexer.tokens)>
 	public static final int
@@ -1086,7 +1314,7 @@ public <if(lexer.abstractRecognizer)>abstract <endif>class <lexer.name> extends 
 	@NotNull
 	public String[] getModeNames() { return modeNames; }
 
-	<dumpActions(lexer, "", actionFuncs, sempredFuncs)>
+	<dumpActions(lexer, "", actionFuncs, sempredFuncs, flatActions, flatSempreds, flatSempredHelpers)>
 	<atn>
 }
 >>

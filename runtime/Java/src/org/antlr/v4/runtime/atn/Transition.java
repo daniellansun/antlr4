@@ -82,12 +82,23 @@ public abstract class Transition {
 	@NotNull
 	public ATNState target;
 
+	/**
+	 * Cached {@link #getSerializationType()} and {@link #isEpsilon()} flags.
+	 * Every concrete {@link Transition} subclass returns compile-time constants
+	 * for both, so reading these package-private fields avoids megamorphic
+	 * virtual dispatch inside epsilon-closure and reach loops.
+	 */
+	final int serializationType;
+	final boolean epsilon;
+
 	protected Transition(@NotNull ATNState target) {
 		if (target == null) {
 			throw new NullPointerException("target cannot be null.");
 		}
 
 		this.target = target;
+		this.serializationType = getSerializationType();
+		this.epsilon = isEpsilon();
 	}
 
 	public abstract int getSerializationType();

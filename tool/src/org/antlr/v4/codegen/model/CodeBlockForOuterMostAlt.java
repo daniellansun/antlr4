@@ -21,6 +21,26 @@ public class CodeBlockForOuterMostAlt extends CodeBlockForAlt {
 	 * The alternative.
 	 */
 	public Alternative alt;
+	/**
+	 * Tier 2a: true when the enclosing single-alt rule already constructed the
+	 * labeled context directly at rule entry.
+	 */
+	public boolean directInit;
+	/**
+	 * Tier 2a with listener generation enabled: fallback copyFrom only when
+	 * streaming {@code _parseListeners != null}.
+	 */
+	public boolean directInitHasListener;
+	/**
+	 * Tier 2b/2c: non-null when the enclosing rule defers context creation and
+	 * {@code enterRule} into this alternative arm.
+	 */
+	public RuleFunction deferredRule;
+	/**
+	 * Decision state number for {@code setState}/{@code _sync} on direct entry
+	 * under Tier 2b.
+	 */
+	public int deferredStateNumber;
 
 	public CodeBlockForOuterMostAlt(OutputModelFactory factory, Alternative alt) {
 		super(factory);

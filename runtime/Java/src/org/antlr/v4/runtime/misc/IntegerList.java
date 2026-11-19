@@ -116,10 +116,36 @@ public class IntegerList {
 
 	public final int removeAt(int index) {
 		int value = get(index);
-		System.arraycopy(_data, index + 1, _data, index, _size - index - 1);
-		_data[_size - 1] = 0;
+		int tail = _size - index - 1;
+		if (tail > 0) {
+			System.arraycopy(_data, index + 1, _data, index, tail);
+		}
 		_size--;
 		return value;
+	}
+
+	/**
+	 * Package-private O(1) stack pop for {@link IntegerStack#pop()} without
+	 * invoking {@link System#arraycopy}.
+	 */
+	final int removeLast() {
+		int n = _size;
+		if (n == 0) {
+			throw new IndexOutOfBoundsException();
+		}
+		_size = n - 1;
+		return _data[n - 1];
+	}
+
+	/**
+	 * Package-private O(1) stack peek for {@link IntegerStack#peek()}.
+	 */
+	final int getLast() {
+		int n = _size;
+		if (n == 0) {
+			throw new IndexOutOfBoundsException();
+		}
+		return _data[n - 1];
 	}
 
 	public final void removeRange(int fromIndex, int toIndex) {
@@ -152,7 +178,7 @@ public class IntegerList {
 	}
 
 	public final void clear() {
-		Arrays.fill(_data, 0, _size, 0);
+		// Primitive int[] holds no object references; resetting _size suffices.
 		_size = 0;
 	}
 

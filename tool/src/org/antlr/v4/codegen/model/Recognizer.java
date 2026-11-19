@@ -45,6 +45,19 @@ public abstract class Recognizer extends OutputModelObject {
 	@ModelElement public LinkedHashMap<Rule, RuleSempredFunction> sempredFuncs =
 		new LinkedHashMap<Rule, RuleSempredFunction>();
 
+	/**
+	 * Flat dense {@code switch (predIndex)} cases populated when all semantic
+	 * predicate indices across rules are globally unique (the standard case),
+	 * avoiding nested {@code switch (ruleIndex)} + per-rule wrapper methods.
+	 */
+	@ModelElement public List<FlatSempredCase> flatSempreds;
+
+	/**
+	 * Typed-context helper methods required only for flat semantic predicates
+	 * that reference {@code _localctx} with a rule-specific context subtype.
+	 */
+	@ModelElement public List<FlatSempredHelper> flatSempredHelpers;
+
 	public Recognizer(OutputModelFactory factory) {
 		super(factory);
 

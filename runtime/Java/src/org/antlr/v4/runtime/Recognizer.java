@@ -15,12 +15,13 @@ import org.antlr.v4.runtime.misc.Nullable;
 import org.antlr.v4.runtime.misc.Utils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 public abstract class Recognizer<Symbol, ATNInterpreter extends ATNSimulator> {
 	public static final int EOF=-1;
@@ -30,10 +31,22 @@ public abstract class Recognizer<Symbol, ATNInterpreter extends ATNSimulator> {
 	private static final Map<String[], Map<String, Integer>> ruleIndexMapCache =
 		new WeakHashMap<>();
 
-	@SuppressWarnings("serial")
+	private static final ANTLRErrorListener<?>[] EMPTY_LISTENERS = new ANTLRErrorListener<?>[0];
+	private static final ANTLRErrorListener<?>[] DEFAULT_LISTENERS =
+		new ANTLRErrorListener<?>[] { ConsoleErrorListener.INSTANCE };
+
+	@SuppressWarnings("rawtypes")
+	private static final AtomicReferenceFieldUpdater<Recognizer, ANTLRErrorListener[]> LISTENERS_UPDATER =
+		AtomicReferenceFieldUpdater.newUpdater(Recognizer.class, ANTLRErrorListener[].class, "_listeners");
+
+	/**
+	 * Copy-on-write snapshot array of registered error listeners. Starts on the
+	 * shared {@link #DEFAULT_LISTENERS} singleton so constructing a recognizer
+	 * or calling {@link #removeErrorListeners()} performs zero allocations and
+	 * zero lock acquisitions.
+	 */
 	@NotNull
-	private final List<ANTLRErrorListener<? super Symbol>> _listeners =
-		new CopyOnWriteArrayList<ANTLRErrorListener<? super Symbol>>() {{ add(ConsoleErrorListener.INSTANCE); }};
+	private volatile ANTLRErrorListener<?>[] _listeners = DEFAULT_LISTENERS;
 
 	protected ATNInterpreter _interp;
 
@@ -224,23 +237,82 @@ public abstract class Recognizer<Symbol, ATNInterpreter extends ATNSimulator> {
 	 */
 	public void addErrorListener(@NotNull ANTLRErrorListener<? super Symbol> listener) {
 		Args.notNull("listener", listener);
-		_listeners.add(listener);
+		for (;;) {
+			ANTLRErrorListener<?>[] current = _listeners;
+			ANTLRErrorListener<?>[] next = Arrays.copyOf(current, current.length + 1);
+			next[current.length] = listener;
+			if (LISTENERS_UPDATER.compareAndSet(this, current, next)) {
+				return;
+			}
+		}
 	}
 
 	public void removeErrorListener(@NotNull ANTLRErrorListener<? super Symbol> listener) {
-		_listeners.remove(listener);
+		for (;;) {
+			ANTLRErrorListener<?>[] current = _listeners;
+			int len = current.length;
+			int idx = -1;
+			for (int i = 0; i < len; i++) {
+				if (listener == null ? current[i] == null : listener.equals(current[i])) {
+					idx = i;
+					break;
+				}
+			}
+			if (idx < 0) {
+				return;
+			}
+			ANTLRErrorListener<?>[] next;
+			if (len == 1) {
+				next = EMPTY_LISTENERS;
+			}
+			else {
+				next = new ANTLRErrorListener<?>[len - 1];
+				if (idx > 0) {
+					System.arraycopy(current, 0, next, 0, idx);
+				}
+				int tail = len - idx - 1;
+				if (tail > 0) {
+					System.arraycopy(current, idx + 1, next, idx, tail);
+				}
+			}
+			if (LISTENERS_UPDATER.compareAndSet(this, current, next)) {
+				return;
+			}
+		}
 	}
 
 	public void removeErrorListeners() {
-		_listeners.clear();
+		if (_listeners != EMPTY_LISTENERS) {
+			LISTENERS_UPDATER.set(this, EMPTY_LISTENERS);
+		}
 	}
 
 	@NotNull
+	@SuppressWarnings("unchecked")
 	public List<? extends ANTLRErrorListener<? super Symbol>> getErrorListeners() {
-		return new ArrayList<>(_listeners);
+		ANTLRErrorListener<?>[] snapshot = _listeners;
+		List<ANTLRErrorListener<? super Symbol>> result = new ArrayList<>(snapshot.length);
+		for (int i = 0; i < snapshot.length; i++) {
+			result.add((ANTLRErrorListener<? super Symbol>) snapshot[i]);
+		}
+		return result;
 	}
 
+	private static final ANTLRErrorListener<Object> EMPTY_ERROR_LISTENER = new ANTLRErrorListener<Object>() {
+		@Override
+		public <T> void syntaxError(Recognizer<T, ?> recognizer, T offendingSymbol, int line, int charPositionInLine, String msg, RecognitionException e) {
+		}
+	};
+
+	final boolean hasNoErrorListeners() {
+		return _listeners.length == 0;
+	}
+
+	@SuppressWarnings("unchecked")
 	public ANTLRErrorListener<? super Symbol> getErrorListenerDispatch() {
+		if (_listeners.length == 0) {
+			return (ANTLRErrorListener<? super Symbol>) EMPTY_ERROR_LISTENER;
+		}
 		return new ProxyErrorListener<>(getErrorListeners());
 	}
 

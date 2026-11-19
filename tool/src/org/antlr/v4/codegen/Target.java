@@ -437,4 +437,27 @@ public abstract class Target {
 
 	/** @since 4.6 */
 	public boolean needsHeader() { return false; }; // Override in targets that need header files.
+
+	/**
+	 * Returns {@code true} if this target's templates support compact
+	 * single-token LL(1) star-loop emission (suppressing {@code loopExpr} when
+	 * {@link org.antlr.v4.codegen.model.LL1StarBlockSingleAlt#getSingleTokenMatch()}
+	 * is non-null).
+	 *
+	 * @since 4.13.2.19
+	 */
+	public boolean supportsCompactSingleTokenStarLoop() {
+		return false;
+	}
+
+	/**
+	 * Returns {@code true} if this target's templates consume
+	 * {@link org.antlr.v4.codegen.model.LL1AltBlock#altTests} (and its
+	 * accompanying {@code _la} local declaration).
+	 *
+	 * @since 4.13.2.19
+	 */
+	public boolean supportsCompactLL1AltTests() {
+		return false;
+	}
 }

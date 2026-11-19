@@ -21,6 +21,7 @@ import java.util.BitSet;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /** A DFA state represents a set of possible ATN configurations.
  *  As Aho, Sethi, Ullman p. 117 says "The DFA uses its state
@@ -60,13 +61,14 @@ public class DFAState {
 	/**
 	 * ASCII lexer edges ({@code 0..127}), or {@code null} until the first such
 	 * edge is installed. Lexer source is overwhelmingly in this range
-	 * (identifiers, whitespace, operators). A hit is a volatile read plus one
-	 * array load — no hash probe and no second volatile key check.
+	 * (identifiers, whitespace, operators). Published copy-on-write via this
+	 * volatile reference so concurrent readers observe a fully initialized
+	 * snapshot with proper JMM happens-before on all CPU architectures while
+	 * keeping warm lookups to one volatile read plus one array load.
 	 *
 	 * <p>Only lexer maps ({@code maxIndex > 0xFFFF}) publish this. Parser maps
 	 * and precedence-start maps stay {@code null}, so {@link #getTarget} is
-	 * unchanged. Slot writes happen-before the volatile store of this
-	 * reference; {@link #getLexerTarget} re-reads it on every character.</p>
+	 * unchanged.</p>
 	 */
 	@Nullable
 	private volatile DFAState[] asciiEdges;
@@ -77,7 +79,10 @@ public class DFAState {
 	 * it {@code null} and {@link #getTarget} never reads it.
 	 */
 	@Nullable
-	private volatile Object[] directValues;
+	private volatile AtomicReferenceArray<DFAState> directValues;
+
+	/** Immutable lower bound of {@link #edges}, cached to avoid volatile loads. */
+	private final int minEdgeIndex;
 
 	private AcceptStateInfo acceptStateInfo;
 
@@ -87,14 +92,13 @@ public class DFAState {
 
 	/**
 	 * Symbols that require a global context transition before the symbol edge.
-	 * Copy-on-write so a reader never sees a half-updated {@link BitSet}.
-	 * Not volatile: the LL walk reads {@link #edges} first, and
-	 * {@link #setContextSymbol} stores the bit before {@link #setTarget}
-	 * publishes that map. {@code null} means the state is not context
+	 * Published copy-on-write via this volatile reference so concurrent LL
+	 * readers always observe a fully initialized {@link BitSet} snapshot with
+	 * proper JMM happens-before. {@code null} means the state is not context
 	 * sensitive. SLL does not read this field.
 	 */
 	@Nullable
-	private BitSet contextSymbols;
+	private volatile BitSet contextSymbols;
 
 	/**
 	 * This list is computed by {@link ParserATNSimulator#predicateDFAState}.
@@ -158,6 +162,7 @@ public class DFAState {
 	public DFAState(@NotNull EmptyEdgeMap<DFAState> emptyEdges, @NotNull EmptyEdgeMap<DFAState> emptyContextEdges, @NotNull ATNConfigSet configs) {
 		this.configs = configs;
 		this.edges = emptyEdges;
+		this.minEdgeIndex = emptyEdges.minIndex;
 		this.contextEdges = emptyContextEdges;
 	}
 
@@ -166,38 +171,33 @@ public class DFAState {
 	}
 
 	public final boolean isContextSymbol(int symbol) {
-		// edges first, then the bit. setContextSymbol writes the bit before
-		// setTarget publishes the map, so a reader that sees the new map sees
-		// the bit. SLL does not call this.
-		AbstractEdgeMap<DFAState> edgeMap = edges;
 		BitSet bits = contextSymbols;
-		if (bits == null || symbol < edgeMap.minIndex) {
+		if (bits == null || symbol < minEdgeIndex) {
 			return false;
 		}
 
-		return bits.get(symbol - edgeMap.minIndex);
+		return bits.get(symbol - minEdgeIndex);
 	}
 
 	/**
-	 * Same test as {@link #isContextSymbol} for a caller that has already
-	 * read {@link #edges} (the warm LL loop, which would otherwise load the
-	 * map twice).
+	 * Same test as {@link #isContextSymbol} using the cached immutable
+	 * {@link #minEdgeIndex} so warm LL loops avoid reloading {@link #edges}.
 	 */
 	public final boolean contextSymbolAfterEdge(int symbol) {
 		BitSet bits = contextSymbols;
-		if (bits == null || symbol < edges.minIndex) {
+		if (bits == null || symbol < minEdgeIndex) {
 			return false;
 		}
-		return bits.get(symbol - edges.minIndex);
+		return bits.get(symbol - minEdgeIndex);
 	}
 
 	public final void setContextSymbol(int symbol) {
 		assert isContextSensitive();
-		if (symbol < edges.minIndex) {
+		if (symbol < minEdgeIndex) {
 			return;
 		}
 
-		int bit = symbol - edges.minIndex;
+		int bit = symbol - minEdgeIndex;
 		synchronized (this) {
 			BitSet bits = contextSymbols;
 			if (bits != null && bits.get(bit)) {
@@ -251,20 +251,34 @@ public class DFAState {
 	}
 
 	/**
-	 * PERF: {@code final} so warm {@code execDFA} edge walks can monomorphically
-	 * inline through to {@link AbstractEdgeMap#get} (Hash/Array) without a
-	 * virtual call at this layer.
+	 * PERF: Exact-class dispatch over the final {@link AbstractEdgeMap}
+	 * implementations eliminates the megamorphic {@code vtable stub} in warm
+	 * parser DFA walks, allowing HotSpot C2 to inline {@link HashEdgeMap#get},
+	 * {@link ArrayEdgeMap#get}, and {@link SingletonEdgeMap#get} directly into
+	 * the prediction loop.
 	 */
+	@SuppressWarnings("unchecked")
 	public final DFAState getTarget(int symbol) {
-		return edges.get(symbol);
+		AbstractEdgeMap<DFAState> map = edges;
+		Class<?> cls = map.getClass();
+		if (cls == HashEdgeMap.class) {
+			return ((HashEdgeMap<DFAState>) map).get(symbol);
+		}
+		if (cls == ArrayEdgeMap.class) {
+			return ((ArrayEdgeMap<DFAState>) map).get(symbol);
+		}
+		if (cls == SingletonEdgeMap.class) {
+			return ((SingletonEdgeMap<DFAState>) map).get(symbol);
+		}
+		return map.get(symbol);
 	}
 
 	/**
 	 * Lexer edge lookup. ASCII symbols hit {@link #asciiEdges} (one volatile
-	 * read and an array load). Wider code points use an identity table when
-	 * one has been published, otherwise {@link AbstractEdgeMap#get}.
-	 * {@link HashEdgeMap#get} stays branch-free so parser edge walks do not
-	 * pay a layout test.
+	 * read and an array load). Wider code points delegate to
+	 * {@link #getLexerTargetNonAscii(int)} so this method stays under HotSpot's
+	 * {@code MaxInlineSize} (35 bytes) for unconditional inlining into tight
+	 * lexer loops.
 	 */
 	public final DFAState getLexerTarget(int symbol) {
 		DFAState[] ascii = asciiEdges;
@@ -273,42 +287,50 @@ public class DFAState {
 		if (ascii != null && (symbol & ~0x7F) == 0) {
 			return ascii[symbol];
 		}
-		Object[] direct = directValues;
+		return getLexerTargetNonAscii(symbol);
+	}
+
+	private DFAState getLexerTargetNonAscii(int symbol) {
+		AtomicReferenceArray<DFAState> direct = directValues;
 		if (direct != null) {
-			if (symbol >= 0 && symbol < direct.length) {
-				return (DFAState) direct[symbol];
+			if (symbol >= 0 && symbol < direct.length()) {
+				return direct.get(symbol);
 			}
 			return null;
 		}
-		return edges.get(symbol);
+		return getTarget(symbol);
 	}
 
 	public final void setTarget(int symbol, DFAState target) {
-		AbstractEdgeMap<DFAState> next = edges.put(symbol, target);
-		// Lexer vocabulary reaches U+10FFFF. Parser token maps and the
-		// precedence-start map (0..200) must not allocate an ASCII table.
-		if (next.minIndex >= 0 && next.maxIndex > 0xFFFF) {
-			synchronized (this) {
+		// Serialize structural edge map replacements and auxiliary lexer caches
+		// on this state so concurrent builders cannot drop an edge when an
+		// edge map promotes or resizes (Empty -> Singleton -> Hash -> Array).
+		synchronized (this) {
+			AbstractEdgeMap<DFAState> next = edges.put(symbol, target);
+			// Lexer vocabulary reaches U+10FFFF. Parser token maps and the
+			// precedence-start map (0..200) must not allocate an ASCII table or
+			// touch directValues.
+			if (next.minIndex >= 0 && next.maxIndex > 0xFFFF) {
 				if ((symbol & ~0x7F) == 0) {
-					DFAState[] ascii = asciiEdges;
-					if (ascii == null) {
-						ascii = new DFAState[128];
+					DFAState[] prev = asciiEdges;
+					if (prev == null || prev[symbol] != target) {
+						DFAState[] nextAscii = prev != null ? prev.clone() : new DFAState[128];
+						nextAscii[symbol] = target;
+						// Copy-on-write volatile publication guarantees happens-before
+						// for target's fields on all architectures (including ARM64/POWER).
+						asciiEdges = nextAscii;
 					}
-					ascii[symbol] = target;
-					// Volatile store releases the slot write. Same reference on
-					// later edges; the store is still a release barrier.
-					asciiEdges = ascii;
 				}
-				directValues = directValuesOf(next);
+				AtomicReferenceArray<DFAState> nextDirect = directValuesOf(next);
+				if (directValues != nextDirect) {
+					directValues = nextDirect;
+				}
 			}
+			edges = next;
 		}
-		else {
-			directValues = null;
-		}
-		edges = next;
 	}
 
-	private static Object[] directValuesOf(AbstractEdgeMap<DFAState> edgeMap) {
+	private static AtomicReferenceArray<DFAState> directValuesOf(AbstractEdgeMap<DFAState> edgeMap) {
 		if (edgeMap.getClass() == HashEdgeMap.class) {
 			@SuppressWarnings("unchecked")
 			HashEdgeMap<DFAState> hash = (HashEdgeMap<DFAState>) edgeMap;
@@ -348,7 +370,7 @@ public class DFAState {
 		return edges.toMap();
 	}
 
-	public synchronized DFAState getContextTarget(int invokingState) {
+	public DFAState getContextTarget(int invokingState) {
 		if (invokingState == PredictionContext.EMPTY_FULL_STATE_KEY) {
 			invokingState = -1;
 		}
