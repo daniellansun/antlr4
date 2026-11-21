@@ -294,4 +294,157 @@ public class TestATNAndLL1Analyzer {
 		assertEquals(1, info.getLLDecisions().size());
 		assertEquals(Integer.valueOf(0), info.getLLDecisions().get(0));
 	}
+
+	@Test
+	public void testPredicatePolicyLookBusyIsolationAndLegacySubclassDispatch() {
+		// Build a 2-rule ATN:
+		//   r0: call r1 -> token 3; also direct depth-0 ctx-dependent pred -> token 4
+		//   r1: ctx-dependent pred -> token 1 | ctx-independent pred -> token 2 | prec pred -> token 5
+		ATN atn = new ATN(ATNType.PARSER, 6);
+		RuleStartState r0s = new RuleStartState(); r0s.ruleIndex = 0;
+		RuleStopState r0e = new RuleStopState(); r0e.ruleIndex = 0; r0s.stopState = r0e;
+		BasicState afterCall = new BasicState(); afterCall.ruleIndex = 0;
+		BasicState d0Pred = new BasicState(); d0Pred.ruleIndex = 0;
+
+		RuleStartState r1s = new RuleStartState(); r1s.ruleIndex = 1;
+		RuleStopState r1e = new RuleStopState(); r1e.ruleIndex = 1; r1s.stopState = r1e;
+		BasicState r1Ctx = new BasicState(); r1Ctx.ruleIndex = 1;
+		BasicState r1Ind = new BasicState(); r1Ind.ruleIndex = 1;
+		BasicState r1Prec = new BasicState(); r1Prec.ruleIndex = 1;
+
+		for (ATNState st : new ATNState[] { r0s, r0e, afterCall, d0Pred, r1s, r1e, r1Ctx, r1Ind, r1Prec }) {
+			atn.addState(st);
+		}
+		atn.ruleToStartState = new RuleStartState[] { r0s, r1s };
+		atn.ruleToStopState = new RuleStopState[] { r0e, r1e };
+
+		r0s.addTransition(new RuleTransition(r1s, 1, 0, afterCall));
+		afterCall.addTransition(new AtomTransition(r0e, 3));
+		r0s.addTransition(new PredicateTransition(d0Pred, 0, 0, true));
+		d0Pred.addTransition(new AtomTransition(r0e, 4));
+
+		r1s.addTransition(new PredicateTransition(r1Ctx, 1, 0, true));
+		r1Ctx.addTransition(new AtomTransition(r1e, 1));
+		r1s.addTransition(new PredicateTransition(r1Ind, 1, 1, false));
+		r1Ind.addTransition(new AtomTransition(r1e, 2));
+		r1s.addTransition(new PrecedencePredicateTransition(r1Prec, 1));
+		r1Prec.addTransition(new AtomTransition(r1e, 5));
+
+		LL1Analyzer analyzer = new LL1Analyzer(atn);
+
+		// 1. OPAQUE sees HIT_PRED on everything
+		IntervalSet opaque = analyzer.LOOK(r0s, r0e, PredictionContext.EMPTY_LOCAL, LL1Analyzer.PredicatePolicy.OPAQUE);
+		assertTrue(opaque.contains(LL1Analyzer.HIT_PRED));
+		assertFalse(opaque.contains(1));
+		assertFalse(opaque.contains(4));
+
+		// 2. SEE_THROUGH_ALL sees through all predicates
+		IntervalSet seeAll = analyzer.LOOK(r0s, r0e, PredictionContext.EMPTY_LOCAL, LL1Analyzer.PredicatePolicy.SEE_THROUGH_ALL);
+		assertTrue(seeAll.contains(1));
+		assertTrue(seeAll.contains(2));
+		assertTrue(seeAll.contains(4));
+		assertTrue(seeAll.contains(5));
+		assertFalse(seeAll.contains(LL1Analyzer.HIT_PRED));
+
+		// 3. SEE_THROUGH_DROPPED_CALLEE_PREDS:
+		//    - depth-0 ctx-dependent pred (token 4) stays OPAQUE (HIT_PRED)
+		//    - callee ctx-dependent pred (token 1) and prec pred (token 5) are seen through
+		//    - callee ctx-independent pred (token 2) stays OPAQUE (HIT_PRED)
+		IntervalSet droppedFromR1Call = analyzer.LOOK(r0s, r0e, PredictionContext.EMPTY_LOCAL,
+			LL1Analyzer.PredicatePolicy.SEE_THROUGH_DROPPED_CALLEE_PREDS, false);
+		assertTrue(droppedFromR1Call.contains(1));
+		assertTrue(droppedFromR1Call.contains(5));
+		assertFalse(droppedFromR1Call.contains(2));
+		assertFalse(droppedFromR1Call.contains(4));
+		assertTrue(droppedFromR1Call.contains(LL1Analyzer.HIT_PRED));
+
+		// 4. Null predicatePolicy throws NPE
+		try {
+			analyzer.LOOK(r0s, r0e, PredictionContext.EMPTY_LOCAL, null);
+			fail("Expected NullPointerException");
+		}
+		catch (NullPointerException expected) {
+		}
+
+		// 5. lookBusy isolation regressions (depth -1 vs 0 AND depth -1 vs +1):
+		//    (a) Depth -1 (via RuleStopState FOLLOW at EMPTY_LOCAL with stopState==null) must NOT
+		//        poison a subsequent depth 0 visit of the same state.
+		ATN isoAtn = new ATN(ATNType.PARSER, 4);
+		RuleStartState aStart = new RuleStartState(); aStart.ruleIndex = 0;
+		RuleStopState aStop = new RuleStopState(); aStop.ruleIndex = 0; aStart.stopState = aStop;
+		BasicState shared = new BasicState(); shared.ruleIndex = 0;
+		BasicState afterPred = new BasicState(); afterPred.ruleIndex = 0;
+		for (ATNState st : new ATNState[] { aStart, aStop, shared, afterPred }) {
+			isoAtn.addState(st);
+		}
+		isoAtn.ruleToStartState = new RuleStartState[] { aStart };
+		isoAtn.ruleToStopState = new RuleStopState[] { aStop };
+		aStart.addTransition(new EpsilonTransition(aStop));    // visits shared at edgeDepth == -1
+		aStop.addTransition(new EpsilonTransition(shared));
+		aStart.addTransition(new EpsilonTransition(shared));   // visits shared at callDepth == 0
+		shared.addTransition(new PredicateTransition(afterPred, 0, 0, true));
+		afterPred.addTransition(new AtomTransition(aStop, 1));
+
+		LL1Analyzer isoAnalyzer = new LL1Analyzer(isoAtn);
+		IntervalSet isoLook = isoAnalyzer.LOOK(aStart, null, PredictionContext.EMPTY_LOCAL,
+			LL1Analyzer.PredicatePolicy.SEE_THROUGH_DROPPED_CALLEE_PREDS, false);
+		assertTrue("Depth -1 path must see through ctx-dependent pred", isoLook.contains(1));
+		assertTrue("Depth 0 path must NOT be poisoned by depth -1 and must emit HIT_PRED",
+			isoLook.contains(LL1Analyzer.HIT_PRED));
+
+		//    (b) Depth -1 vs depth +1 (3-regime busyAlt): alt 1 exits rStop (depth -1) and calls
+		//        nullable rule a (with ctx=Singleton(EMPTY_LOCAL, followA), depth=-1 -> sees through
+		//        {ctxDep}?); alt 2 calls rule a at depth +1 with the SAME ctx=Singleton(EMPTY_LOCAL, followA)
+		//        and pops back to depth 0 where {ctxDep}? MUST emit HIT_PRED!
+		ATN d3Atn = new ATN(ATNType.PARSER, 4);
+		RuleStartState rS = new RuleStartState(); rS.ruleIndex = 0;
+		RuleStopState rE = new RuleStopState(); rE.ruleIndex = 0; rS.stopState = rE;
+		BasicState callA = new BasicState(); callA.ruleIndex = 0;
+		BasicState followA = new BasicState(); followA.ruleIndex = 0;
+		BasicState afterRPred = new BasicState(); afterRPred.ruleIndex = 0;
+		RuleStartState subS = new RuleStartState(); subS.ruleIndex = 1;
+		RuleStopState subE = new RuleStopState(); subE.ruleIndex = 1; subS.stopState = subE;
+		for (ATNState st : new ATNState[] { rS, rE, callA, followA, afterRPred, subS, subE }) {
+			d3Atn.addState(st);
+		}
+		d3Atn.ruleToStartState = new RuleStartState[] { rS, subS };
+		d3Atn.ruleToStopState = new RuleStopState[] { rE, subE };
+		// Alt 1: rS -> rE -> callA (depth 0 -> -1, ctx EMPTY_LOCAL)
+		rS.addTransition(new EpsilonTransition(rE));
+		rE.addTransition(new EpsilonTransition(callA));
+		// Alt 2: rS -> callA (depth 0 -> calls subS at depth +1 with same Singleton(EMPTY_LOCAL, followA))
+		rS.addTransition(new EpsilonTransition(callA));
+		callA.addTransition(new RuleTransition(subS, 1, 0, followA));
+		subS.addTransition(new EpsilonTransition(subE));
+		followA.addTransition(new PredicateTransition(afterRPred, 0, 0, true));
+		afterRPred.addTransition(new AtomTransition(rE, 2));
+
+		IntervalSet d3Look = new LL1Analyzer(d3Atn).LOOK(rS, null, PredictionContext.EMPTY_LOCAL,
+			LL1Analyzer.PredicatePolicy.SEE_THROUGH_DROPPED_CALLEE_PREDS, false);
+		assertTrue("Depth -1 path sees through ctxDep pred", d3Look.contains(2));
+		assertTrue("Depth +1 -> 0 pop must NOT be poisoned by depth -1 and must emit HIT_PRED",
+			d3Look.contains(LL1Analyzer.HIT_PRED));
+
+		// 6. Legacy 8-arg _LOOK subclass override observes BOTH root and recursive frames
+		final int[] legacyFrames = new int[1];
+		LL1Analyzer legacySub = new LL1Analyzer(atn) {
+			@Override
+			protected void _LOOK(ATNState s, ATNState stopState, PredictionContext ctx,
+								 IntervalSet look, java.util.Set<ATNConfig> lookBusy,
+								 BitSet calledRuleStack, boolean seeThruPreds, boolean addEOF) {
+				legacyFrames[0]++;
+				super._LOOK(s, stopState, ctx, look, lookBusy, calledRuleStack, seeThruPreds, addEOF);
+			}
+		};
+		IntervalSet subLook = legacySub.LOOK(r0s, r0e, PredictionContext.EMPTY_LOCAL,
+			LL1Analyzer.PredicatePolicy.SEE_THROUGH_ALL, true);
+		assertTrue(subLook.contains(1));
+		assertTrue("Expected root + recursive legacy _LOOK calls, got " + legacyFrames[0], legacyFrames[0] > 2);
+
+		// Calling protected 8-arg PredicatePolicy _LOOK on subclass also routes non-drop modes through legacy _LOOK
+		int before = legacyFrames[0];
+		legacySub._LOOK(r0s, r0e, PredictionContext.EMPTY_LOCAL, new IntervalSet(),
+			new HashSet<ATNConfig>(), new BitSet(), LL1Analyzer.PredicatePolicy.OPAQUE, false);
+		assertTrue(legacyFrames[0] > before);
+	}
 }

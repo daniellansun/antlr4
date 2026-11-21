@@ -289,8 +289,8 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 	}
 
 	// 8-bit storage for code points <= U+00FF.
-	private static final class CodePoint8BitCharStream extends CodePointCharStream {
-		private final byte[] byteArray;
+	static final class CodePoint8BitCharStream extends CodePointCharStream {
+		final byte[] byteArray;
 
 		private CodePoint8BitCharStream(int position, int remaining, String name, byte[] byteArray, int arrayOffset) {
 			super(position, remaining, name);
@@ -370,8 +370,8 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 	}
 
 	// 16-bit internal storage for code points between U+0100 and U+FFFF.
-	private static final class CodePoint16BitCharStream extends CodePointCharStream {
-		private final char[] charArray;
+	static final class CodePoint16BitCharStream extends CodePointCharStream {
+		final char[] charArray;
 
 		private CodePoint16BitCharStream(int position, int remaining, String name, char[] charArray, int arrayOffset) {
 			super(position, remaining, name);
@@ -452,8 +452,8 @@ public abstract class CodePointCharStream implements UnicodeCharStream, CharStre
 	}
 
 	// 32-bit internal storage for code points between U+10000 and U+10FFFF.
-	private static final class CodePoint32BitCharStream extends CodePointCharStream {
-		private final int[] intArray;
+	static final class CodePoint32BitCharStream extends CodePointCharStream {
+		final int[] intArray;
 
 		private CodePoint32BitCharStream(int position, int remaining, String name, int[] intArray, int arrayOffset) {
 			super(position, remaining, name);

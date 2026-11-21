@@ -130,7 +130,7 @@ final class ReachComputation {
 				List<ATNConfig> skippedStopStates = null;
 
 				final int configCount = configs.size();
-				final boolean directClosure = simulator.useDirectClosure;
+				final boolean directClosure = simulator.isBaseSimulator;
 				final int maxTokenType = simulator.atn.maxTokenType;
 				for (int ci = 0; ci < configCount; ci++) {
 					ATNConfig c = configs.get(ci);
@@ -150,6 +150,20 @@ final class ReachComputation {
 						continue;
 					}
 
+					if (directClosure) {
+						Transition single = cState.singleNonEpsilonTransition;
+						if (single != null) {
+							ATNState target = matchDirectTransition(single, t, maxTokenType);
+							if (target != null) {
+								intermediate.addTransformed(target, c, contextCache);
+							}
+							continue;
+						}
+						if (cState.noNonEpsilonOptimizedTransitions) {
+							continue;
+						}
+					}
+
 					Transition[] frozen = cState.frozenOptimizedTransitions();
 					int n = frozen != null ? frozen.length : cState.getNumberOfOptimizedTransitions();
 					for (int ti = 0; ti < n; ti++) {               // for each optimized transition
@@ -159,22 +173,18 @@ final class ReachComputation {
 							if (trans.epsilon) {
 								continue;
 							}
-							int stype = trans.serializationType;
-							if (stype == Transition.ATOM) {
-								target = ((AtomTransition) trans).label == t ? trans.target : null;
-							}
-							else if (stype == Transition.SET) {
-								target = ((SetTransition) trans).set.contains(t) ? trans.target : null;
-							}
-							else {
-								target = trans.matches(t, 0, maxTokenType) ? trans.target : null;
-							}
+							target = matchDirectTransition(trans, t, maxTokenType);
 						}
 						else {
 							target = simulator.getReachableTarget(c, trans, t);
 						}
 						if (target != null) {
-							intermediate.add(directClosure ? c.transformParser(target) : c.transform(target, false), contextCache);
+							if (directClosure) {
+								intermediate.addTransformed(target, c, contextCache);
+							}
+							else {
+								intermediate.add(c.transform(target, false), contextCache);
+							}
 						}
 					}
 				}
@@ -270,6 +280,18 @@ final class ReachComputation {
 			retainedReach.release();
 			retainedIntermediate.release();
 		}
+	}
+
+	@Nullable
+	private static ATNState matchDirectTransition(@NotNull Transition trans, int t, int maxTokenType) {
+		int stype = trans.serializationType;
+		if (stype == Transition.ATOM) {
+			return ((AtomTransition) trans).label == t ? trans.target : null;
+		}
+		if (stype == Transition.SET) {
+			return ((SetTransition) trans).set.contains(t) ? trans.target : null;
+		}
+		return trans.matches(t, 0, maxTokenType) ? trans.target : null;
 	}
 
 	/**

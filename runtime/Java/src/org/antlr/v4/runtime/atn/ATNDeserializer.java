@@ -645,13 +645,20 @@ public class ATNDeserializer {
 
 		identifyTailCalls(atn);
 
-		// PERF: Freeze optimized transition lists into arrays so prediction
-		// hot paths (epsilon closure, reach) avoid ArrayList get/size on every
-		// edge walk. ATN states are immutable after deserialization.
+		// PERF: Freeze optimized transition lists into arrays and mark all
+		// SetTransition IntervalSets read-only so IntervalSet.fastBits O(1)
+		// bitmask lookup is active on prediction hot paths.
 		for (int i = 0, n = atn.states.size(); i < n; i++) {
 			ATNState state = atn.states.get(i);
 			if (state != null) {
 				state.freezeOptimizedTransitions();
+				Transition[] frozen = state.frozenOptimizedTransitions();
+				for (int j = 0; j < frozen.length; j++) {
+					Transition t = frozen[j];
+					if (t instanceof SetTransition) {
+						((SetTransition) t).set.setReadonly(true);
+					}
+				}
 			}
 		}
 		atn.freezeStatesSnapshot();
@@ -679,6 +686,7 @@ public class ATNDeserializer {
 				p += unicodeDeserializer.size();
 				set.add(a, b);
 			}
+			set.setReadonly(true);
 		}
 		return p;
 	}
@@ -1076,6 +1084,7 @@ public class ATNDeserializer {
 					newTransition = new RangeTransition(blockEndState, matchInterval.a, matchInterval.b);
 				}
 			} else {
+				matchSet.setReadonly(true);
 				newTransition = new SetTransition(blockEndState, matchSet);
 			}
 

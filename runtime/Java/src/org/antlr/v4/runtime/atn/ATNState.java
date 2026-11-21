@@ -147,6 +147,23 @@ public abstract class ATNState {
 	private Transition[] optimizedTransitionsArray;
 
 	/**
+	 * When {@link #freezeOptimizedTransitions()} finds exactly one non-epsilon
+	 * optimized transition, caches it directly so {@link ReachComputation}
+	 * skips array loading and iteration on the dominant single-edge parser
+	 * state shape. Cleared on any transition mutation.
+	 */
+	Transition singleNonEpsilonTransition;
+
+	/**
+	 * {@code true} after {@link #freezeOptimizedTransitions()} when this state
+	 * has zero non-epsilon optimized transitions (note: {@code inlineSetRules}
+	 * can introduce non-epsilon optimized transitions on states whose raw
+	 * {@link #epsilonOnlyTransitions} flag is {@code true}). Cleared on any
+	 * transition mutation.
+	 */
+	boolean noNonEpsilonOptimizedTransitions;
+
+	/**
 	 * Frozen optimized-transition array after {@link #freezeOptimizedTransitions()},
 	 * else {@code null}. Package-private so reach/closure can hoist the
 	 * snapshot once per state.
@@ -220,7 +237,7 @@ public abstract class ATNState {
 		// When optimizedTransitions still aliases transitions, invalidate any
 		// freeze snapshot so hot-path array views cannot miss the new edge.
 		if (optimizedTransitions == transitions) {
-			optimizedTransitionsArray = null;
+			invalidateOptimizedSnapshot();
 		}
 		transitions.add(index, e);
 	}
@@ -231,14 +248,14 @@ public abstract class ATNState {
 
 	public void setTransition(int i, Transition e) {
 		if (optimizedTransitions == transitions) {
-			optimizedTransitionsArray = null;
+			invalidateOptimizedSnapshot();
 		}
 		transitions.set(i, e);
 	}
 
 	public Transition removeTransition(int index) {
 		if (optimizedTransitions == transitions) {
-			optimizedTransitionsArray = null;
+			invalidateOptimizedSnapshot();
 		}
 		return transitions.remove(index);
 	}
@@ -276,7 +293,7 @@ public abstract class ATNState {
 			optimizedTransitions = new ArrayList<>();
 		}
 
-		optimizedTransitionsArray = null;
+		invalidateOptimizedSnapshot();
 		optimizedTransitions.add(e);
 	}
 
@@ -285,7 +302,7 @@ public abstract class ATNState {
 			throw new IllegalStateException();
 		}
 
-		optimizedTransitionsArray = null;
+		invalidateOptimizedSnapshot();
 		optimizedTransitions.set(i, e);
 	}
 
@@ -294,8 +311,14 @@ public abstract class ATNState {
 			throw new IllegalStateException();
 		}
 
-		optimizedTransitionsArray = null;
+		invalidateOptimizedSnapshot();
 		optimizedTransitions.remove(i);
+	}
+
+	private void invalidateOptimizedSnapshot() {
+		optimizedTransitionsArray = null;
+		singleNonEpsilonTransition = null;
+		noNonEpsilonOptimizedTransitions = false;
 	}
 
 	/**
@@ -314,9 +337,28 @@ public abstract class ATNState {
 		int n = list.size();
 		if (n == 0) {
 			optimizedTransitionsArray = Transition.EMPTY_ARRAY;
+			singleNonEpsilonTransition = null;
+			noNonEpsilonOptimizedTransitions = true;
 			return;
 		}
-		optimizedTransitionsArray = list.toArray(new Transition[n]);
+		Transition[] arr = list.toArray(new Transition[n]);
+		Transition onlyNonEps = null;
+		int nonEpsCount = 0;
+		for (int i = 0; i < n; i++) {
+			Transition t = arr[i];
+			if (!t.epsilon) {
+				nonEpsCount++;
+				if (nonEpsCount == 1) {
+					onlyNonEps = t;
+				}
+				else {
+					onlyNonEps = null;
+				}
+			}
+		}
+		optimizedTransitionsArray = arr;
+		singleNonEpsilonTransition = onlyNonEps;
+		noNonEpsilonOptimizedTransitions = (nonEpsCount == 0);
 	}
 
 }

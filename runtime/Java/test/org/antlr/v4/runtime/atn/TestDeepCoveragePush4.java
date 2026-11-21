@@ -99,16 +99,7 @@ public class TestDeepCoveragePush4 {
 		}
 
 		ConflictInfo callIsConflicted(ATNConfigSet configs, PredictionContextCache cache) {
-			// isConflicted is private; invoke via reflection for direct branch coverage
-			try {
-				java.lang.reflect.Method m = ParserATNSimulator.class.getDeclaredMethod(
-					"isConflicted", ATNConfigSet.class, PredictionContextCache.class);
-				m.setAccessible(true);
-				return (ConflictInfo) m.invoke(this, configs, cache);
-			}
-			catch (Exception e) {
-				throw new RuntimeException(e);
-			}
+			return ConflictDetector.detectOnce(configs, cache);
 		}
 
 		ATNConfigSet callRemoveAllConfigsNotInRuleStopState(ATNConfigSet configs,

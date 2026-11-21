@@ -97,11 +97,10 @@ public class CommonTokenStream extends BufferedTokenStream {
 				}
 				final TokenList list = fastTokens;
 				final int next = p + 1;
-				int sz = list.size;
-				final int ch = this.channel;
+				final int sz = list.size;
 				if (next < sz) {
 					Token t = list.getFast(next);
-					if (t.getChannel() == ch || t.getType() == EOF) {
+					if (t.getChannel() == channel || t.getType() == EOF) {
 						p = next;
 						cachedLTMinus1 = current;
 						cachedLT1 = t;
@@ -109,43 +108,11 @@ public class CommonTokenStream extends BufferedTokenStream {
 					}
 				}
 				else if (next == sz && !fetchedEOF) {
-					// Fused frontier fetch: pulls directly from tokenSource into
-					// TokenList until an on-channel token or EOF arrives, avoiding
-					// sync/fetch/adjustSeekIndex/nextTokenOnChannel call frames.
-					final TokenSource src = tokenSource;
-					while (true) {
-						Token t = src.nextToken();
-						int type;
-						int tokCh;
-						if (t.getClass() == CommonToken.class) {
-							CommonToken ct = (CommonToken) t;
-							ct.index = sz;
-							type = ct.type;
-							tokCh = ct.channel;
-						}
-						else {
-							if (t instanceof WritableToken) {
-								((WritableToken) t).setTokenIndex(sz);
-							}
-							type = t.getType();
-							tokCh = t.getChannel();
-						}
-						list.appendFast(t);
-						if (type == EOF) {
-							fetchedEOF = true;
-							p = sz;
-							cachedLTMinus1 = current;
-							cachedLT1 = t;
-							return;
-						}
-						if (tokCh == ch) {
-							p = sz;
-							cachedLTMinus1 = current;
-							cachedLT1 = t;
-							return;
-						}
-						sz++;
-					}
+					Token t = fetchNextOnChannel(p, list, sz);
+					p = list.size - 1;
+					cachedLTMinus1 = current;
+					cachedLT1 = t;
+					return;
 				}
 			}
 		}
@@ -170,7 +137,7 @@ public class CommonTokenStream extends BufferedTokenStream {
             n++;
         }
         if ( i<0 ) return null;
-        return tokens == fastTokens ? fastTokens.getFast(i) : tokens.get(i);
+        return tokenAt(i);
     }
 
     @Override
@@ -213,8 +180,116 @@ public class CommonTokenStream extends BufferedTokenStream {
             n++;
         }
 //		if ( i>range ) range = i;
-        return tokens == fastTokens ? fastTokens.getFast(i) : tokens.get(i);
+        return tokenAt(i);
     }
+
+	/**
+	 * Returns the first token at raw buffer index {@code > afterIndex} on
+	 * {@link #channel} (or {@link Token#EOF}) without mutating the stream
+	 * cursor ({@link #p}), {@link #cachedLT1}, or {@link #cachedLTMinus1}.
+	 *
+	 * <p>Passing {@code afterIndex == -1} returns the first on-channel (or EOF)
+	 * token. Passing an index at or past EOF (including
+	 * {@link Integer#MAX_VALUE}) returns the EOF token.</p>
+	 *
+	 * @param afterIndex raw token buffer index ({@code >= -1})
+	 * @return the next on-channel or EOF token after {@code afterIndex}
+	 * @throws IllegalArgumentException if {@code afterIndex < -1}
+	 * @since 4.13.2.20
+	 */
+	@NotNull
+	public Token nextOnChannel(int afterIndex) {
+		if (getClass() == CommonTokenStream.class && tokens == fastTokens) {
+			final TokenList list = fastTokens;
+			final int next = afterIndex + 1;
+			if (next >= 0) {
+				final int sz = list.size;
+				if (next < sz) {
+					Token t = list.getFast(next);
+					if (t.getChannel() == channel || t.getType() == EOF) {
+						return t;
+					}
+				}
+				else if (next == sz && !fetchedEOF) {
+					return fetchNextOnChannel(afterIndex, list, sz);
+				}
+			}
+		}
+		return nextOnChannelSlow(afterIndex);
+	}
+
+	/**
+	 * Fast frontier fetch for base {@link CommonTokenStream#nextOnChannel(int)}
+	 * when {@code afterIndex + 1 >= fastTokens.size} and EOF has not yet been
+	 * reached. Pulls directly from {@link #tokenSource} without redundant
+	 * validation or buffered-prefix scans.
+	 */
+	@NotNull
+	private Token fetchNextOnChannel(int afterIndex, @NotNull TokenList list, int sz) {
+		final int ch = this.channel;
+		final TokenSource src = tokenSource;
+		while (true) {
+			Token t = src.nextToken();
+			int type;
+			int tokCh;
+			if (t.getClass() == CommonToken.class) {
+				CommonToken ct = (CommonToken) t;
+				ct.index = sz;
+				type = ct.type;
+				tokCh = ct.channel;
+			}
+			else {
+				if (t instanceof WritableToken) {
+					((WritableToken) t).setTokenIndex(sz);
+				}
+				type = t.getType();
+				tokCh = t.getChannel();
+			}
+			list.appendFast(t);
+			int idx = sz++;
+			if (type == EOF) {
+				fetchedEOF = true;
+				return t;
+			}
+			if (idx > afterIndex && tokCh == ch) {
+				return t;
+			}
+		}
+	}
+
+	@NotNull
+	private Token nextOnChannelSlow(int afterIndex) {
+		if (afterIndex < -1) {
+			throw new IllegalArgumentException("afterIndex must be >= -1: " + afterIndex);
+		}
+		if (afterIndex == Integer.MAX_VALUE) {
+			while (!fetchedEOF && fetch(1000) > 0) {
+			}
+			return tokenAt(tokenCount() - 1);
+		}
+		final int next = afterIndex + 1;
+		if (getClass() == CommonTokenStream.class && tokens == fastTokens) {
+			final TokenList list = fastTokens;
+			final int sz = list.size;
+			final int ch = this.channel;
+			int j = next;
+			while (j < sz) {
+				Token t = list.getFast(j);
+				if (t.getChannel() == ch || t.getType() == EOF) {
+					return t;
+				}
+				j++;
+			}
+			if (fetchedEOF) {
+				return list.getFast(sz - 1);
+			}
+			return fetchNextOnChannel(afterIndex, list, sz);
+		}
+		// Subclass or custom backing list: nextTokenOnChannel calls sync(...)
+		// directly without invoking lazyInit(), preserving p / cachedLT1 / cachedLTMinus1.
+		int idx = nextTokenOnChannel(next, channel);
+		return tokenAt(idx);
+	}
 
 	/**
 	 * Fast forward lookahead ({@code k > 1}) for base {@link CommonTokenStream}:

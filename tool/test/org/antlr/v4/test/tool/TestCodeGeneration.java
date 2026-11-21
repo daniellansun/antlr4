@@ -65,9 +65,9 @@ public class TestCodeGeneration extends BaseTest {
 	}
 
 	/**
-	 * Generated parsers must emit the private {@code _adaptivePredict} helper
-	 * and call it from LL(*) decision sites instead of
-	 * {@code getInterpreter().adaptivePredict(...)}.
+	 * Generated parsers inherit {@code _adaptivePredict} / {@code _syncPredict}
+	 * from {@link org.antlr.v4.runtime.Parser} instead of pasting private copies
+	 * or calling {@code getInterpreter().adaptivePredict(...)} directly.
 	 */
 	@Test public void generatedParserUsesAdaptivePredictHelper() throws Exception {
 		// Non-LL(1) alternatives force LL(*) adaptivePredict codegen (not LA switch).
@@ -78,12 +78,10 @@ public class TestCodeGeneration extends BaseTest {
 			"B : 'b' ;\n" +
 			"C : 'c' ;\n";
 		String source = generateParserSource(g, false);
-		assertTrue("missing _adaptivePredict helper",
-			source.contains("private int _adaptivePredict(int decision)"));
-		assertTrue("helper must bind _interp.adaptivePredict",
-			source.contains("_interp.adaptivePredict(_input, decision, _ctx)"));
-		assertTrue("decision sites must call _adaptivePredict",
-			source.contains("switch ( _adaptivePredict(") || source.contains("= _adaptivePredict("));
+		assertFalse("must inherit _adaptivePredict from Parser instead of pasting a private copy",
+			source.contains("private int _adaptivePredict("));
+		assertTrue("decision sites must call _syncPredict or _adaptivePredict",
+			source.contains("switch ( _syncPredict(") || source.contains("switch ( _adaptivePredict(") || source.contains("= _syncPredict(") || source.contains("= _adaptivePredict("));
 		// Decision sites only (ignore any residual comment/doc text).
 		assertFalse("must not call getInterpreter().adaptivePredict at decision sites",
 			source.contains("getInterpreter().adaptivePredict(_input,"));
@@ -99,7 +97,7 @@ public class TestCodeGeneration extends BaseTest {
 			"A : 'a' ;\n" +
 			"B : 'b' ;\n";
 		String source = generateParserSource(g, true);
-		assertTrue(source.contains("_adaptivePredict("));
+		assertTrue(source.contains("_syncPredict(") || source.contains("_adaptivePredict("));
 		assertTrue("star loop must test the continue alternative",
 			source.contains("while (_alt==1)"));
 		assertFalse("must not mention INVALID_ALT_NUMBER (FQN or otherwise)",
@@ -107,8 +105,9 @@ public class TestCodeGeneration extends BaseTest {
 	}
 
 	/**
-	 * Generated parsers emit a private {@code _sync} helper so every decision
-	 * site shares one monomorphic call to the error strategy.
+	 * Generated parsers inherit {@code _sync} / {@code _syncPredict} from
+	 * {@link org.antlr.v4.runtime.Parser} instead of pasting private copies or
+	 * calling {@code _errHandler.sync(this)} directly at every decision site.
 	 */
 	@Test public void generatedParserUsesSyncHelper() throws Exception {
 		String g =
@@ -117,19 +116,12 @@ public class TestCodeGeneration extends BaseTest {
 			"A : 'a' ;\n" +
 			"B : 'b' ;\n";
 		String source = generateParserSource(g, true);
-		assertTrue("missing _sync helper",
+		assertFalse("must inherit _sync from Parser instead of pasting a private copy",
 			source.contains("private void _sync()"));
-		assertTrue("helper must honor the cached errorSyncEnabled field",
-			source.contains("if (errorSyncEnabled)"));
-		assertTrue("helper must delegate to the error strategy",
+		assertTrue("decision / loop sites must call inherited _sync/_syncPredict",
+			source.contains("_sync(") || source.contains("_syncPredict("));
+		assertFalse("decision sites must not call _errHandler.sync directly",
 			source.contains("_errHandler.sync(this)"));
-		assertTrue("decision / loop sites must call _sync()",
-			source.contains("_sync();"));
-		int first = source.indexOf("_errHandler.sync(this)");
-		int second = source.indexOf("_errHandler.sync(this)", first + 1);
-		assertTrue("sync helper body must mention _errHandler.sync once", first >= 0);
-		assertTrue("decision sites must not call _errHandler.sync directly",
-			second < 0);
 	}
 
 	@Test public void generatedParserUsesGetStateForContext() throws Exception {
@@ -151,20 +143,14 @@ public class TestCodeGeneration extends BaseTest {
 			"A : 'a' ;\n" +
 			"B : 'b' ;\n";
 		String source = generateParserSource(g, false);
-		assertTrue("set match must consume the already-fetched token",
-			source.contains("consume(_st)"));
+		assertTrue("set match must fetch LT(1) once and delegate to inherited _matchSet",
+			source.contains("Token _st = _input.LT(1)"));
+		assertTrue("non-EOF set match must call _matchSet(_st, ...)",
+			source.contains("_matchSet(_st,"));
+		assertFalse("non-EOF set match must not call _matchSetEOF",
+			source.contains("_matchSetEOF("));
 		assertFalse("must not consume() without the looked-up token",
 			source.contains("consume();"));
-		int setStart = source.indexOf("Token _st = _input.LT(1)");
-		assertTrue("set match must fetch LT(1) once", setStart >= 0);
-		int setEnd = source.indexOf("consume(_st)", setStart);
-		assertTrue(setEnd > setStart);
-		String setBody = source.substring(setStart, setEnd);
-		assertTrue("set match must gate reportMatch itself",
-			setBody.contains("if (reportMatchRequired || errorRecoveryMode)"));
-		assertTrue(setBody.contains("_errHandler.reportMatch(this)"));
-		assertFalse("set without EOF must not store matchedEOF",
-			source.contains("matchedEOF = true") && source.contains("_st.getType() == Token.EOF"));
 	}
 
 	@Test public void generatedTokenMatchUsesPrivateHelper() throws Exception {
@@ -173,19 +159,12 @@ public class TestCodeGeneration extends BaseTest {
 			"s : A ;\n" +
 			"A : 'a' ;\n";
 		String source = generateParserSource(g, false);
-		int helper = source.indexOf("private Token _match(int ttype)");
-		assertTrue("missing _match helper", helper >= 0);
-		int helperEnd = source.indexOf("Monomorphic precedence test", helper);
-		if (helperEnd < 0) {
-			helperEnd = source.indexOf("private boolean _precpred", helper);
-		}
-		assertTrue(helperEnd > helper);
-		String body = source.substring(helper, helperEnd);
-		assertTrue("token match must gate reportMatch",
-			body.contains("if (reportMatchRequired || errorRecoveryMode)"));
-		assertTrue(body.contains("_errHandler.reportMatch(this)"));
-		assertTrue("token sites must call _match",
+		assertFalse("must inherit _match from Parser instead of pasting a private copy",
+			source.contains("private Token _match(int ttype)"));
+		assertTrue("token sites must call inherited _match",
 			source.contains("_match("));
+		assertTrue("catch blocks must call inherited _recover",
+			source.contains("_recover(_localctx, re)"));
 	}
 
 	@Test public void generatedNongreedyStarLoopUsesContinueAltTwo() throws Exception {
@@ -235,20 +214,22 @@ public class TestCodeGeneration extends BaseTest {
 			"s : (A | EOF) ;\n" +
 			"A : 'a' ;\n";
 		String source = generateParserSource(g, false);
-		assertTrue(source.contains("if (_la == Token.EOF)"));
-		assertTrue(source.contains("matchedEOF = true"));
+		assertTrue("set containing EOF must call inherited _matchSetEOF",
+			source.contains("_matchSetEOF(_st,"));
 	}
 
 	@Test public void generatedNotSetMatchInvertsLaTest() throws Exception {
 		String g =
 			"grammar T;\n" +
-			"s : ~A B ;\n" +
+			"s : ~A ~(B | EOF) ;\n" +
 			"A : 'a' ;\n" +
 			"B : 'b' ;\n" +
 			"C : 'c' ;\n";
 		String source = generateParserSource(g, false);
-		assertTrue("MatchNotSet must reject non-positive lookahead",
-			source.contains("_la <= 0 ||") || source.contains("_la <= 0||"));
+		assertTrue("MatchNotSet must require positive lookahead and invert the test",
+			source.contains("_matchSet(_st, _la > 0 && !("));
+		assertFalse("MatchNotSet must never call _matchSetEOF even when inverted set mentions EOF",
+			source.contains("_matchSetEOF("));
 	}
 
 	@Test public void generatedLabeledSetMatchAssignsLookaheadToken() throws Exception {
@@ -258,7 +239,7 @@ public class TestCodeGeneration extends BaseTest {
 			"A : 'a' ;\n" +
 			"B : 'b' ;\n";
 		String source = generateParserSource(g, false);
-		assertTrue(source.contains("t = _st;"));
+		assertTrue(source.contains("t = _matchSet(_st,"));
 		assertTrue(source.contains("Token _st = _input.LT(1)"));
 	}
 
@@ -282,9 +263,9 @@ public class TestCodeGeneration extends BaseTest {
 			"  ;\n" +
 			"INT : '0'..'9'+ ;\n";
 		String source = generateParserSource(g, false);
-		assertTrue("missing _prec helper",
+		assertFalse("must inherit _prec from Parser instead of pasting a private copy",
 			source.contains("private boolean _prec(int p)"));
-		assertTrue("operator alts must call _prec",
+		assertTrue("operator alts must call inherited _prec",
 			source.contains("_prec("));
 		assertFalse("must not wrap a dummy parent context for labeled rec alts",
 			source.contains("Context(new EContext("));

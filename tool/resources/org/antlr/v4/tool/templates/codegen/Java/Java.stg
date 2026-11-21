@@ -246,133 +246,6 @@ public <if(parser.abstractRecognizer)>abstract <endif>class <parser.name> extend
 		return new FailedPredicateException(this, predicate, message);
 	}
 
-	/**
-	 * Hot-path helper used by generated rule methods. Prefer this over
-	 * fetching the interpreter via the public accessor so the field is loaded
-	 * once and the call site stays monomorphic for the JIT.
-	 * Named with a leading underscore to avoid colliding with a user rule
-	 * named {@code adaptivePredict}.
-	 *
-	 * \<p>Uses {@code _interp} directly (same storage as
-	 * {@link #getInterpreter()}/{@link #setInterpreter}). Callers that replace
-	 * the simulator must use {@code setInterpreter}; overriding only
-	 * {@code getInterpreter()} without updating the field is unsupported for
-	 * generated decision sites (and for much of the runtime already).\</p>
-	 */
-	private int _adaptivePredict(int decision) {
-		return _interp.adaptivePredict(_input, decision, _ctx);
-	}
-
-	/**
-	 * Hot-path helper used by generated rule methods so every decision
-	 * site shares one monomorphic call to the error strategy. Named with a
-	 * leading underscore to avoid colliding with a user rule named
-	 * {@code sync}.
-	 *
-	 * \<p>Skips the virtual sync call when the installed strategy
-	 * reports isSyncRequired() is false (two-stage SLL / BailErrorStrategy).\</p>
-	 */
-	private void _sync() {
-		if (errorSyncEnabled) {
-			_errHandler.sync(this);
-		}
-	}
-
-	/**
-	 * Monomorphic match used by generated non-EOF token sites. Public
-	 * {@link #match(int)} remains for handwritten callers and subclasses.
-	 * {@code reportMatchRequired} is false for {@link DefaultErrorStrategy},
-	 * so the success path is a field check; inline recovery is outlined to
-	 * {@link #_matchRecover()} to keep the hot path compact for C2 inlining.
-	 */
-	private Token _match(int ttype) {
-		Token t = _input.LT(1);
-		if ( t.getType()==ttype ) {
-			if (reportMatchRequired || errorRecoveryMode) {
-				_errHandler.reportMatch(this);
-			}
-			consume(t);
-			return t;
-		}
-		return _matchRecover();
-	}
-
-	/**
-	 * Monomorphic precedence test for left-recursive operator alts.
-	 * Equivalent to {@link #precpred} without a virtual call or unused context.
-	 */
-	private boolean _prec(int p) {
-		return p \>= _precedenceStack.peek();
-	}
-
-	/**
-	 * Dedicated EOF match helper so {@link #_match(int)} does not pay an
-	 * {@code if (ttype == Token.EOF)} branch on every non-EOF token match.
-	 */
-	private Token _matchEOF() {
-		Token t = _input.LT(1);
-		if ( t.getType()==EOF ) {
-			matchedEOF = true;
-			if (reportMatchRequired || errorRecoveryMode) {
-				_errHandler.reportMatch(this);
-			}
-			consume(t);
-			return t;
-		}
-		return _matchRecover();
-	}
-
-	private Token _matchRecover() {
-		Token t = _errHandler.recoverInline(this);
-		if ( _buildParseTrees && t.getTokenIndex()==-1 ) {
-			_ctx.addErrorNode(createErrorNode(_ctx,t));
-		}
-		return t;
-	}
-
-	/**
-	 * Compact LL(1) zero-or-more single-token loop helper (e.g. {@code NL*}).
-	 * Preserves exact {@code setState}/{@code _sync}/{@code _match} semantics
-	 * while shrinking generated rule bytecode dramatically.
-	 */
-	private void _matchStar(int startState, int matchState, int loopBackState, int ttype) {
-		setState(startState);
-		_sync();
-		if ( _input.LA(1)==ttype ) {
-			do {
-				setState(matchState);
-				_match(ttype);
-				setState(loopBackState);
-				_sync();
-			} while ( _input.LA(1)==ttype );
-		}
-	}
-
-	/**
-	 * Compact LL(*) zero-or-more single-token loop helper.
-	 */
-	private void _matchStarPredict(int startState, int matchState, int loopBackState, int decision, int continueAlt, int ttype) {
-		setState(startState);
-		_sync();
-		int _alt = _adaptivePredict(decision);
-		while ( _alt==continueAlt ) {
-			setState(matchState);
-			_match(ttype);
-			setState(loopBackState);
-			_sync();
-			_alt = _adaptivePredict(decision);
-		}
-	}
-
-	/**
-	 * Compact deferred rule-entry helper for LL(1) labeled-alt rules.
-	 */
-	private void _enterDeferred(ParserRuleContext localctx, int startState, int ruleIndex, int decState) {
-		enterRule(localctx, startState, ruleIndex);
-		setState(decState);
-		_sync();
-	}
-
 	<namedActions.members>
 	<parser:(ctor)()>
 	<funcs; separator="\n">
@@ -585,9 +458,7 @@ RuleFunction(currentRule,args,code,locals,ruleCtx,altLabelCtxs,namedActions,fina
 			_localctx = new <currentRule.ctxType>(_ctx, _parentState);
 			enterRule(_localctx, <currentRule.startState>, RULE_<currentRule.name>);
 		}
-		_localctx.exception = re;
-		_errHandler.reportError(this, re);
-		_errHandler.recover(this, re);
+		_recover(_localctx, re);
 	}
 	<endif>
 	finally {
@@ -618,9 +489,7 @@ RuleFunction(currentRule,args,code,locals,ruleCtx,altLabelCtxs,namedActions,fina
 	<exceptions; separator="\n">
 	<else>
 	catch (RecognitionException re) {
-		_localctx.exception = re;
-		_errHandler.reportError(this, re);
-		_errHandler.recover(this, re);
+		_recover(_localctx, re);
 	}
 	<endif>
 	finally {
@@ -649,9 +518,7 @@ LeftFactoredRuleFunction(currentRule,args,code,locals,namedActions,finallyAction
 		<namedActions.after>
 	}
 	catch (RecognitionException re) {
-		_localctx.exception = re;
-		_errHandler.reportError(this, re);
-		_errHandler.recover(this, re);
+		_recover(_localctx, re);
 	}
 	finally {
 		<finallyAction>
@@ -681,9 +548,7 @@ LeftUnfactoredRuleFunction(currentRule,args,code,locals,namedActions,finallyActi
 		<namedActions.after>
 	}
 	catch (RecognitionException re) {
-		_localctx.exception = re;
-		_errHandler.reportError(this, re);
-		_errHandler.recover(this, re);
+		_recover(_localctx, re);
 	}
 	finally {
 		<finallyAction>
@@ -723,9 +588,7 @@ private <currentRule.ctxType> <currentRule.name>(int _p<args:{a | , <a>}>) throw
 		<namedActions.after>
 	}
 	catch (RecognitionException re) {
-		_localctx.exception = re;
-		_errHandler.reportError(this, re);
-		_errHandler.recover(this, re);
+		_recover(_localctx, re);
 	}
 	finally {
 		<finallyAction>
@@ -766,8 +629,7 @@ CodeBlockForAlt(currentAltCodeBlock, locals, preamble, ops) ::= <<
 
 LL1AltBlock(choice, preamble, alts, error, altTests) ::= <<
 <if(!choice.deferredRule)>
-setState(<choice.stateNumber>);
-_sync();
+_sync(<choice.stateNumber>);
 <endif>
 <if(choice.label)><labelref(choice.label)> = _input.LT(1);<endif>
 <preamble; separator="\n">
@@ -810,8 +672,7 @@ default:
 >>
 
 LL1OptionalBlock(choice, alts, error, altTests) ::= <<
-setState(<choice.stateNumber>);
-_sync();
+_sync(<choice.stateNumber>);
 <if(altTests)>
 _la = _input.LA(1);
 if (<first(altTests)>) {
@@ -832,8 +693,7 @@ default:
 >>
 
 LL1OptionalBlockSingleAlt(choice, expr, alts, preamble, error, followExpr) ::= <<
-setState(<choice.stateNumber>);
-_sync();
+_sync(<choice.stateNumber>);
 <preamble; separator="\n">
 if (<expr>) {
 	<alts; separator="\n">
@@ -845,26 +705,22 @@ LL1StarBlockSingleAlt(choice, loopExpr, alts, preamble, iteration) ::= <<
 <if(choice.singleTokenMatch)>
 _matchStar(<choice.stateNumber>, <choice.singleTokenMatch.stateNumber>, <choice.loopBackStateNumber>, <choice.singleTokenMatch.name>);
 <else>
-setState(<choice.stateNumber>);
-_sync();
+_sync(<choice.stateNumber>);
 <preamble; separator="\n">
 while (<loopExpr>) {
 	<alts; separator="\n">
-	setState(<choice.loopBackStateNumber>);
-	_sync();
+	_sync(<choice.loopBackStateNumber>);
 	<iteration>
 }
 <endif>
 >>
 
 LL1PlusBlockSingleAlt(choice, loopExpr, alts, preamble, iteration) ::= <<
-setState(<choice.blockStartStateNumber>); <! alt block decision !>
-_sync();
+_sync(<choice.blockStartStateNumber>); <! alt block decision !>
 <preamble; separator="\n">
 do {
 	<alts; separator="\n">
-	setState(<choice.stateNumber>); <! loopback/exit decision !>
-	_sync();
+	_sync(<choice.stateNumber>); <! loopback/exit decision !>
 	<iteration>
 } while ( <loopExpr> );
 >>
@@ -872,11 +728,14 @@ do {
 // LL(*) stuff
 
 AltBlock(choice, preamble, alts, error) ::= <<
-setState(<choice.stateNumber>);
-_sync();
+<if(!choice.label && !preamble)>
+switch ( _syncPredict(<choice.stateNumber>, <choice.decision>) ) {
+<else>
+_sync(<choice.stateNumber>);
 <if(choice.label)><labelref(choice.label)> = _input.LT(1);<endif>
 <preamble; separator="\n">
 switch ( _adaptivePredict(<choice.decision>) ) {
+<endif>
 <alts:{alt |
 case <i>:
 	<alt>
@@ -885,14 +744,12 @@ case <i>:
 >>
 
 OptionalBlock(choice, alts, error) ::= <<
-setState(<choice.stateNumber>);
-_sync();
 <if(!rest(alts))>
-if ( _adaptivePredict(<choice.decision>)==<if(choice.ast.greedy)>1<else>2<endif> ) {
+if ( _syncPredict(<choice.stateNumber>, <choice.decision>)==<if(choice.ast.greedy)>1<else>2<endif> ) {
 	<first(alts)>
 }
 <else>
-switch ( _adaptivePredict(<choice.decision>) ) {
+switch ( _syncPredict(<choice.stateNumber>, <choice.decision>) ) {
 <alts:{alt |
 case <i><if(!choice.ast.greedy)>+1<endif>:
 	<alt>
@@ -905,22 +762,17 @@ StarBlock(choice, alts, sync, iteration) ::= <<
 <if(choice.singleTokenMatch)>
 _matchStarPredict(<choice.stateNumber>, <choice.singleTokenMatch.stateNumber>, <choice.loopBackStateNumber>, <choice.decision>, <choice.continueAlt>, <choice.singleTokenMatch.name>);
 <else>
-setState(<choice.stateNumber>);
-_sync();
-_alt = _adaptivePredict(<choice.decision>);
+_alt = _syncPredict(<choice.stateNumber>, <choice.decision>);
 while (_alt==<choice.continueAlt>) {
 	<iteration>
 	<alts>
-	setState(<choice.loopBackStateNumber>);
-	_sync();
-	_alt = _adaptivePredict(<choice.decision>);
+	_alt = _syncPredict(<choice.loopBackStateNumber>, <choice.decision>);
 }
 <endif>
 >>
 
 PlusBlock(choice, alts, error) ::= <<
-setState(<choice.blockStartStateNumber>); <! alt block decision !>
-_sync();
+_sync(<choice.blockStartStateNumber>); <! alt block decision !>
 <if(rest(alts))>
 _alt = <choice.continueAlt>;
 <endif>
@@ -937,9 +789,7 @@ case <i><if(!choice.ast.greedy)>+1<endif>:
 <else>
 	<alts>
 <endif>
-	setState(<choice.loopBackStateNumber>); <! loopback/exit decision !>
-	_sync();
-	_alt = _adaptivePredict(<choice.decision>);
+	_alt = _syncPredict(<choice.loopBackStateNumber>, <choice.decision>); <! loopback/exit decision !>
 } while (_alt==<choice.continueAlt>);
 >>
 
@@ -998,19 +848,7 @@ setState(<m.stateNumber>);
 {
 	Token _st = _input.LT(1);
 	_la = _st.getType();
-	<if(m.labels)><m.labels:{l | <labelref(l)> = _st;}><endif>
-	if ( <if(invert)>_la \<= 0 || <else>!<endif>(<expr>) ) {
-		<if(m.labels)><m.labels:{l | <labelref(l)> = }><endif>_errHandler.recoverInline(this);
-	} else {
-		<if(m.setContainsEOF)>if (_la == Token.EOF) {
-			matchedEOF = true;
-		}
-		<endif>
-		if (reportMatchRequired || errorRecoveryMode) {
-			_errHandler.reportMatch(this);
-		}
-		consume(_st);
-	}
+	<if(m.labels)><m.labels:{l | <labelref(l)> = }><endif><if(!invert && m.setContainsEOF)>_matchSetEOF<else>_matchSet<endif>(_st, <if(invert)>_la > 0 && !(<expr>)<else><expr><endif>);
 }
 >>
 

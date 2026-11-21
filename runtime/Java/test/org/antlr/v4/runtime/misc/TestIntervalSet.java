@@ -391,4 +391,56 @@ public class TestIntervalSet {
 		s2.add('s', 200);
 		assertEquals("{0..113, 115, 117..200}", s.and(s2).toString());
 	}
+
+	@Test
+	public void fastBitsValidAndDefensiveBounds() {
+		// >2 intervals within [-2..2048] builds fastBits
+		IntervalSet s = new IntervalSet();
+		s.add(Token.EOF);
+		s.add(1, 5);
+		s.add(10, 12);
+		s.add(100);
+		s.setReadonly(true);
+		assertTrue(s.contains(Token.EOF));
+		assertTrue(s.contains(3));
+		assertFalse(s.contains(7));
+		assertTrue(s.contains(100));
+		assertFalse(s.contains(-3));
+		assertFalse(s.contains(2049));
+
+		// min < -2 -> skips fastBits cleanly
+		IntervalSet lowMin = new IntervalSet();
+		lowMin.add(-5);
+		lowMin.add(1);
+		lowMin.add(5);
+		lowMin.setReadonly(true);
+		assertTrue(lowMin.contains(-5));
+		assertTrue(lowMin.contains(5));
+
+		// max > 2048 -> skips fastBits cleanly
+		IntervalSet highMax = new IntervalSet();
+		highMax.add(1);
+		highMax.add(5);
+		highMax.add(3000);
+		highMax.setReadonly(true);
+		assertTrue(highMax.contains(3000));
+
+		// Malformed unsorted IntervalSet(List<Interval>) where max < min -> no OOM/AIOOBE
+		List<Interval> malformed1 = new ArrayList<Interval>();
+		malformed1.add(Interval.of(10, 20));
+		malformed1.add(Interval.of(5, 6));
+		malformed1.add(Interval.of(-10, -5));
+		IntervalSet bad1 = new IntervalSet(malformed1);
+		bad1.setReadonly(true);
+		assertFalse(bad1.contains(999));
+
+		// Malformed intermediate interval exceeding max -> aborts buildFastBits cleanly
+		List<Interval> malformed2 = new ArrayList<Interval>();
+		malformed2.add(Interval.of(1, 2));
+		malformed2.add(Interval.of(10, 50));
+		malformed2.add(Interval.of(5, 8));
+		IntervalSet bad2 = new IntervalSet(malformed2);
+		bad2.setReadonly(true);
+		assertNotNull(bad2.getIntervals());
+	}
 }

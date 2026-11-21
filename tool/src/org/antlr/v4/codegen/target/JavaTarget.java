@@ -303,4 +303,9 @@ public class JavaTarget extends Target {
 	public boolean supportsCompactLL1AltTests() {
 		return true;
 	}
+
+	@Override
+	public boolean supportsFlatActionAndSempredDispatch() {
+		return true;
+	}
 }

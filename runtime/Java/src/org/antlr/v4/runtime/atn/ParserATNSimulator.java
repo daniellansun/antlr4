@@ -7,6 +7,8 @@
 package org.antlr.v4.runtime.atn;
 
 import org.antlr.v4.runtime.BailErrorStrategy;
+import org.antlr.v4.runtime.CommonToken;
+import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.FailedPredicateException;
 import org.antlr.v4.runtime.IntStream;
 import org.antlr.v4.runtime.NoViableAltException;
@@ -27,7 +29,6 @@ import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
 import org.antlr.v4.runtime.misc.Tuple2;
 
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -304,49 +305,13 @@ public class ParserATNSimulator extends ATNSimulator {
 	protected final Parser parser;
 
 	/**
-	 * A subclass that overrides {@link #getExistingTargetState} (the
-	 * profiler) must see full-context DFA edges. The base class reuses the
-	 * edge it already loaded and takes the fast warm SLL path. One class test
-	 * at construction, not per edge.
+	 * Exact base-class gate ({@code getClass() == ParserATNSimulator.class}).
+	 * Package-private so {@link EpsilonClosure} and {@link ReachComputation}
+	 * take monomorphic direct paths only on the base simulator, while any
+	 * overriding subclass always observes every protected hook.
 	 */
-	private final boolean isBaseSimulator = getClass() == ParserATNSimulator.class;
+	final boolean isBaseSimulator = getClass() == ParserATNSimulator.class;
 	private final boolean subclassObservesDfaEdge = !isBaseSimulator;
-
-	/**
-	 * Whether this simulator class leaves all protected closure/reach hooks
-	 * un-overridden so {@link EpsilonClosure} and {@link ReachComputation} can
-	 * recurse and match transitions directly without virtual dispatch.
-	 */
-	final boolean useDirectClosure = DIRECT_CLOSURE_ELIGIBLE.get(getClass()).booleanValue();
-
-	private static final ClassValue<Boolean> DIRECT_CLOSURE_ELIGIBLE = new ClassValue<Boolean>() {
-		@Override
-		protected Boolean computeValue(Class<?> type) {
-			if (type == ParserATNSimulator.class) {
-				return Boolean.TRUE;
-			}
-			try {
-				for (Class<?> c = type; c != null && c != ParserATNSimulator.class; c = c.getSuperclass()) {
-					for (Method m : c.getDeclaredMethods()) {
-						String name = m.getName();
-						if ("closure".equals(name)
-							|| "getEpsilonTarget".equals(name)
-							|| "ruleTransition".equals(name)
-							|| "actionTransition".equals(name)
-							|| "predTransition".equals(name)
-							|| "precedenceTransition".equals(name)
-							|| "getReachableTarget".equals(name)) {
-							return Boolean.FALSE;
-						}
-					}
-				}
-				return Boolean.TRUE;
-			}
-			catch (SecurityException ex) {
-				return Boolean.FALSE;
-			}
-		}
-	};
 
 	/**
 	 * When {@code true}, ambiguous alternatives are reported when they are
@@ -391,6 +356,29 @@ public class ParserATNSimulator extends ATNSimulator {
 	 */
 	@Nullable
 	private PredictionContextCache retainedContextCache;
+
+	/**
+	 * Per-simulator O(n) conflict detector, allocated lazily on the first DFA
+	 * state construction. Never shared across threads.
+	 */
+	@Nullable
+	private ConflictDetector conflictDetector;
+
+	/**
+	 * Reusable bottom-up return-state stack for {@link #computeStartState}
+	 * O(D) full-context construction. Allocated lazily.
+	 */
+	@Nullable
+	private int[] startReturnStates;
+
+	/**
+	 * Retained config sets for {@link #computeStartState}, allocated lazily so
+	 * warm-DFA simulators pay zero scratch allocation.
+	 */
+	@Nullable
+	private RetainedConfigSet retainedStartConfigs;
+	@Nullable
+	private RetainedConfigSet retainedStartIntermediate;
 
 	/**
 	 * Retained alt-1 context index for {@link #applyPrecedenceFilter}, allocated
@@ -442,6 +430,16 @@ public class ParserATNSimulator extends ATNSimulator {
 			reachComputation = rc;
 		}
 		return rc;
+	}
+
+	@NotNull
+	private ConflictDetector conflictDetector() {
+		ConflictDetector cd = conflictDetector;
+		if (cd == null) {
+			cd = new ConflictDetector();
+			conflictDetector = cd;
+		}
+		return cd;
 	}
 
 	@NotNull
@@ -511,12 +509,13 @@ public class ParserATNSimulator extends ATNSimulator {
 		}
 
 		final boolean ctxSensitive = useContext || (predictionMode != PredictionMode.SLL && outerContext != null && !atn.decisionToState.get(decision).sll);
-		userWantsCtxSensitive = ctxSensitive;
+		if (userWantsCtxSensitive != ctxSensitive) {
+			userWantsCtxSensitive = ctxSensitive;
+		}
 
 		// Warm local-context (SLL) fast path on base ParserATNSimulator:
 		// avoids this.dfa G1 write barriers on warm hits, skips SimulatorState,
-		// reuses the already-loaded LA(1), and skips mark/release on 1-token
-		// unambiguous unpredicated accepts.
+		// reuses the already-loaded LA(1), and skips mark/release on warm accepts.
 		if (!useContext && isBaseSimulator && !debug && !dfa_debug) {
 			DFAState warmS0 = precedence
 				? (parser != null ? dfa.getPrecedenceStartState(prec != Integer.MIN_VALUE ? prec : parser.getPrecedence(), false) : null)
@@ -532,6 +531,20 @@ public class ParserATNSimulator extends ATNSimulator {
 			}
 		}
 
+		return adaptivePredictSlow(dfa, input, outerContext, useContext, precedence);
+	}
+
+	/**
+	 * Cold/full-context prediction path outlined from {@link #adaptivePredict}
+	 * so the hot LL(1) and warm SLL dispatch stays compact ({@code <= 325 B},
+	 * zero {@code try/finally}) for HotSpot C2 inlining.
+	 */
+	private int adaptivePredictSlow(@NotNull DFA dfa,
+									@NotNull TokenStream input,
+									@Nullable ParserRuleContext outerContext,
+									boolean useContext,
+									boolean precedence)
+	{
 		this.dfa = dfa;
 		if (outerContext == null) {
 			outerContext = ParserRuleContext.emptyContext();
@@ -545,9 +558,9 @@ public class ParserATNSimulator extends ATNSimulator {
 		DFAState warmS0 = null;
 		if (!dfaEmpty) {
 			// Warm local-context (SLL) start: one atomic s0 load, then the
-			// private execDFA body with locals (no SimulatorState). Subclasses
-			// that observe getStartState opt in via snapshotStartState().
-			if (!useContext && !snapshotStartState()) {
+			// private execDFA body with locals (no SimulatorState). Guard on
+			// isBaseSimulator so subclasses overriding getStartState are never bypassed.
+			if (!useContext && isBaseSimulator && !snapshotStartState()) {
 				warmS0 = precedence
 					? (parser != null ? dfa.getPrecedenceStartState(parser.getPrecedence(), false) : null)
 					: dfa.s0.get();
@@ -602,12 +615,17 @@ public class ParserATNSimulator extends ATNSimulator {
 	}
 
 	/**
-	 * Warm SLL DFA walk for the base {@link ParserATNSimulator}. Keeps the
-	 * common 1-token unambiguous unpredicated hit completely free of
-	 * {@code mark}/{@code release}/{@code seek}/{@code this.dfa} barriers and
-	 * {@link SimulatorState} allocation, and falls back seamlessly to
-	 * {@link #execATN}, conflict resolution, or semantic predicate evaluation
-	 * when needed.
+	 * Cursorless warm SLL DFA walk for the base {@link ParserATNSimulator}.
+	 * Handles both 1-token and multi-token warm SLL hits in a single C2 root
+	 * without {@code mark}/{@code consume}/{@code seek}/{@code release},
+	 * {@code try/finally}, or {@code this.dfa} write barriers, reading
+	 * multi-token lookahead via {@link CommonTokenStream#nextOnChannel(int)}
+	 * so {@code cachedLTMinus1} stays intact. Intentionally stays just above
+	 * HotSpot C2's {@code FreqInlineSize} (325 bytes) so it compiles as its
+	 * own C2 root with full inline budget for {@link DFAState#getTarget} and
+	 * {@link CommonTokenStream#nextOnChannel}, while all cold paths
+	 * ({@link #execDFASllWarmSlow} and {@link #completeAccept}) stay strictly
+	 * out-of-line ({@code > 325 B}).
 	 */
 	private int execDFASllWarm(@NotNull DFA dfa,
 							   @NotNull TokenStream input,
@@ -616,57 +634,136 @@ public class ParserATNSimulator extends ATNSimulator {
 							   int t,
 							   boolean ctxSensitive)
 	{
-		DFAState s = s0;
-		DFAState target = null;
-		if (!s.isAcceptState()) {
-			target = s.getTarget(t);
-			if (target != null && target != ERROR && target.isAcceptState()) {
-				if (target.predicates == null && (!ctxSensitive || target.configs.getConflictInfo() == null)) {
-					return target.getPrediction();
-				}
-				return resolveAcceptSllWarm(dfa, input, outerContext, target, input.index(), ctxSensitive);
+		if (s0.isAcceptState()) {
+			int fastAlt = s0.getUnconflictedPrediction();
+			if (fastAlt > 0 && s0.predicates == null) {
+				return fastAlt;
 			}
+			return execDFASllWarmSlow(dfa, input, outerContext, s0, s0, -1, -1, ctxSensitive, 0);
 		}
 
-		final int m = input.mark();
-		final int startIndex = input.index();
-		ArrayList<DFAState> eofStates = null;
-		try {
-			if (!s.isAcceptState()) {
+		DFAState target = s0.getTarget(t);
+		if (target != null && target != ERROR) {
+			if (target.isAcceptState()) {
+				int fastAlt = target.getUnconflictedPrediction();
+				if (fastAlt > 0 && target.predicates == null) {
+					return fastAlt;
+				}
+				if (!ctxSensitive && target.predicates == null) {
+					return target.getPrediction();
+				}
+				int idx = input.index();
+				return completeAccept(dfa, input, outerContext, outerContext, target, idx, idx, false, ctxSensitive, true);
+			}
+			if (input.getClass() == CommonTokenStream.class) {
+				final CommonTokenStream cts = (CommonTokenStream) input;
+				final int startIndex = cts.index();
+				int bufIdx = startIndex;
+				DFAState s = target;
+				ArrayList<DFAState> eofStates = null;
 				while (true) {
-					if (target == null) {
-						this.dfa = dfa;
-						return execATN(dfa, input, startIndex, new SimulatorState(outerContext, s, false, outerContext));
-					}
-					if (target == ERROR) {
-						this.dfa = dfa;
-						return handleNoViableAlt(input, startIndex, new SimulatorState(outerContext, s, false, outerContext));
-					}
-					s = target;
-					if (s.isAcceptState()) {
-						if (s.predicates == null && (!ctxSensitive || s.configs.getConflictInfo() == null)) {
-							return s.getPrediction();
-						}
-						break;
-					}
 					if (t != IntStream.EOF) {
-						input.consume();
-						t = input.LA(1);
+						Token tok = cts.nextOnChannel(bufIdx);
+						int nextIdx;
+						if (tok.getClass() != CommonToken.class
+							|| (nextIdx = tok.getTokenIndex()) <= bufIdx
+							|| (nextIdx != bufIdx + 1 && !matchesBufferSlot(cts, tok, nextIdx))) {
+							return execDFASllWarmSlow(dfa, input, outerContext, s0, null, -1, -1, ctxSensitive, 1);
+						}
+						bufIdx = nextIdx;
+						t = tok.getType();
 					}
 					else if (repeatedEof(eofStates = eofStates == null ? new ArrayList<DFAState>() : eofStates,
 							null, s, outerContext, false)) {
-						this.dfa = dfa;
-						return handleNoViableAlt(input, startIndex, new SimulatorState(outerContext, s, false, outerContext));
+						return execDFASllWarmSlow(dfa, cts, outerContext, s, ERROR, startIndex, bufIdx, ctxSensitive, 2);
 					}
+
 					target = s.getTarget(t);
+					if (target == null || target == ERROR) {
+						return execDFASllWarmSlow(dfa, cts, outerContext, s, target, startIndex, bufIdx, ctxSensitive, 2);
+					}
+					s = target;
+					if (s.isAcceptState()) {
+						int fastAlt = s.getUnconflictedPrediction();
+						if (fastAlt > 0 && s.predicates == null) {
+							return fastAlt;
+						}
+						if (!ctxSensitive && s.predicates == null) {
+							return s.getPrediction();
+						}
+						return completeAccept(dfa, cts, outerContext, outerContext, s, startIndex, bufIdx, false, ctxSensitive, true);
+					}
 				}
 			}
-			return resolveAcceptSllWarm(dfa, input, outerContext, s, startIndex, ctxSensitive);
+			return execDFASllWarmSlow(dfa, input, outerContext, s0, null, -1, -1, ctxSensitive, 1);
+		}
+
+		if (input.getClass() == CommonTokenStream.class) {
+			int startIndex = input.index();
+			return execDFASllWarmSlow(dfa, input, outerContext, s0, target, startIndex, startIndex, ctxSensitive, 2);
+		}
+		return execDFASllWarmSlow(dfa, input, outerContext, s0, null, -1, -1, ctxSensitive, 1);
+	}
+
+	private static boolean matchesBufferSlot(@NotNull CommonTokenStream cts, @NotNull Token tok, int nextIdx) {
+		return nextIdx < cts.size() && cts.get(nextIdx) == tok;
+	}
+
+	/**
+	 * Unified out-of-line slow handler for {@link #execDFASllWarm}: handles
+	 * {@code s0} accept ({@code kind == 0}), non-{@link CommonTokenStream} /
+	 * non-{@link CommonToken} fallback reusing {@link #execDFA} ({@code kind == 1}),
+	 * and cold DFA misses / errors / repeated EOF ({@code kind == 2}).
+	 * Keeping all three cold paths together keeps this method above HotSpot
+	 * C2's {@code FreqInlineSize} (325 bytes) so {@code try/finally} and
+	 * {@link SimulatorState} allocation are never inlined into the warm loop.
+	 */
+	private int execDFASllWarmSlow(@NotNull DFA dfa,
+								   @NotNull TokenStream input,
+								   @NotNull ParserRuleContext outerContext,
+								   @NotNull DFAState s,
+								   @Nullable DFAState target,
+								   int startIndex,
+								   int bufIdx,
+								   boolean ctxSensitive,
+								   int kind)
+	{
+		if (kind == 0) {
+			if (!ctxSensitive && s.predicates == null) {
+				return s.getPrediction();
+			}
+			int idx = input.index();
+			return completeAccept(dfa, input, outerContext, outerContext, s, idx, idx, false, ctxSensitive, true);
+		}
+		if (kind == 1) {
+			final int m = input.mark();
+			final int idx = input.index();
+			this.dfa = dfa;
+			try {
+				return execDFA(dfa, input, idx, outerContext, s, false, outerContext);
+			}
+			finally {
+				this.dfa = null;
+				if (input.index() != idx) {
+					input.seek(idx);
+				}
+				input.release(m);
+			}
+		}
+		final int m = input.mark();
+		this.dfa = dfa;
+		try {
+			if (bufIdx != startIndex) {
+				input.seek(bufIdx);
+			}
+			SimulatorState simState = new SimulatorState(outerContext, s, false, outerContext);
+			if (target == null) {
+				return execATN(dfa, input, startIndex, simState);
+			}
+			return handleNoViableAlt(input, startIndex, simState);
 		}
 		finally {
-			if (this.dfa != null) {
-				this.dfa = null;
-			}
+			this.dfa = null;
 			if (input.index() != startIndex) {
 				input.seek(startIndex);
 			}
@@ -675,85 +772,108 @@ public class ParserATNSimulator extends ATNSimulator {
 	}
 
 	/**
-	 * Completes prediction at a warm SLL accept state, handling conflict
-	 * full-context failover and zero-allocation semantic predicate evaluation.
+	 * Unified accept-state completion shared by {@link #execDFASllWarm} and
+	 * {@link #execDFA}. Handles SLL conflict full-context failover, semantic
+	 * predicate evaluation (zero-allocation on base simulator when not debugging),
+	 * and ambiguity reporting. Intentionally kept above HotSpot C2's
+	 * {@code FreqInlineSize} (325 bytes) so cold conflict/predicate IR does not
+	 * inline into {@link #execDFASllWarm}.
 	 */
-	private int resolveAcceptSllWarm(@NotNull DFA dfa,
-									 @NotNull TokenStream input,
-									 @NotNull ParserRuleContext outerContext,
-									 @NotNull DFAState s,
-									 int startIndex,
-									 boolean ctxSensitive)
+	private int completeAccept(@NotNull DFA dfa,
+							   @NotNull TokenStream input,
+							   @NotNull ParserRuleContext outerContext,
+							   @NotNull ParserRuleContext remainingOuterContext,
+							   @NotNull DFAState s,
+							   int startIndex,
+							   int stopIndex,
+							   boolean useContext,
+							   boolean ctxSensitive,
+							   boolean restoreStartOnReturn)
 	{
-		if (ctxSensitive && s.configs.getConflictInfo() != null
-			&& dfa.atnStartState instanceof DecisionState) {
-			if ((s.configs.getDipsIntoOuterContext() || !s.configs.isExactConflict())
-				&& (!treat_sllk1_conflict_as_ambiguity || input.index() != startIndex)) {
-				BitSet conflictingAlts = null;
-				DFAState.PredPrediction[] predicates = s.predicates;
-				if (predicates != null) {
-					int conflictIndex = input.index();
-					if (conflictIndex != startIndex) {
+		final boolean fastPreds = isBaseSimulator && !debug && !dfa_debug;
+		try {
+			if (!useContext && ctxSensitive && s.configs.getConflictInfo() != null
+				&& dfa.atnStartState instanceof DecisionState) {
+				if ((s.configs.getDipsIntoOuterContext() || !s.configs.isExactConflict())
+					&& (!treat_sllk1_conflict_as_ambiguity || stopIndex != startIndex)) {
+					BitSet conflictingAlts = null;
+					DFAState.PredPrediction[] predicates = s.predicates;
+					if (predicates != null) {
+						if (input.index() != startIndex) {
+							input.seek(startIndex);
+						}
+						if (!reportAmbiguities && fastPreds) {
+							int uniqueAlt = evalSemanticContextUnique(predicates, outerContext);
+							if (uniqueAlt != ATN.INVALID_ALT_NUMBER) {
+								return uniqueAlt;
+							}
+						}
+						else {
+							conflictingAlts = evalSemanticContext(predicates, outerContext, true);
+							if (conflictingAlts.cardinality() == 1) {
+								return conflictingAlts.nextSetBit(0);
+							}
+						}
+						if (input.index() != stopIndex) {
+							input.seek(stopIndex);
+						}
+					}
+
+					if (reportAmbiguities) {
+						if (input.index() != stopIndex) {
+							input.seek(stopIndex);
+						}
+						SimulatorState conflictState = new SimulatorState(outerContext, s, useContext, remainingOuterContext);
+						reportAttemptingFullContext(dfa, conflictingAlts, conflictState, startIndex, stopIndex);
+					}
+
+					if (input.index() != startIndex) {
 						input.seek(startIndex);
 					}
-					if (!reportAmbiguities) {
-						int uniqueAlt = evalSemanticContextUnique(predicates, outerContext);
-						if (uniqueAlt != ATN.INVALID_ALT_NUMBER) {
-							return uniqueAlt;
-						}
-					}
-					else {
-						conflictingAlts = evalSemanticContext(predicates, outerContext, true);
-						if (conflictingAlts.cardinality() == 1) {
-							return conflictingAlts.nextSetBit(0);
-						}
-					}
-					if (conflictIndex != startIndex) {
-						input.seek(conflictIndex);
-					}
+					return adaptivePredict(input, dfa.decision, outerContext, true);
 				}
+			}
 
-				if (reportAmbiguities) {
-					SimulatorState conflictState = new SimulatorState(outerContext, s, false, outerContext);
-					reportAttemptingFullContext(dfa, conflictingAlts, conflictState, startIndex, input.index());
-				}
-
+			DFAState.PredPrediction[] predicates = s.predicates;
+			if (predicates != null) {
 				if (input.index() != startIndex) {
 					input.seek(startIndex);
 				}
-				return adaptivePredict(input, dfa.decision, outerContext, true);
-			}
-		}
 
-		DFAState.PredPrediction[] predicates = s.predicates;
-		if (predicates != null) {
-			int stopIndex = input.index();
-			if (startIndex != stopIndex) {
+				boolean complete = reportAmbiguities && predictionMode == PredictionMode.LL_EXACT_AMBIG_DETECTION;
+				if (!complete && fastPreds) {
+					int alt = evalSemanticContextSingle(predicates, outerContext);
+					if (alt == ATN.INVALID_ALT_NUMBER) {
+						throw noViableAlt(input, outerContext, s.configs, startIndex);
+					}
+					return alt;
+				}
+
+				BitSet alts = evalSemanticContext(predicates, outerContext, complete);
+				switch (alts.cardinality()) {
+				case 0:
+					throw noViableAlt(input, outerContext, s.configs, startIndex);
+				case 1:
+					return alts.nextSetBit(0);
+				default:
+					if (input.index() != stopIndex) {
+						input.seek(stopIndex);
+					}
+					reportAmbiguity(dfa, s, startIndex, stopIndex, s.configs.isExactConflict(), alts, s.configs);
+					return alts.nextSetBit(0);
+				}
+			}
+
+			if (dfa_debug) {
+				System.out.println("DFA decision " + dfa.decision + " predicts " + s.getPrediction());
+			}
+			return s.getPrediction();
+		}
+		finally {
+			if (restoreStartOnReturn && input.index() != startIndex) {
 				input.seek(startIndex);
 			}
-			if (!(reportAmbiguities && predictionMode == PredictionMode.LL_EXACT_AMBIG_DETECTION)) {
-				int alt = evalSemanticContextSingle(predicates, outerContext);
-				if (alt == ATN.INVALID_ALT_NUMBER) {
-					throw noViableAlt(input, outerContext, s.configs, startIndex);
-				}
-				return alt;
-			}
-			BitSet alts = evalSemanticContext(predicates, outerContext, true);
-			switch (alts.cardinality()) {
-			case 0:
-				throw noViableAlt(input, outerContext, s.configs, startIndex);
-			case 1:
-				return alts.nextSetBit(0);
-			default:
-				if (startIndex != stopIndex) {
-					input.seek(stopIndex);
-				}
-				reportAmbiguity(dfa, s, startIndex, stopIndex, s.configs.isExactConflict(), alts, s.configs);
-				return alts.nextSetBit(0);
-			}
 		}
-
-		return s.getPrediction();
 	}
 
 	/**
@@ -1007,95 +1127,8 @@ public class ParserATNSimulator extends ATNSimulator {
 //			return -1;
 //		}
 
-		if ( !useContext && s.configs.getConflictInfo()!=null ) {
-			if ( dfa.atnStartState instanceof DecisionState ) {
-				if (!userWantsCtxSensitive ||
-					(!s.configs.getDipsIntoOuterContext() && s.configs.isExactConflict()) ||
-					(treat_sllk1_conflict_as_ambiguity && input.index() == startIndex))
-				{
-					// we don't report the ambiguity again
-					//if ( !acceptState.configset.hasSemanticContext() ) {
-					//	reportAmbiguity(dfa, acceptState, startIndex, input.index(), acceptState.configset.getConflictingAlts(), acceptState.configset);
-					//}
-				}
-				else {
-					assert !useContext;
-
-					// Before attempting full context prediction, check to see if there are
-					// disambiguating or validating predicates to evaluate which allow an
-					// immediate decision
-					BitSet conflictingAlts = null;
-					DFAState.PredPrediction[] predicates = s.predicates;
-					if ( predicates!=null ) {
-						int conflictIndex = input.index();
-						if (conflictIndex != startIndex) {
-							input.seek(startIndex);
-						}
-
-						conflictingAlts = evalSemanticContext(predicates, outerContext, true);
-						if ( conflictingAlts.cardinality() == 1 ) {
-							return conflictingAlts.nextSetBit(0);
-						}
-
-						if (conflictIndex != startIndex) {
-							// restore the index so reporting the fallback to full
-							// context occurs with the index at the correct spot
-							input.seek(conflictIndex);
-						}
-					}
-
-					if (reportAmbiguities) {
-						SimulatorState conflictState = new SimulatorState(outerContext, s, useContext, remainingOuterContext);
-						reportAttemptingFullContext(dfa, conflictingAlts, conflictState, startIndex, input.index());
-					}
-
-					input.seek(startIndex);
-					return adaptivePredict(input, dfa.decision, outerContext, true);
-				}
-			}
-		}
-
-		// Before jumping to prediction, check to see if there are
-		// disambiguating or validating predicates to evaluate
-		DFAState.PredPrediction[] predicates = s.predicates;
-		if ( predicates != null ) {
-			int stopIndex = input.index();
-			if (startIndex != stopIndex) {
-				input.seek(startIndex);
-			}
-
-			boolean complete = reportAmbiguities && predictionMode == PredictionMode.LL_EXACT_AMBIG_DETECTION;
-			if (!complete && isBaseSimulator && !debug && !dfa_debug) {
-				int alt = evalSemanticContextSingle(predicates, outerContext);
-				if (alt == ATN.INVALID_ALT_NUMBER) {
-					throw noViableAlt(input, outerContext, s.configs, startIndex);
-				}
-				return alt;
-			}
-
-			BitSet alts = evalSemanticContext(predicates, outerContext, complete);
-			switch (alts.cardinality()) {
-			case 0:
-				throw noViableAlt(input, outerContext, s.configs, startIndex);
-
-			case 1:
-				return alts.nextSetBit(0);
-
-			default:
-				// report ambiguity after predicate evaluation to make sure the correct
-				// set of ambig alts is reported.
-				if (startIndex != stopIndex) {
-					input.seek(stopIndex);
-				}
-
-				reportAmbiguity(dfa, s, startIndex, stopIndex, s.configs.isExactConflict(), alts, s.configs);
-				return alts.nextSetBit(0);
-			}
-		}
-
-		if ( dfa_debug ) System.out.println("DFA decision "+dfa.decision+
-											" predicts "+s.getPrediction());
-		return s.getPrediction();
+		return completeAccept(dfa, input, outerContext, remainingOuterContext, s, startIndex, input.index(),
+			useContext, userWantsCtxSensitive, false);
 	}
 
 	/**
@@ -1651,6 +1684,14 @@ public class ParserATNSimulator extends ATNSimulator {
 		PredictionContextCache contextCache = obtainContextCache();
 		if (useContext) {
 			if (!enable_global_context_dfa) {
+				// O(D) bottom-up singleton stack construction: avoids the O(D^2)
+				// repeated SingletonPredictionContext.appendContext chain copies.
+				int[] stack = startReturnStates;
+				if (stack == null) {
+					stack = new int[32];
+					startReturnStates = stack;
+				}
+				int depth = 0;
 				while (remainingGlobalContext != null) {
 					if (remainingGlobalContext.isEmpty()) {
 						previousContext = PredictionContext.EMPTY_FULL_STATE_KEY;
@@ -1658,9 +1699,16 @@ public class ParserATNSimulator extends ATNSimulator {
 					}
 					else {
 						previousContext = getReturnState(remainingGlobalContext);
-						initialContext = initialContext.appendContext(previousContext, contextCache);
+						if (depth == stack.length) {
+							stack = Arrays.copyOf(stack, stack.length << 1);
+							startReturnStates = stack;
+						}
+						stack[depth++] = previousContext;
 						remainingGlobalContext = remainingGlobalContext.getParent();
 					}
+				}
+				for (int i = depth - 1; i >= 0; i--) {
+					initialContext = contextCache.getChild(initialContext, stack[i]);
 				}
 			}
 
@@ -1691,83 +1739,98 @@ public class ParserATNSimulator extends ATNSimulator {
 			return new SimulatorState(globalContext, s0, useContext, remainingGlobalContext);
 		}
 
-		ATNConfigSet configs = new ATNConfigSet();
-		while (true) {
-			ATNConfigSet reachIntermediate = new ATNConfigSet();
-			int n = p.getNumberOfTransitions();
-			for (int ti=0; ti<n; ti++) {
-				// for each transition
-				ATNState target = p.transition(ti).target;
-				reachIntermediate.add(ATNConfig.create(target, ti + 1, initialContext));
-			}
+		final int n = p.getNumberOfTransitions();
+		if (retainedStartConfigs == null) {
+			RetainedConfigSet start = new RetainedConfigSet(false);
+			RetainedConfigSet inter = new RetainedConfigSet(false);
+			retainedStartConfigs = start;
+			retainedStartIntermediate = inter;
+		}
+		final ATNConfigSet startConfigs = retainedStartConfigs.obtain(n);
+		final ATNConfigSet reachIntermediate = retainedStartIntermediate.obtain(n);
+		try {
+			ATNConfigSet configs = startConfigs;
+			while (true) {
+				reachIntermediate.clear();
+				for (int ti = 0; ti < n; ti++) {
+					// for each transition
+					ATNState target = p.transition(ti).target;
+					reachIntermediate.add(ATNConfig.create(target, ti + 1, initialContext));
+				}
 
-			boolean hasMoreContext = remainingGlobalContext != null;
-			if (!hasMoreContext) {
-				configs.setOutermostConfigSet(true);
-			}
+				boolean hasMoreContext = remainingGlobalContext != null;
+				if (!hasMoreContext) {
+					configs.setOutermostConfigSet(true);
+				}
 
-			final boolean collectPredicates = true;
-			closure(reachIntermediate, configs, collectPredicates, hasMoreContext, contextCache, false);
-			boolean stepIntoGlobal = configs.getDipsIntoOuterContext();
+				final boolean collectPredicates = true;
+				closure(reachIntermediate, configs, collectPredicates, hasMoreContext, contextCache, false);
+				boolean stepIntoGlobal = configs.getDipsIntoOuterContext();
 
-			DFAState next;
-			if (useContext && !enable_global_context_dfa) {
-				s0 = addDFAState(dfa, configs, contextCache);
-				break;
-			}
-			else if (s0 == null) {
-				if (!dfa.isPrecedenceDfa()) {
-					AtomicReference<DFAState> reference = useContext ? dfa.s0full : dfa.s0;
-					next = addDFAState(dfa, configs, contextCache);
-					if (!reference.compareAndSet(null, next)) {
-						next = reference.get();
+				DFAState next;
+				if (useContext && !enable_global_context_dfa) {
+					s0 = addDFAState(dfa, configs, contextCache);
+					break;
+				}
+				else if (s0 == null) {
+					if (!dfa.isPrecedenceDfa()) {
+						AtomicReference<DFAState> reference = useContext ? dfa.s0full : dfa.s0;
+						next = addDFAState(dfa, configs, contextCache);
+						if (!reference.compareAndSet(null, next)) {
+							next = reference.get();
+						}
+					}
+					else {
+						/* If this is a precedence DFA, we use applyPrecedenceFilter
+						 * to convert the computed start state to a precedence start
+						 * state. We then use DFA.setPrecedenceStartState to set the
+						 * appropriate start state for the precedence level rather
+						 * than simply setting DFA.s0.
+						 */
+						configs = applyPrecedenceFilter(configs, globalContext, contextCache);
+						next = addDFAState(dfa, configs, contextCache);
+						dfa.setPrecedenceStartState(parser.getPrecedence(), useContext, next);
 					}
 				}
 				else {
-					/* If this is a precedence DFA, we use applyPrecedenceFilter
-					 * to convert the computed start state to a precedence start
-					 * state. We then use DFA.setPrecedenceStartState to set the
-					 * appropriate start state for the precedence level rather
-					 * than simply setting DFA.s0.
-					 */
-					configs = applyPrecedenceFilter(configs, globalContext, contextCache);
+					if (dfa.isPrecedenceDfa()) {
+						configs = applyPrecedenceFilter(configs, globalContext, contextCache);
+					}
+
 					next = addDFAState(dfa, configs, contextCache);
-					dfa.setPrecedenceStartState(parser.getPrecedence(), useContext, next);
-				}
-			}
-			else {
-				if (dfa.isPrecedenceDfa()) {
-					configs = applyPrecedenceFilter(configs, globalContext, contextCache);
+					s0.setContextTarget(previousContext, next);
 				}
 
-				next = addDFAState(dfa, configs, contextCache);
-				s0.setContextTarget(previousContext, next);
+				s0 = next;
+
+				if (!useContext || !stepIntoGlobal) {
+					break;
+				}
+
+				// TODO: make sure it distinguishes empty stack states
+				next.setContextSensitive(atn);
+
+				startConfigs.clear();
+				configs = startConfigs;
+				remainingGlobalContext = skipTailCalls(remainingGlobalContext);
+				int nextContextElement = getReturnState(remainingGlobalContext);
+
+				if (remainingGlobalContext.isEmpty()) {
+					remainingGlobalContext = null;
+				} else {
+					remainingGlobalContext = remainingGlobalContext.getParent();
+				}
+
+				if (nextContextElement != PredictionContext.EMPTY_FULL_STATE_KEY) {
+					initialContext = initialContext.appendContext(nextContextElement, contextCache);
+				}
+
+				previousContext = nextContextElement;
 			}
-
-			s0 = next;
-
-			if (!useContext || !stepIntoGlobal) {
-				break;
-			}
-
-			// TODO: make sure it distinguishes empty stack states
-			next.setContextSensitive(atn);
-
-			configs.clear();
-			remainingGlobalContext = skipTailCalls(remainingGlobalContext);
-			int nextContextElement = getReturnState(remainingGlobalContext);
-
-			if (remainingGlobalContext.isEmpty()) {
-				remainingGlobalContext = null;
-			} else {
-				remainingGlobalContext = remainingGlobalContext.getParent();
-			}
-
-			if (nextContextElement != PredictionContext.EMPTY_FULL_STATE_KEY) {
-				initialContext = initialContext.appendContext(nextContextElement, contextCache);
-			}
-
-			previousContext = nextContextElement;
+		}
+		finally {
+			retainedStartConfigs.release();
+			retainedStartIntermediate.release();
 		}
 
 		return new SimulatorState(globalContext, s0, useContext, remainingGlobalContext);
@@ -2317,499 +2380,6 @@ public class ParserATNSimulator extends ATNSimulator {
 		return config.transform(t.target, newContext, false);
 	}
 
-	/**
-	 * Reusable scratch arrays for {@link #isConflicted} primitive-key stable
-	 * sorting. Lazily allocated only when a config set passes the zero-alloc
-	 * O(n) early reject; object slots are cleared before return so configs are
-	 * never retained across predictions.
-	 */
-	private long[] conflictKeys;
-	private ATNConfig[] conflictConfigs;
-	private long[] conflictKeysAux;
-	private ATNConfig[] conflictConfigsAux;
-
-	private static int nextConflictCap(int n) {
-		if (n <= 32) {
-			return 32;
-		}
-		if (n > (1 << 30)) {
-			return n;
-		}
-		return Integer.highestOneBit(n - 1) << 1;
-	}
-
-	private void ensureConflictKeys(int n) {
-		if (conflictKeys == null || conflictKeys.length < n) {
-			conflictKeys = new long[nextConflictCap(n)];
-		}
-	}
-
-	private void ensureConflictScratch(int n) {
-		ensureConflictKeys(n);
-		if (conflictConfigs == null || conflictConfigs.length < n) {
-			conflictConfigs = new ATNConfig[conflictKeys.length];
-		}
-	}
-
-	private void ensureConflictMergeAux(int n) {
-		if (conflictKeysAux == null || conflictKeysAux.length < n) {
-			int cap = nextConflictCap(n);
-			conflictKeysAux = new long[cap];
-			conflictConfigsAux = new ATNConfig[cap];
-		}
-	}
-
-	private static void insertionSortKeys(long[] keys, int n) {
-		for (int i = 1; i < n; i++) {
-			long k = keys[i];
-			int j = i - 1;
-			while (j >= 0 && keys[j] > k) {
-				keys[j + 1] = keys[j];
-				j--;
-			}
-			keys[j + 1] = k;
-		}
-	}
-
-	private static void insertionSortConflict(long[] keys, ATNConfig[] cfgs, int lo, int hi) {
-		for (int i = lo + 1; i < hi; i++) {
-			long k = keys[i];
-			ATNConfig c = cfgs[i];
-			int j = i - 1;
-			while (j >= lo && keys[j] > k) {
-				keys[j + 1] = keys[j];
-				cfgs[j + 1] = cfgs[j];
-				j--;
-			}
-			keys[j + 1] = k;
-			cfgs[j + 1] = c;
-		}
-	}
-
-	private void stableSortConflict(long[] keys, ATNConfig[] cfgs, int n) {
-		if (n <= 16) {
-			insertionSortConflict(keys, cfgs, 0, n);
-			return;
-		}
-		ensureConflictMergeAux(n);
-		long[] auxKeys = conflictKeysAux;
-		ATNConfig[] auxCfgs = conflictConfigsAux;
-		// Bottom-up stable merge sort with 16-element insertion-sort runs.
-		final int run = 16;
-		for (int i = 0; i < n; i += run) {
-			insertionSortConflict(keys, cfgs, i, Math.min(i + run, n));
-		}
-		long[] srcK = keys, dstK = auxKeys;
-		ATNConfig[] srcC = cfgs, dstC = auxCfgs;
-		for (int width = run; width < n; width <<= 1) {
-			for (int lo = 0; lo < n; lo += (width << 1)) {
-				int mid = Math.min(lo + width, n);
-				int hi = Math.min(lo + (width << 1), n);
-				if (mid >= hi || srcK[mid - 1] <= srcK[mid]) {
-					System.arraycopy(srcK, lo, dstK, lo, hi - lo);
-					System.arraycopy(srcC, lo, dstC, lo, hi - lo);
-					continue;
-				}
-				int l = lo, r = mid, out = lo;
-				while (l < mid && r < hi) {
-					if (srcK[l] <= srcK[r]) {
-						dstK[out] = srcK[l];
-						dstC[out] = srcC[l];
-						l++;
-					}
-					else {
-						dstK[out] = srcK[r];
-						dstC[out] = srcC[r];
-						r++;
-					}
-					out++;
-				}
-				if (l < mid) {
-					int rem = mid - l;
-					System.arraycopy(srcK, l, dstK, out, rem);
-					System.arraycopy(srcC, l, dstC, out, rem);
-				}
-				else if (r < hi) {
-					int rem = hi - r;
-					System.arraycopy(srcK, r, dstK, out, rem);
-					System.arraycopy(srcC, r, dstC, out, rem);
-				}
-			}
-			long[] tmpK = srcK; srcK = dstK; dstK = tmpK;
-			ATNConfig[] tmpC = srcC; srcC = dstC; dstC = tmpC;
-		}
-		if (srcK != keys) {
-			System.arraycopy(srcK, 0, keys, 0, n);
-			System.arraycopy(srcC, 0, cfgs, 0, n);
-		}
-		Arrays.fill(auxCfgs, 0, n, null);
-	}
-
-	private ConflictInfo isConflicted(@NotNull ATNConfigSet configset, PredictionContextCache contextCache) {
-		final int configCnt = configset.size();
-		if (configset.getUniqueAlt() != ATN.INVALID_ALT_NUMBER || configCnt <= 1) {
-			return null;
-		}
-
-		// Zero-allocation O(n) pre-filter before sorting: every represented
-		// non-stop state must have at least one config predicting globalMinAlt.
-		int globalMinAlt = Integer.MAX_VALUE;
-		for (int i = 0; i < configCnt; i++) {
-			int alt = configset.get(i).getAlt();
-			if (alt < globalMinAlt) {
-				globalMinAlt = alt;
-				if (globalMinAlt == 1) {
-					break;
-				}
-			}
-		}
-
-		long minAltBloom1 = 0L;
-		long minAltBloom2 = 0L;
-		int singleMinAltState = 0;
-		int minAltStateKind = 0; // 0=none, 1=one distinct state, 2=multiple
-		for (int i = 0; i < configCnt; i++) {
-			ATNConfig c = configset.get(i);
-			if (c.getAlt() == globalMinAlt) {
-				int st = c.getState().getNonStopStateNumber();
-				minAltBloom1 |= 1L << st;
-				minAltBloom2 |= 1L << ((st * 0x9E3779B9) >>> 26);
-				if (minAltStateKind == 0) {
-					singleMinAltState = st;
-					minAltStateKind = 1;
-				}
-				else if (minAltStateKind == 1 && st != singleMinAltState) {
-					minAltStateKind = 2;
-				}
-			}
-		}
-
-		if (minAltStateKind == 1) {
-			for (int i = 0; i < configCnt; i++) {
-				ATNConfig c = configset.get(i);
-				if (c.getAlt() != globalMinAlt && c.getState().getNonStopStateNumber() != singleMinAltState) {
-					return null;
-				}
-			}
-		}
-		else {
-			for (int i = 0; i < configCnt; i++) {
-				ATNConfig c = configset.get(i);
-				if (c.getAlt() != globalMinAlt) {
-					int st = c.getState().getNonStopStateNumber();
-					if ((minAltBloom1 & (1L << st)) == 0L
-							|| (minAltBloom2 & (1L << ((st * 0x9E3779B9) >>> 26))) == 0L) {
-						return null;
-					}
-				}
-			}
-		}
-
-		// Pack ((nonStopState + 1) << 40 | alt << 24 | index) into a single
-		// primitive long[] so sorting is inherently stable, needs zero aux
-		// buffers, touches no ATNConfig references, and avoids G1GC barriers.
-		if (configCnt < (1 << 24)) {
-			ensureConflictKeys(configCnt);
-			final long[] keys = conflictKeys;
-			boolean packedOk = true;
-			boolean alreadySorted = true;
-			long prevKey = -1L;
-			for (int i = 0; i < configCnt; i++) {
-				ATNConfig c = configset.get(i);
-				int stateKey = c.getState().getNonStopStateNumber() + 1;
-				int alt = c.getAlt();
-				if (((stateKey & ~0xFFFFF) | (alt & ~0xFFFF)) != 0) {
-					packedOk = false;
-					break;
-				}
-				long k = (((long) stateKey) << 40) | (((long) alt) << 24) | i;
-				keys[i] = k;
-				if (k < prevKey) {
-					alreadySorted = false;
-				}
-				prevKey = k;
-			}
-			if (packedOk) {
-				if (!alreadySorted) {
-					if (configCnt <= 16) {
-						insertionSortKeys(keys, configCnt);
-					}
-					else {
-						Arrays.sort(keys, 0, configCnt);
-					}
-				}
-				return isConflictedFromPackedKeys(configset, contextCache, keys, configCnt, globalMinAlt);
-			}
-		}
-
-		return isConflictedFallback(configset, contextCache);
-	}
-
-	private ConflictInfo isConflictedFromPackedKeys(@NotNull ATNConfigSet configset,
-													PredictionContextCache contextCache,
-													long[] keys,
-													int configCnt,
-													int globalMinAlt) {
-		final long firstKey = keys[0];
-		final int minAlt = (int) ((firstKey >>> 24) & 0xFFFFL);
-		if (minAlt != globalMinAlt) {
-			return null;
-		}
-		final int firstState = (int) (firstKey >>> 40);
-
-		// quick check 1 & 2 (exact check against sorted primitive keys)
-		int currentState = firstState;
-		for (int i = 1; i < configCnt; i++) {
-			long k = keys[i];
-			int stateKey = (int) (k >>> 40);
-			if (stateKey != currentState) {
-				if ((int) ((k >>> 24) & 0xFFFFL) != minAlt) {
-					return null;
-				}
-				currentState = stateKey;
-			}
-		}
-
-		boolean exact = !configset.getDipsIntoOuterContext();
-		BitSet alts = new BitSet();
-		alts.set(minAlt);
-
-		if (exact) {
-			BitSet representedAlts = new BitSet();
-			int maxAlt = minAlt;
-			for (int i = 0; i < configCnt; i++) {
-				long k = keys[i];
-				if ((int) (k >>> 40) != firstState) {
-					break;
-				}
-				int alt = (int) ((k >>> 24) & 0xFFFFL);
-				representedAlts.set(alt);
-				maxAlt = alt;
-			}
-
-			// quick check #3:
-			currentState = firstState;
-			int currentAlt = minAlt;
-			for (int i = 0; i < configCnt; i++) {
-				long k = keys[i];
-				int stateKey = (int) (k >>> 40);
-				int alt = (int) ((k >>> 24) & 0xFFFFL);
-				if (stateKey != currentState) {
-					if (currentAlt != maxAlt) {
-						exact = false;
-						break;
-					}
-					currentState = stateKey;
-					currentAlt = minAlt;
-				}
-				else if (alt != currentAlt) {
-					if (alt != representedAlts.nextSetBit(currentAlt + 1)) {
-						exact = false;
-						break;
-					}
-					currentAlt = alt;
-				}
-			}
-		}
-
-		currentState = firstState;
-		int lastIndexCurrentStateMinAlt = 0;
-		PredictionContext joinedCheckContext = configset.get((int) (firstKey & 0xFFFFFFL)).getContext();
-		for (int i = 1; i < configCnt; i++) {
-			long k = keys[i];
-			if ((int) ((k >>> 24) & 0xFFFFL) != minAlt || (int) (k >>> 40) != currentState) {
-				break;
-			}
-			lastIndexCurrentStateMinAlt = i;
-			joinedCheckContext = contextCache.join(joinedCheckContext, configset.get((int) (k & 0xFFFFFFL)).getContext());
-		}
-
-		for (int i = lastIndexCurrentStateMinAlt + 1; i < configCnt; i++) {
-			long k = keys[i];
-			int stateKey = (int) (k >>> 40);
-			int currentAlt = (int) ((k >>> 24) & 0xFFFFL);
-			alts.set(currentAlt);
-			if (stateKey != currentState) {
-				currentState = stateKey;
-				lastIndexCurrentStateMinAlt = i;
-				joinedCheckContext = configset.get((int) (k & 0xFFFFFFL)).getContext();
-				for (int j = i + 1; j < configCnt; j++) {
-					long kj = keys[j];
-					if ((int) ((kj >>> 24) & 0xFFFFL) != minAlt || (int) (kj >>> 40) != currentState) {
-						break;
-					}
-					lastIndexCurrentStateMinAlt = j;
-					joinedCheckContext = contextCache.join(joinedCheckContext, configset.get((int) (kj & 0xFFFFFFL)).getContext());
-				}
-
-				i = lastIndexCurrentStateMinAlt;
-				continue;
-			}
-
-			PredictionContext joinedCheckContext2 = configset.get((int) (k & 0xFFFFFFL)).getContext();
-			int lastIndexCurrentStateCurrentAlt = i;
-			for (int j = i + 1; j < configCnt; j++) {
-				long kj = keys[j];
-				if ((int) ((kj >>> 24) & 0xFFFFL) != currentAlt || (int) (kj >>> 40) != currentState) {
-					break;
-				}
-				lastIndexCurrentStateCurrentAlt = j;
-				joinedCheckContext2 = contextCache.join(joinedCheckContext2, configset.get((int) (kj & 0xFFFFFFL)).getContext());
-			}
-
-			i = lastIndexCurrentStateCurrentAlt;
-
-			PredictionContext check = contextCache.join(joinedCheckContext, joinedCheckContext2);
-			if (!joinedCheckContext.equals(check)) {
-				return null;
-			}
-
-			// update exact if necessary
-			exact = exact && joinedCheckContext.equals(joinedCheckContext2);
-		}
-
-		return new ConflictInfo(alts, exact);
-	}
-
-	private ConflictInfo isConflictedFallback(@NotNull ATNConfigSet configset, PredictionContextCache contextCache) {
-		final int configCnt = configset.size();
-		ensureConflictScratch(configCnt);
-		final long[] keys = conflictKeys;
-		final ATNConfig[] configs = conflictConfigs;
-		try {
-			boolean alreadySorted = true;
-			long prevKey = Long.MIN_VALUE;
-			for (int i = 0; i < configCnt; i++) {
-				ATNConfig c = configset.get(i);
-				configs[i] = c;
-				long k = (((long) c.getState().getNonStopStateNumber()) << 32) | (c.getAlt() & 0xFFFFFFFFL);
-				keys[i] = k;
-				if (k < prevKey) {
-					alreadySorted = false;
-				}
-				prevKey = k;
-			}
-			if (!alreadySorted) {
-				stableSortConflict(keys, configs, configCnt);
-			}
-
-			final ATNConfig firstConfig = configs[0];
-			final int minAlt = (int) keys[0];
-			final int firstState = (int) (keys[0] >>> 32);
-
-			// quick check 1 & 2 (exact check against sorted keys)
-			int currentState = firstState;
-			for (int i = 1; i < configCnt; i++) {
-				int stateNumber = (int) (keys[i] >>> 32);
-				if (stateNumber != currentState) {
-					if ((int) keys[i] != minAlt) {
-						return null;
-					}
-					currentState = stateNumber;
-				}
-			}
-
-			boolean exact = !configset.getDipsIntoOuterContext();
-			BitSet alts = new BitSet();
-			alts.set(minAlt);
-
-			if (exact) {
-				// get the represented alternatives of the first state
-				BitSet representedAlts = new BitSet();
-				int maxAlt = minAlt;
-				for (int i = 0; i < configCnt; i++) {
-					if ((int) (keys[i] >>> 32) != firstState) {
-						break;
-					}
-					int alt = (int) keys[i];
-					representedAlts.set(alt);
-					maxAlt = alt;
-				}
-
-				// quick check #3:
-				currentState = firstState;
-				int currentAlt = minAlt;
-				for (int i = 0; i < configCnt; i++) {
-					int stateNumber = (int) (keys[i] >>> 32);
-					int alt = (int) keys[i];
-					if (stateNumber != currentState) {
-						if (currentAlt != maxAlt) {
-							exact = false;
-							break;
-						}
-						currentState = stateNumber;
-						currentAlt = minAlt;
-					}
-					else if (alt != currentAlt) {
-						if (alt != representedAlts.nextSetBit(currentAlt + 1)) {
-							exact = false;
-							break;
-						}
-						currentAlt = alt;
-					}
-				}
-			}
-
-			currentState = firstState;
-			int lastIndexCurrentStateMinAlt = 0;
-			PredictionContext joinedCheckContext = firstConfig.getContext();
-			for (int i = 1; i < configCnt; i++) {
-				if ((int) keys[i] != minAlt || (int) (keys[i] >>> 32) != currentState) {
-					break;
-				}
-				lastIndexCurrentStateMinAlt = i;
-				joinedCheckContext = contextCache.join(joinedCheckContext, configs[i].getContext());
-			}
-
-			for (int i = lastIndexCurrentStateMinAlt + 1; i < configCnt; i++) {
-				ATNConfig config = configs[i];
-				int stateNumber = (int) (keys[i] >>> 32);
-				int currentAlt = (int) keys[i];
-				alts.set(currentAlt);
-				if (stateNumber != currentState) {
-					currentState = stateNumber;
-					lastIndexCurrentStateMinAlt = i;
-					joinedCheckContext = config.getContext();
-					for (int j = i + 1; j < configCnt; j++) {
-						if ((int) keys[j] != minAlt || (int) (keys[j] >>> 32) != currentState) {
-							break;
-						}
-						lastIndexCurrentStateMinAlt = j;
-						joinedCheckContext = contextCache.join(joinedCheckContext, configs[j].getContext());
-					}
-
-					i = lastIndexCurrentStateMinAlt;
-					continue;
-				}
-
-				PredictionContext joinedCheckContext2 = config.getContext();
-				int lastIndexCurrentStateCurrentAlt = i;
-				for (int j = i + 1; j < configCnt; j++) {
-					if ((int) keys[j] != currentAlt || (int) (keys[j] >>> 32) != currentState) {
-						break;
-					}
-					lastIndexCurrentStateCurrentAlt = j;
-					joinedCheckContext2 = contextCache.join(joinedCheckContext2, configs[j].getContext());
-				}
-
-				i = lastIndexCurrentStateCurrentAlt;
-
-				PredictionContext check = contextCache.join(joinedCheckContext, joinedCheckContext2);
-				if (!joinedCheckContext.equals(check)) {
-					return null;
-				}
-
-				// update exact if necessary
-				exact = exact && joinedCheckContext.equals(joinedCheckContext2);
-			}
-
-			return new ConflictInfo(alts, exact);
-		}
-		finally {
-			Arrays.fill(configs, 0, configCnt, null);
-		}
-	}
-
 	protected BitSet getConflictingAltsFromConfigSet(ATNConfigSet configs) {
 		BitSet conflictingAlts = configs.getConflictingAlts();
 		if ( conflictingAlts == null && configs.getUniqueAlt()!= ATN.INVALID_ALT_NUMBER ) {
@@ -2971,14 +2541,16 @@ public class ParserATNSimulator extends ATNSimulator {
 				configs.optimizeConfigs(this);
 			}
 
-			DFAState proposed = createDFAState(dfa, configs);
-			DFAState existing = dfa.states.get(proposed);
-			if ( existing!=null ) return existing;
+			if (!dfa.states.isEmpty()) {
+				DFAState proposed = createDFAState(dfa, configs);
+				DFAState existing = dfa.states.get(proposed);
+				if ( existing!=null ) return existing;
+			}
 		}
 
 		if (!configs.isReadOnly()) {
 			if (configs.getConflictInfo() == null) {
-				configs.setConflictInfo(isConflicted(configs, contextCache));
+				configs.setConflictInfo(conflictDetector().detect(configs, contextCache));
 			}
 		}
 
@@ -3050,7 +2622,7 @@ public class ParserATNSimulator extends ATNSimulator {
 			return PredictionContext.EMPTY_FULL_STATE_KEY;
 		}
 
-		ATNState state = atn.states.get(context.invokingState);
+		ATNState state = atn.getCachedState(context.invokingState);
 		RuleTransition transition = (RuleTransition)state.transition(0);
 		return transition.followState.stateNumber;
 	}
@@ -3061,7 +2633,7 @@ public class ParserATNSimulator extends ATNSimulator {
 		}
 
 		while (!context.isEmpty()) {
-			ATNState state = atn.states.get(context.invokingState);
+			ATNState state = atn.getCachedState(context.invokingState);
 			assert state.getNumberOfTransitions() == 1 && state.transition(0).getSerializationType() == Transition.RULE;
 			RuleTransition transition = (RuleTransition)state.transition(0);
 			if (!transition.tailCall) {

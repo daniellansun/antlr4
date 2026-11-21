@@ -31,6 +31,7 @@ public class LexerActionExecutor {
 	private static final byte MODE_SLOW = 0;
 	private static final byte MODE_SINGLE = 1;
 	private static final byte MODE_MULTI = 2;
+	private static final byte MODE_CUSTOM_OPT_BUILTIN = 3;
 
 	private static final byte KIND_NONE = 0;
 	private static final byte KIND_SKIP = 1;
@@ -64,15 +65,23 @@ public class LexerActionExecutor {
 	 * {@link LexerAction#isPositionDependent()} and {@link LexerAction#execute}
 	 * as well as redundant {@link IntStream#seek} / {@code try-finally} work
 	 * when no {@link LexerIndexedCustomAction} is present.
+	 *
+	 * <p>In {@link #MODE_CUSTOM_OPT_BUILTIN}, {@link #singleArg1} and
+	 * {@link #singleArg2} hold {@code (ruleIndex, actionIndex)} of the leading
+	 * {@link LexerCustomAction}, and {@link #tailKind} / {@link #tailArg} hold
+	 * an optional trailing built-in command (e.g. {@code pushMode}, {@code popMode},
+	 * {@code type}, {@code skip}). Keeping literally one {@code lexer.action}
+	 * call site in this class avoids HotSpot C2 {@code NodeCountInliningCutoff}
+	 * bimodal regressions on parallel lexing.</p>
 	 */
 	private final byte fastMode;
 	private final byte singleKind;
 	private final int singleArg1;
 	private final int singleArg2;
+	private final byte tailKind;
+	private final int tailArg;
 	private final byte[] actionKinds;
 	private final int[] actionArg1;
-	private final int[] actionArg2;
-	private final boolean hasMultipleCustomActions;
 
 	/**
 	 * Constructs an executor for a sequence of {@link LexerAction} actions.
@@ -109,53 +118,76 @@ public class LexerActionExecutor {
 			this.singleKind = KIND_NONE;
 			this.singleArg1 = 0;
 			this.singleArg2 = 0;
+			this.tailKind = KIND_NONE;
+			this.tailArg = 0;
 			this.actionKinds = null;
 			this.actionArg1 = null;
-			this.actionArg2 = null;
-			this.hasMultipleCustomActions = false;
 		}
 		else if (allBuiltInNonIndexed && len == 1) {
 			LexerAction a = lexerActions[0];
-			this.fastMode = MODE_SINGLE;
-			this.singleKind = classifyBuiltIn(a);
-			this.singleArg1 = extractArg1(a, this.singleKind);
-			this.singleArg2 = extractArg2(a, this.singleKind);
+			byte k = classifyBuiltIn(a);
+			if (k == KIND_CUSTOM) {
+				this.fastMode = MODE_CUSTOM_OPT_BUILTIN;
+				this.singleKind = KIND_CUSTOM;
+				this.singleArg1 = extractArg1(a, k);
+				this.singleArg2 = extractArg2(a, k);
+				this.tailKind = KIND_NONE;
+				this.tailArg = 0;
+			}
+			else {
+				this.fastMode = MODE_SINGLE;
+				this.singleKind = k;
+				this.singleArg1 = extractArg1(a, k);
+				this.singleArg2 = 0;
+				this.tailKind = KIND_NONE;
+				this.tailArg = 0;
+			}
 			this.actionKinds = null;
 			this.actionArg1 = null;
-			this.actionArg2 = null;
-			this.hasMultipleCustomActions = false;
 		}
-		else if (allBuiltInNonIndexed) {
+		else if (allBuiltInNonIndexed && len == 2 && customCount == 1
+			&& classifyBuiltIn(lexerActions[0]) == KIND_CUSTOM) {
+			LexerAction a0 = lexerActions[0];
+			LexerAction a1 = lexerActions[1];
+			byte k1 = classifyBuiltIn(a1);
+			this.fastMode = MODE_CUSTOM_OPT_BUILTIN;
+			this.singleKind = KIND_CUSTOM;
+			this.singleArg1 = extractArg1(a0, KIND_CUSTOM);
+			this.singleArg2 = extractArg2(a0, KIND_CUSTOM);
+			this.tailKind = k1;
+			this.tailArg = extractArg1(a1, k1);
+			this.actionKinds = null;
+			this.actionArg1 = null;
+		}
+		else if (allBuiltInNonIndexed && customCount == 0) {
 			byte[] kinds = new byte[len];
 			int[] a1 = new int[len];
-			int[] a2 = customCount > 0 ? new int[len] : null;
 			for (int i = 0; i < len; i++) {
 				LexerAction a = lexerActions[i];
 				byte k = classifyBuiltIn(a);
 				kinds[i] = k;
 				a1[i] = extractArg1(a, k);
-				if (a2 != null) {
-					a2[i] = extractArg2(a, k);
-				}
 			}
 			this.fastMode = MODE_MULTI;
 			this.singleKind = KIND_NONE;
 			this.singleArg1 = 0;
 			this.singleArg2 = 0;
+			this.tailKind = KIND_NONE;
+			this.tailArg = 0;
 			this.actionKinds = kinds;
 			this.actionArg1 = a1;
-			this.actionArg2 = a2;
-			this.hasMultipleCustomActions = customCount > 1;
 		}
 		else {
+			// Covers [builtIn, CUSTOM], len >= 3 containing custom, >= 2 custom,
+			// LexerIndexedCustomAction, and custom LexerAction subclasses.
 			this.fastMode = MODE_SLOW;
 			this.singleKind = KIND_NONE;
 			this.singleArg1 = 0;
 			this.singleArg2 = 0;
+			this.tailKind = KIND_NONE;
+			this.tailArg = 0;
 			this.actionKinds = null;
 			this.actionArg1 = null;
-			this.actionArg2 = null;
-			this.hasMultipleCustomActions = false;
 		}
 	}
 
@@ -298,10 +330,10 @@ public class LexerActionExecutor {
 	/**
 	 * Returns {@code true} iff this executor consists of a single built-in
 	 * {@link LexerSkipAction} (no custom or position-dependent actions).
-	 * Package-private fast check used by {@link LexerATNSimulator} to fuse
-	 * consecutive {@code -> skip} rules without returning to {@link Lexer#nextToken}.
+	 *
+	 * @since 4.13.2.20
 	 */
-	boolean isSingleSkip() {
+	public final boolean isSingleSkip() {
 		return fastMode == MODE_SINGLE && singleKind == KIND_SKIP;
 	}
 
@@ -325,23 +357,38 @@ public class LexerActionExecutor {
 	 * of the token.
 	 */
 	public void execute(@NotNull Lexer lexer, CharStream input, int startIndex) {
-		if (fastMode == MODE_SINGLE) {
-			byte kind = singleKind;
+		final byte mode = fastMode;
+		byte kind;
+		int arg;
+		if (mode == MODE_CUSTOM_OPT_BUILTIN) {
+			// Literally the only lexer.action(...) call site in this class.
+			lexer.action(null, singleArg1, singleArg2);
+			kind = tailKind;
+			if (kind == KIND_NONE) {
+				return;
+			}
+			arg = tailArg;
+		}
+		else if (mode == MODE_SINGLE) {
+			kind = singleKind;
 			if (kind == KIND_SKIP) {
 				lexer.skip();
 				return;
 			}
-			executeBuiltIn(lexer, kind, singleArg1, singleArg2);
+			arg = singleArg1;
+		}
+		else if (mode == MODE_MULTI) {
+			executeMultiBuiltIn(lexer);
 			return;
 		}
-		if (fastMode == MODE_MULTI) {
-			executeMultiBuiltIn(lexer, input);
+		else {
+			executeSlow(lexer, input, startIndex);
 			return;
 		}
-		executeSlow(lexer, input, startIndex);
+		executeBuiltIn(lexer, kind, arg);
 	}
 
-	private static void executeBuiltIn(@NotNull Lexer lexer, byte kind, int arg1, int arg2) {
+	private static void executeBuiltIn(@NotNull Lexer lexer, byte kind, int arg1) {
 		switch (kind) {
 		case KIND_SKIP:
 			lexer.skip();
@@ -364,37 +411,16 @@ public class LexerActionExecutor {
 		case KIND_POP_MODE:
 			lexer.popMode();
 			break;
-		case KIND_CUSTOM:
-			lexer.action(null, arg1, arg2);
-			break;
 		default:
 			break;
 		}
 	}
 
-	private void executeMultiBuiltIn(@NotNull Lexer lexer, CharStream input) {
+	private void executeMultiBuiltIn(@NotNull Lexer lexer) {
 		final byte[] kinds = this.actionKinds;
 		final int[] a1 = this.actionArg1;
-		final int[] a2 = this.actionArg2;
-		final int len = kinds.length;
-		if (!hasMultipleCustomActions) {
-			for (int i = 0; i < len; i++) {
-				byte kind = kinds[i];
-				executeBuiltIn(lexer, kind, a1[i], a2 != null ? a2[i] : 0);
-			}
-			return;
-		}
-		int stopIndex = input.index();
-		boolean ranCustom = false;
-		for (int i = 0; i < len; i++) {
-			byte kind = kinds[i];
-			if (kind == KIND_CUSTOM) {
-				if (ranCustom && input.index() != stopIndex) {
-					input.seek(stopIndex);
-				}
-				ranCustom = true;
-			}
-			executeBuiltIn(lexer, kind, a1[i], a2[i]);
+		for (int i = 0, len = kinds.length; i < len; i++) {
+			executeBuiltIn(lexer, kinds[i], a1[i]);
 		}
 	}
 

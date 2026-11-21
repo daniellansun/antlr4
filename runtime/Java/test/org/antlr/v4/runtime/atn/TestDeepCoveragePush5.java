@@ -129,15 +129,7 @@ public class TestDeepCoveragePush5 {
 		}
 
 		ConflictInfo callIsConflicted(ATNConfigSet configs, PredictionContextCache cache) {
-			try {
-				java.lang.reflect.Method m = ParserATNSimulator.class.getDeclaredMethod(
-					"isConflicted", ATNConfigSet.class, PredictionContextCache.class);
-				m.setAccessible(true);
-				return (ConflictInfo) m.invoke(this, configs, cache);
-			}
-			catch (Exception e) {
-				throw new RuntimeException(e);
-			}
+			return ConflictDetector.detectOnce(configs, cache);
 		}
 
 		DFAState.PredPrediction[] callPredicateDFAState(DFAState D, ATNConfigSet configs, int nalts) {

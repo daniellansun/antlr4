@@ -278,9 +278,22 @@ public class IntegerList {
 		return Arrays.binarySearch(_data, fromIndex, toIndex, key);
 	}
 
-	private void ensureCapacity(int capacity) {
-		if (capacity < 0 || capacity > MAX_ARRAY_SIZE) {
+	/**
+	 * Ensures that the backing array can hold at least {@code minCapacity}
+	 * elements without reallocating. No-op when the current backing array
+	 * already satisfies {@code minCapacity}.
+	 *
+	 * @param minCapacity minimum required capacity
+	 * @throws OutOfMemoryError if {@code minCapacity < 0} (e.g., signed size
+	 * overflow) or exceeds the maximum array size
+	 * @since 4.13.2.20
+	 */
+	public final void ensureCapacity(int minCapacity) {
+		if (minCapacity < 0 || minCapacity > MAX_ARRAY_SIZE) {
 			throw new OutOfMemoryError();
+		}
+		if (minCapacity <= _data.length) {
+			return;
 		}
 
 		int newLength;
@@ -291,7 +304,7 @@ public class IntegerList {
 			newLength = _data.length;
 		}
 
-		while (newLength < capacity) {
+		while (newLength < minCapacity) {
 			newLength = newLength * 2;
 			if (newLength < 0 || newLength > MAX_ARRAY_SIZE) {
 				newLength = MAX_ARRAY_SIZE;

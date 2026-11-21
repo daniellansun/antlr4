@@ -302,20 +302,73 @@ public abstract class PredictionContext {
 	/**
 	 * Package-private fast path for {@link ATN#getCachedContext(PredictionContext)}
 	 * after an initial {@code isEmpty()} and {@code contextCache.get(context)}
-	 * check has missed. Uses a flat HPPC {@link ObjectObjectIdentityHashMap}
-	 * internally (never exposed on any public or protected signature) and
-	 * short-circuits depth-1 singletons without allocating a visited map.
+	 * check has missed. Walks pure {@link SingletonPredictionContext} chains
+	 * iteratively without allocating a visited map, and allocates an internal
+	 * HPPC {@link ObjectObjectIdentityHashMap} (never exposed on any public or
+	 * protected signature) only if an {@link ArrayPredictionContext} is reached.
 	 */
 	static PredictionContext getCachedContextInternal(
 		@NotNull PredictionContext context,
 		@NotNull ConcurrentMap<PredictionContext, PredictionContext> contextCache)
 	{
 		if (context instanceof SingletonPredictionContext) {
-			PredictionContext parent = ((SingletonPredictionContext) context).parent;
+			SingletonPredictionContext head = (SingletonPredictionContext) context;
+			PredictionContext parent = head.parent;
 			if (parent.isEmpty()) {
-				PredictionContext existing = contextCache.putIfAbsent(context, context);
-				return existing != null ? existing : context;
+				PredictionContext existing = contextCache.putIfAbsent(head, head);
+				return existing != null ? existing : head;
 			}
+			PredictionContext hit = contextCache.get(parent);
+			if (hit != null) {
+				PredictionContext candidate = hit == parent
+					? head
+					: new SingletonPredictionContext(hit, head.returnState);
+				PredictionContext existing = contextCache.putIfAbsent(candidate, candidate);
+				return existing != null ? existing : candidate;
+			}
+			// Walk pure singleton chain iteratively without allocating a visited map.
+			SingletonPredictionContext[] chain = new SingletonPredictionContext[8];
+			int depth = 0;
+			chain[depth++] = head;
+			PredictionContext cur = parent;
+			PredictionContext canonicalParent;
+			while (true) {
+				if (cur.isEmpty()) {
+					canonicalParent = cur;
+					break;
+				}
+				if (!(cur instanceof SingletonPredictionContext)) {
+					canonicalParent = getCachedContextHppc(cur, contextCache,
+						new ObjectObjectIdentityHashMap<PredictionContext, PredictionContext>(8));
+					break;
+				}
+				SingletonPredictionContext sc = (SingletonPredictionContext) cur;
+				if (depth == chain.length) {
+					chain = Arrays.copyOf(chain, chain.length << 1);
+				}
+				chain[depth++] = sc;
+				PredictionContext next = sc.parent;
+				if (next.isEmpty()) {
+					canonicalParent = next;
+					break;
+				}
+				PredictionContext cachedNext = contextCache.get(next);
+				if (cachedNext != null) {
+					canonicalParent = cachedNext;
+					break;
+				}
+				cur = next;
+			}
+
+			for (int i = depth - 1; i >= 0; i--) {
+				SingletonPredictionContext node = chain[i];
+				PredictionContext candidate = canonicalParent == node.parent
+					? node
+					: new SingletonPredictionContext(canonicalParent, node.returnState);
+				PredictionContext existing = contextCache.putIfAbsent(candidate, candidate);
+				canonicalParent = existing != null ? existing : candidate;
+			}
+			return canonicalParent;
 		}
 		return getCachedContextHppc(context, contextCache,
 			new ObjectObjectIdentityHashMap<PredictionContext, PredictionContext>(8));

@@ -6,6 +6,7 @@
 
 package org.antlr.v4.runtime.atn;
 
+import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.dfa.DFAState;
 import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
@@ -60,6 +61,151 @@ final class LexerPredEdgeTable {
 		PredNode(int ruleIndex, int predIndex) {
 			this.ruleIndex = ruleIndex;
 			this.predIndex = predIndex;
+		}
+	}
+
+	/**
+	 * Per-{@link LexerATNSimulator} predicate trace state for lookup replay and
+	 * recording. Owned exclusively by a single simulator instance (never stored
+	 * on the cross-thread shared {@link LexerPredEdgeTable}).
+	 */
+	static final class PredTrace {
+		private int[] ruleTrace;
+		private int[] indexTrace;
+		private boolean[] resultTrace;
+		boolean captureActive;
+		private int replayLen;
+		private int step;
+		boolean recordAbort;
+
+		void ensureBuffers() {
+			if (ruleTrace == null) {
+				ruleTrace = new int[MAX_PRED_DEPTH];
+				indexTrace = new int[MAX_PRED_DEPTH];
+				resultTrace = new boolean[MAX_PRED_DEPTH];
+			}
+		}
+
+		/**
+		 * Evaluates or replays a predicate transition while capture is active.
+		 */
+		boolean evaluateOrReplay(@NotNull LexerATNSimulator sim,
+								 @NotNull CharStream input,
+								 int ruleIndex,
+								 int predIndex,
+								 boolean speculative)
+		{
+			if (step < replayLen && !recordAbort) {
+				if (ruleTrace[step] == ruleIndex && indexTrace[step] == predIndex) {
+					return resultTrace[step++];
+				}
+				recordAbort = true;
+				return sim.evaluatePredicate(input, ruleIndex, predIndex, speculative);
+			}
+			boolean predResult = sim.evaluatePredicate(input, ruleIndex, predIndex, speculative);
+			if (!recordAbort) {
+				if (step < MAX_PRED_DEPTH) {
+					ruleTrace[step] = ruleIndex;
+					indexTrace[step] = predIndex;
+					resultTrace[step] = predResult;
+					step++;
+				}
+				else {
+					recordAbort = true;
+				}
+			}
+			return predResult;
+		}
+
+	}
+
+	/**
+	 * Resolves a missing lexer DFA edge via {@link LexerPredEdgeTable} or
+	 * ATN reach/closure, recording deterministic predicate trees for warm
+	 * lock-free reuse.
+	 *
+	 * <p>Warm single-predicate hits (dominant in Groovy/Java lexers) complete
+	 * with zero {@link PredTrace} or trace-array allocations. Keeping the cold
+	 * multi-predicate / ATN-capture path in the same method keeps its bytecode
+	 * size strictly above HotSpot C2's {@code FreqInlineSize} (325 B), ensuring
+	 * it never inlines into and pollutes register allocation of
+	 * {@link org.antlr.v4.runtime.CodePointLexerRunner}'s hot scanning loops.</p>
+	 */
+	@NotNull
+	static DFAState resolveFast(@NotNull LexerATNSimulator sim,
+								@NotNull CharStream input,
+								@NotNull DFAState ds0,
+								@NotNull DFAState s,
+								int t)
+	{
+		if (sim.recog == null || !sim.optimize_tail_calls || (t & ~0x7F) != 0
+			|| s.stateNumber < 0 || s.stateNumber == Integer.MAX_VALUE) {
+			return sim.computeTargetState(input, s, t);
+		}
+
+		LexerPredEdgeTable table = sim.atn.getLexerPredEdgeTable(sim.mode, ds0);
+		PredTrace pt = null;
+		int replayed = 0;
+		if (table != null) {
+			Object cur = table.getRoot(s.stateNumber, t);
+			while (cur instanceof PredNode) {
+				PredNode pn = (PredNode) cur;
+				boolean res = sim.evaluatePredicate(input, pn.ruleIndex, pn.predIndex, true);
+				Object next = res ? pn.onTrue : pn.onFalse;
+				if (next instanceof DFAState) {
+					return (DFAState) next;
+				}
+				if (pt == null) {
+					pt = sim.predTrace();
+					pt.ensureBuffers();
+				}
+				if (replayed < MAX_PRED_DEPTH) {
+					pt.ruleTrace[replayed] = pn.ruleIndex;
+					pt.indexTrace[replayed] = pn.predIndex;
+					pt.resultTrace[replayed] = res;
+					replayed++;
+				}
+				cur = next;
+			}
+			if (cur != null) {
+				return (DFAState) cur;
+			}
+		}
+
+		if (pt == null) {
+			pt = sim.predTrace();
+			pt.ensureBuffers();
+		}
+		ATNConfigSet reach = sim.obtainRetainedReach(s.configs.size());
+		pt.captureActive = true;
+		pt.replayLen = replayed;
+		pt.step = 0;
+		pt.recordAbort = false;
+		try {
+			sim.getReachableConfigSet(input, s.configs, reach, t);
+
+			boolean suppressEdge = reach.hasSemanticContext();
+			DFAState target;
+			if (reach.isEmpty()) {
+				if (!suppressEdge) {
+					sim.addDFAEdge(s, t, ATNSimulator.ERROR);
+				}
+				target = ATNSimulator.ERROR;
+			}
+			else {
+				target = sim.addDFAEdge(s, t, reach);
+			}
+
+			if (suppressEdge && !pt.recordAbort && pt.step > 0) {
+				sim.atn.getOrCreateLexerPredEdgeTable(sim.mode, ds0)
+					.put(s.stateNumber, t, pt.ruleTrace, pt.indexTrace, pt.resultTrace, pt.step, target);
+			}
+			return target;
+		}
+		finally {
+			pt.captureActive = false;
+			pt.replayLen = 0;
+			sim.releaseRetainedReach();
 		}
 	}
 

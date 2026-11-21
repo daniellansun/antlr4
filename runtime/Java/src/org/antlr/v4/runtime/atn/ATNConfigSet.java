@@ -199,8 +199,8 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		if (readonly) {
 			this.mergedConfigs = null;
 			this.unmerged = null;
-			this.configs = (ArrayList<ATNConfig>)set.configs.clone();
-			this.configs.trimToSize();
+			// Single exact-sized array copy instead of clone() + trimToSize().
+			this.configs = new ArrayList<>(set.configs);
 		} else if (!set.isReadOnly()) {
 			// Object.clone preserves ClearableLongObjectHashMap (package-private
 			// HPPC subclass); HPPC never appears on public/protected signatures.
@@ -226,7 +226,9 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		}
 
 		if (readonly) {
-			this.cachedHashCode = set.hashCode();
+			// Preserve an already-computed hash lazily: when enable_global_context_dfa
+			// is false, transient full-context states are never hashed into dfa.states.
+			this.cachedHashCode = set.cachedHashCode;
 		}
 
 		// if (!readonly && set.isReadOnly()) -> addAll is called from clone()
@@ -252,6 +254,14 @@ public class ATNConfigSet implements Set<ATNConfig> {
 
 	public final boolean isReadOnly() {
 		return mergedConfigs == null;
+	}
+
+	/**
+	 * Package-private check for {@link ConflictDetector}: whether this writable
+	 * set holds any key-colliding configs in {@link #unmerged}.
+	 */
+	final boolean hasUnmerged() {
+		return unmerged != null && !unmerged.isEmpty();
 	}
 
 	public boolean isOutermostConfigSet() {
@@ -285,11 +295,30 @@ public class ATNConfigSet implements Set<ATNConfig> {
 
 		boolean changed = false;
 		final ATN atn = interpreter.atn;
+		// 2-slot register cache eliminates redundant ConcurrentHashMap.get
+		// probes when adjacent configs share the same PredictionContext.
+		PredictionContext lastRaw1 = null;
+		PredictionContext lastCached1 = null;
+		PredictionContext lastRaw2 = null;
+		PredictionContext lastCached2 = null;
 		for (int i = 0; i < n; i++) {
 			ATNConfig config = configs.get(i);
 			PredictionContext ctx = config.getContext();
 			if (!ctx.isEmpty()) {
-				PredictionContext cached = atn.getCachedContext(ctx);
+				PredictionContext cached;
+				if (ctx == lastRaw1) {
+					cached = lastCached1;
+				}
+				else if (ctx == lastRaw2) {
+					cached = lastCached2;
+				}
+				else {
+					cached = atn.getCachedContext(ctx);
+					lastRaw2 = lastRaw1;
+					lastCached2 = lastCached1;
+					lastRaw1 = ctx;
+					lastCached1 = cached;
+				}
 				if (cached != ctx) {
 					config.setContext(cached);
 					changed = true;
@@ -392,14 +421,14 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		if (!addKey) {
 			ATNConfig mergedConfig = mergedConfigs.indexGet(mapIndex);
 			if (canMerge(e, key, mergedConfig)) {
-				return !mergeConfigContext(e, contextCache, mergedConfig);
+				return !mergeConfigContext(e, e.getContext(), contextCache, mergedConfig);
 			}
 		}
 
 		for (int i = 0, n = unmerged.size(); i < n; i++) {
 			ATNConfig unmergedConfig = unmerged.get(i);
 			if (canMerge(e, key, unmergedConfig)) {
-				if (mergeConfigContext(e, contextCache, unmergedConfig)) return false;
+				if (mergeConfigContext(e, e.getContext(), contextCache, unmergedConfig)) return false;
 				if (addKey) {
 					mergedConfigs.indexInsert(mapIndex, key, unmergedConfig);
 					unmerged.remove(i);
@@ -420,19 +449,114 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		return true;
 	}
 
-	private boolean mergeConfigContext(ATNConfig e, @Nullable PredictionContextCache contextCache, ATNConfig unmergedConfig) {
-		boolean wasReaching = unmergedConfig.getReachesIntoOuterContext();
-		unmergedConfig.setOuterContextDepth(Math.max(unmergedConfig.getOuterContextDepth(), e.getOuterContextDepth()));
-		if (e.isPrecedenceFilterSuppressed()) {
-			unmergedConfig.setPrecedenceFilterSuppressed(true);
-		}
-		if (wasReaching != unmergedConfig.getReachesIntoOuterContext()) {
-			invalidateHash();
+	/**
+	 * Zero-allocation merge-on-hit variant of {@link #add(ATNConfig, PredictionContextCache)}
+	 * for {@link EpsilonClosure} and {@link ReachComputation}. Probes by
+	 * {@code (targetState, template.getAlt())} before allocating an
+	 * {@link ATNConfig}; on miss always materializes a fresh transformed copy
+	 * (never aliasing {@code template}). Subclasses fall back to {@link #add}.
+	 */
+	boolean addTransformed(@NotNull ATNState targetState,
+						   @NotNull ATNConfig template,
+						   @Nullable PredictionContextCache contextCache)
+	{
+		return addTransformed(targetState, template, template.getContext(), contextCache);
+	}
+
+	/**
+	 * Zero-allocation merge-on-hit variant with an explicit {@code incomingContext}
+	 * (used for BFS rule transitions in {@link EpsilonClosure}).
+	 */
+	boolean addTransformed(@NotNull ATNState targetState,
+						   @NotNull ATNConfig template,
+						   @NotNull PredictionContext incomingContext,
+						   @Nullable PredictionContextCache contextCache)
+	{
+		if (getClass() != ATNConfigSet.class) {
+			ATNConfig transformed = incomingContext == template.getContext()
+				? template.transformParser(targetState)
+				: template.transformParser(targetState, incomingContext);
+			return add(transformed, contextCache);
 		}
 
-		PredictionContext joined = PredictionContext.join(unmergedConfig.getContext(), e.getContext(), contextCache);
+		ensureWritable();
+		assert !outermostConfigSet || !template.getReachesIntoOuterContext();
+
+		if (contextCache == null) {
+			contextCache = PredictionContextCache.UNCACHED;
+		}
+
+		final long key = keyOf(targetState.stateNumber, template.getAlt());
+		final int mapIndex = mergedConfigs.indexOf(key);
+		final boolean addKey = mapIndex < 0;
+		final SemanticContext ls = template.getSemanticContext();
+		if (!addKey) {
+			ATNConfig mergedConfig = mergedConfigs.indexGet(mapIndex);
+			SemanticContext rs = mergedConfig.getSemanticContext();
+			if (ls == rs || (ls != null && ls.equals(rs))) {
+				return !mergeConfigContext(template, incomingContext, contextCache, mergedConfig);
+			}
+		}
+
+		for (int i = 0, n = unmerged.size(); i < n; i++) {
+			ATNConfig unmergedConfig = unmerged.get(i);
+			if (key == keyOf(unmergedConfig.getState().stateNumber, unmergedConfig.getAlt())) {
+				SemanticContext rs = unmergedConfig.getSemanticContext();
+				if (ls == rs || (ls != null && ls.equals(rs))) {
+					if (mergeConfigContext(template, incomingContext, contextCache, unmergedConfig)) return false;
+					if (addKey) {
+						mergedConfigs.indexInsert(mapIndex, key, unmergedConfig);
+						unmerged.remove(i);
+					}
+					return true;
+				}
+			}
+		}
+
+		// On miss, ALWAYS materialize a new ATNConfig so template is never
+		// mutated in place by later merges into this set.
+		ATNConfig e = incomingContext == template.getContext()
+			? template.transformParser(targetState)
+			: template.transformParser(targetState, incomingContext);
+		configs.add(e);
+		if (addKey) {
+			mergedConfigs.indexInsert(mapIndex, key, e);
+		} else {
+			unmerged.add(e);
+		}
+
+		updatePropertiesForAddedConfig(e);
+		invalidateHash();
+		return true;
+	}
+
+	private boolean mergeConfigContext(ATNConfig e,
+									   PredictionContext incomingCtx,
+									   @Nullable PredictionContextCache contextCache,
+									   ATNConfig unmergedConfig)
+	{
+		final int eDepth = e.getOuterContextDepth();
+		final int existingDepth = unmergedConfig.getOuterContextDepth();
+		if (eDepth > existingDepth) {
+			unmergedConfig.setOuterContextDepth(eDepth);
+			if (existingDepth == 0) {
+				invalidateHash();
+			}
+		}
+		if (e.isPrecedenceFilterSuppressed() && !unmergedConfig.isPrecedenceFilterSuppressed()) {
+			unmergedConfig.setPrecedenceFilterSuppressed(true);
+		}
+
+		final PredictionContext existingCtx = unmergedConfig.getContext();
 		updatePropertiesForMergedConfig(e);
-		if (unmergedConfig.getContext() == joined) {
+		if (existingCtx == incomingCtx) {
+			return true;
+		}
+
+		final PredictionContext joined = contextCache != null
+			? contextCache.join(existingCtx, incomingCtx)
+			: PredictionContext.join(existingCtx, incomingCtx, PredictionContextCache.UNCACHED);
+		if (existingCtx == joined || existingCtx.equals(joined)) {
 			return true;
 		}
 
@@ -478,13 +602,17 @@ public class ATNConfigSet implements Set<ATNConfig> {
 		return ls == rs || (ls != null && ls.equals(rs));
 	}
 
+	private static long keyOf(int stateNumber, int alt) {
+		long key = stateNumber & 0xFFFFFFFFL;
+		return (key << 24) | (alt & 0xFFFFFF);
+	}
+
 	/**
 	 * Packed {@code (stateNumber, alt)} key. The alternative keeps the full
 	 * 24 bits stored by {@link ATNConfig}.
 	 */
 	protected long getKey(ATNConfig e) {
-		long key = e.getState().stateNumber & 0xFFFFFFFFL;
-		return (key << 24) | (e.getAlt() & 0xFFFFFF);
+		return keyOf(e.getState().stateNumber, e.getAlt());
 	}
 
 	@Override

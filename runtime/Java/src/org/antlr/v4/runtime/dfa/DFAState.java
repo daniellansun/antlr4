@@ -86,6 +86,18 @@ public class DFAState {
 
 	private AcceptStateInfo acceptStateInfo;
 
+	/**
+	 * Cached prediction alternative when this state is an unconflicted accept
+	 * state backed by a read-only {@link #configs} set, or
+	 * {@link ATN#INVALID_ALT_NUMBER} otherwise. Written solely in
+	 * {@link #setAcceptState} prior to safe DFA publication (via
+	 * {@link java.util.concurrent.ConcurrentHashMap#putIfAbsent} and
+	 * {@code volatile} {@link #edges}), so warm SLL lookups collapse
+	 * {@code acceptStateInfo} and {@code configs.getConflictInfo()} into one
+	 * plain field read.
+	 */
+	private int unconflictedPrediction;
+
 	/** These keys for these edges are the top level element of the global context. */
 	@NotNull
 	private volatile AbstractEdgeMap<DFAState> contextEdges;
@@ -228,6 +240,24 @@ public class DFAState {
 
 	public final void setAcceptState(AcceptStateInfo acceptStateInfo) {
 		this.acceptStateInfo = acceptStateInfo;
+		this.unconflictedPrediction = (acceptStateInfo != null
+			&& configs != null
+			&& configs.isReadOnly()
+			&& configs.getConflictInfo() == null)
+			? acceptStateInfo.getPrediction()
+			: ATN.INVALID_ALT_NUMBER;
+	}
+
+	/**
+	 * Returns the predicted alternative if this state is an unconflicted accept
+	 * state backed by a read-only configuration set, or
+	 * {@link ATN#INVALID_ALT_NUMBER} otherwise. Callers must still check
+	 * {@link #predicates} before returning this value directly.
+	 *
+	 * @since 4.13.2.20
+	 */
+	public final int getUnconflictedPrediction() {
+		return unconflictedPrediction;
 	}
 
 	public final boolean isAcceptState() {

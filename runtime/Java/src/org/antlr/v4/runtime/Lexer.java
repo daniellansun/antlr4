@@ -34,6 +34,49 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 	public static final int MIN_CHAR_VALUE = 0x0000;
 	public static final int MAX_CHAR_VALUE = 0x10FFFF;
 
+	/**
+	 * Cached per-{@link Lexer} subclass check of whether {@link #skip()} is
+	 * inherited unmodified from {@link Lexer}. When {@code true},
+	 * {@link CodePointLexerRunner} can fuse built-in single-action
+	 * {@code -> skip} rules entirely in registers without heap flushes or
+	 * post-skip re-validation.
+	 */
+	private static final ClassValue<Boolean> DEFAULT_SKIP_ELIGIBLE = new ClassValue<Boolean>() {
+		@Override
+		protected Boolean computeValue(Class<?> type) {
+			try {
+				return type.getMethod("skip").getDeclaringClass() == Lexer.class;
+			}
+			catch (NoSuchMethodException | SecurityException | LinkageError ex) {
+				return Boolean.FALSE;
+			}
+		}
+	};
+
+	/**
+	 * Single-entry lock-free cache of the most recently verified concrete
+	 * {@link Lexer} subclass whose {@link #skip()} is inherited unmodified from
+	 * {@link Lexer}. Avoids per-instance {@link ClassValue#get} lookups when
+	 * callers construct a fresh lexer per file (both serial and parallel).
+	 */
+	private static volatile Class<?> lastDefaultSkipClass;
+
+	final boolean isDefaultSkipEligible() {
+		Class<?> cls = getClass();
+		if (cls == lastDefaultSkipClass) {
+			return true;
+		}
+		return isDefaultSkipEligibleSlow(cls);
+	}
+
+	private static boolean isDefaultSkipEligibleSlow(Class<?> cls) {
+		if (DEFAULT_SKIP_ELIGIBLE.get(cls)) {
+			lastDefaultSkipClass = cls;
+			return true;
+		}
+		return false;
+	}
+
 	public CharStream _input;
 	protected Tuple2<? extends TokenSource, CharStream> _tokenFactorySourcePair;
 
@@ -114,11 +157,15 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 	@Override
 	public Token nextToken() {
 		final CharStream input = _input;
-		if (input == null) {
-			throw new IllegalStateException("nextToken requires a non-null input stream.");
-		}
 		if (input instanceof CodePointCharStream) {
 			return nextTokenCodePoint((CodePointCharStream) input);
+		}
+		return nextTokenSlow(input);
+	}
+
+	private Token nextTokenSlow(CharStream input) {
+		if (input == null) {
+			throw new IllegalStateException("nextToken requires a non-null input stream.");
 		}
 		return nextTokenGeneric(input);
 	}
@@ -149,7 +196,7 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 				_type = Token.INVALID_TYPE;
 				int ttype;
 				try {
-					ttype = interp.match(input, _mode);
+					ttype = CodePointLexerRunner.match(this, input, interp, _mode);
 				}
 				catch (LexerNoViableAltException e) {
 					ttype = handleNoViableAlt(e);
@@ -376,23 +423,25 @@ public abstract class Lexer extends Recognizer<Integer, LexerATNSimulator>
 	 *  custom Token objects or provide a new factory.
 	 */
 	public Token emit() {
-		Token t;
-		if (_factory == CommonTokenFactory.DEFAULT) {
-			// PERF: Bypass invokeinterface TokenFactory.create -> covariant bridge ->
-			// CommonTokenFactory.create (2 stack frames off the MaxInlineLevel cliff),
-			// while still honoring getCharIndex() overrides via HotSpot CHA inlining.
-			CommonToken ct = new CommonToken(_tokenFactorySourcePair, _type, _channel,
-				_tokenStartCharIndex, getCharIndex() - 1,
-				_tokenStartLine, _tokenStartCharPositionInLine);
-			if (_text != null) {
-				ct.text = _text;
-			}
-			t = ct;
+		if (_factory != CommonTokenFactory.DEFAULT) {
+			return emitWithFactory();
 		}
-		else {
-			t = _factory.create(_tokenFactorySourcePair, _type, _text, _channel, _tokenStartCharIndex, getCharIndex() - 1,
-				_tokenStartLine, _tokenStartCharPositionInLine);
+		// PERF: Bypass invokeinterface TokenFactory.create -> covariant bridge ->
+		// CommonTokenFactory.create (2 stack frames off the MaxInlineLevel cliff),
+		// while still honoring getCharIndex() overrides via HotSpot CHA inlining.
+		CommonToken ct = new CommonToken(_tokenFactorySourcePair, _type, _channel,
+			_tokenStartCharIndex, getCharIndex() - 1,
+			_tokenStartLine, _tokenStartCharPositionInLine);
+		if (_text != null) {
+			ct.text = _text;
 		}
+		emit(ct);
+		return ct;
+	}
+
+	private Token emitWithFactory() {
+		Token t = _factory.create(_tokenFactorySourcePair, _type, _text, _channel, _tokenStartCharIndex, getCharIndex() - 1,
+			_tokenStartLine, _tokenStartCharPositionInLine);
 		emit(t);
 		return t;
 	}

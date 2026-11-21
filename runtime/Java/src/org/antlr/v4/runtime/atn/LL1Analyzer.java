@@ -13,6 +13,7 @@ import org.antlr.v4.runtime.misc.Nullable;
 
 import java.util.BitSet;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 
 public class LL1Analyzer {
@@ -20,6 +21,47 @@ public class LL1Analyzer {
 	 *  a predicate during analysis if {@code seeThruPreds==false}.
 	 */
 	public static final int HIT_PRED = Token.INVALID_TYPE;
+
+	/**
+	 * Controls how {@link LL1Analyzer} treats semantic and precedence predicate
+	 * transitions during ATN lookahead walks.
+	 *
+	 * @since 4.13.2.20
+	 */
+	public enum PredicatePolicy {
+		/** Treat every predicate transition as opaque and record {@link #HIT_PRED}. */
+		OPAQUE {
+			@Override
+			boolean shouldSeeThrough(@NotNull AbstractPredicateTransition t, boolean inDroppedDepth) {
+				return false;
+			}
+		},
+		/** See through all predicate transitions as implicitly {@code true}. */
+		SEE_THROUGH_ALL {
+			@Override
+			boolean shouldSeeThrough(@NotNull AbstractPredicateTransition t, boolean inDroppedDepth) {
+				return true;
+			}
+		},
+		/**
+		 * Mirrors ALL(*) {@link EpsilonClosure} predicate dropping: outside the
+		 * entry rule context ({@code callDepth != 0}), see through
+		 * {@link PrecedencePredicateTransition} and context-dependent
+		 * {@link PredicateTransition} (which ALL(*) drops at non-zero depth),
+		 * while keeping depth-0 predicates and all context-independent
+		 * predicates opaque.
+		 */
+		SEE_THROUGH_DROPPED_CALLEE_PREDS {
+			@Override
+			boolean shouldSeeThrough(@NotNull AbstractPredicateTransition t, boolean inDroppedDepth) {
+				return inDroppedDepth
+					&& ((t instanceof PrecedencePredicateTransition)
+						|| (t instanceof PredicateTransition && ((PredicateTransition) t).isCtxDependent));
+			}
+		};
+
+		abstract boolean shouldSeeThrough(@NotNull AbstractPredicateTransition t, boolean inDroppedDepth);
+	}
 
 	@NotNull
 	public final ATN atn;
@@ -109,6 +151,49 @@ public class LL1Analyzer {
 
 	/**
 	 * Compute set of tokens that can follow {@code s} in the ATN in the
+	 * specified {@code ctx} under {@code predicatePolicy}, adding
+	 * {@link Token#EOF} when the outermost rule completes.
+	 *
+	 * @since 4.13.2.20
+	 */
+	@NotNull
+	public IntervalSet LOOK(@NotNull ATNState s,
+							@Nullable ATNState stopState,
+							@NotNull PredictionContext ctx,
+							@NotNull PredicatePolicy predicatePolicy)
+	{
+		return LOOK(s, stopState, ctx, predicatePolicy, true);
+	}
+
+	/**
+	 * Compute set of tokens that can follow {@code s} in the ATN in the
+	 * specified {@code ctx} under {@code predicatePolicy}.
+	 *
+	 * @since 4.13.2.20
+	 */
+	@NotNull
+	public IntervalSet LOOK(@NotNull ATNState s,
+							@Nullable ATNState stopState,
+							@NotNull PredictionContext ctx,
+							@NotNull PredicatePolicy predicatePolicy,
+							boolean addEOF)
+	{
+		Objects.requireNonNull(predicatePolicy, "predicatePolicy");
+		IntervalSet r = new IntervalSet();
+		if (predicatePolicy != PredicatePolicy.SEE_THROUGH_DROPPED_CALLEE_PREDS) {
+			// Dispatch root call through legacy 8-arg _LOOK so overriding subclasses
+			// observe both root and recursive frames.
+			_LOOK(s, stopState, ctx, r, new HashSet<>(), new BitSet(),
+				predicatePolicy == PredicatePolicy.SEE_THROUGH_ALL, addEOF);
+		}
+		else {
+			_LOOK(s, stopState, ctx, r, new HashSet<>(), new BitSet(), predicatePolicy, addEOF);
+		}
+		return r;
+	}
+
+	/**
+	 * Compute set of tokens that can follow {@code s} in the ATN in the
 	 * specified {@code ctx}.
 	 * <p/>
 	 * If {@code ctx} is {@link PredictionContext#EMPTY_LOCAL} and
@@ -130,7 +215,7 @@ public class LL1Analyzer {
 	 * @param calledRuleStack A set used for preventing left recursion in the
 	 * ATN from causing a stack overflow. Outside code should pass
 	 * {@code new BitSet()} for this argument.
-	 * @param seeThruPreds {@code true} to true semantic predicates as
+	 * @param seeThruPreds {@code true} to treat semantic predicates as
 	 * implicitly {@code true} and "see through them", otherwise {@code false}
 	 * to treat semantic predicates as opaque and add {@link #HIT_PRED} to the
 	 * result if one is encountered.
@@ -146,8 +231,54 @@ public class LL1Analyzer {
 						 @NotNull BitSet calledRuleStack,
 						 boolean seeThruPreds, boolean addEOF)
 	{
-//		System.out.println("_LOOK("+s.stateNumber+", ctx="+ctx);
-        ATNConfig c = ATNConfig.create(s, 0, ctx);
+		_LOOKInternal(s, stopState, ctx, look, lookBusy, calledRuleStack,
+			seeThruPreds ? PredicatePolicy.SEE_THROUGH_ALL : PredicatePolicy.OPAQUE, addEOF, 0);
+	}
+
+	/**
+	 * Policy-driven ATN lookahead walk unifying {@link #_LOOK(ATNState, ATNState, PredictionContext, IntervalSet, Set, BitSet, boolean, boolean)}
+	 * and ALL(*)-exact callee-predicate see-through analysis.
+	 *
+	 * @since 4.13.2.20
+	 */
+	protected void _LOOK(@NotNull ATNState s,
+						 @Nullable ATNState stopState,
+						 @NotNull PredictionContext ctx,
+						 @NotNull IntervalSet look,
+						 @NotNull Set<ATNConfig> lookBusy,
+						 @NotNull BitSet calledRuleStack,
+						 @NotNull PredicatePolicy predicatePolicy,
+						 boolean addEOF)
+	{
+		Objects.requireNonNull(predicatePolicy, "predicatePolicy");
+		if (getClass() != LL1Analyzer.class && predicatePolicy != PredicatePolicy.SEE_THROUGH_DROPPED_CALLEE_PREDS) {
+			_LOOK(s, stopState, ctx, look, lookBusy, calledRuleStack,
+				predicatePolicy == PredicatePolicy.SEE_THROUGH_ALL, addEOF);
+			return;
+		}
+		_LOOKInternal(s, stopState, ctx, look, lookBusy, calledRuleStack, predicatePolicy, addEOF, 0);
+	}
+
+	private void _LOOKInternal(@NotNull ATNState s,
+							   @Nullable ATNState stopState,
+							   @NotNull PredictionContext ctx,
+							   @NotNull IntervalSet look,
+							   @NotNull Set<ATNConfig> lookBusy,
+							   @NotNull BitSet calledRuleStack,
+							   @NotNull PredicatePolicy predicatePolicy,
+							   boolean addEOF,
+							   int callDepth)
+	{
+		final boolean dropMode = predicatePolicy == PredicatePolicy.SEE_THROUGH_DROPPED_CALLEE_PREDS;
+		final boolean inDroppedDepth = callDepth != 0;
+		// When dropMode is active, separate all three depth regimes in lookBusy
+		// via the alt slot (0: depth == 0, 1: depth > 0, 2: latched depth < 0).
+		// While depth >= 0, every rule push wraps ctx and every pop unwraps it so
+		// (s, ctx) uniquely determines positive callDepth; separating depth > 0
+		// from depth < 0 ensures a latched depth == -1 walk can never poison a
+		// later depth > 0 walk that will pop back to depth == 0 (opaque preds).
+		final int busyAlt = !dropMode ? 0 : (callDepth == 0 ? 0 : (callDepth > 0 ? 1 : 2));
+        ATNConfig c = ATNConfig.create(s, busyAlt, ctx);
         if ( !lookBusy.add(c) ) return;
 
 		if (s == stopState) {
@@ -163,7 +294,8 @@ public class LL1Analyzer {
 			}
 		}
 
-        if ( s instanceof RuleStopState ) {
+		final boolean isRuleStop = s instanceof RuleStopState;
+        if ( isRuleStop ) {
             if (ctx.isEmpty() && !PredictionContext.isEmptyLocal(ctx)) {
 				if (addEOF) {
 					look.add(Token.EOF);
@@ -172,6 +304,7 @@ public class LL1Analyzer {
 				return;
 			}
 
+			int poppedDepth = callDepth > 0 ? callDepth - 1 : -1;
 			boolean removed = calledRuleStack.get(s.ruleIndex);
 			try {
 				calledRuleStack.clear(s.ruleIndex);
@@ -181,8 +314,7 @@ public class LL1Analyzer {
 					}
 
 					ATNState returnState = atn.states.get(ctx.getReturnState(i));
-//					System.out.println("popping back to "+retState);
-					_LOOK(returnState, stopState, ctx.getParent(i), look, lookBusy, calledRuleStack, seeThruPreds, addEOF);
+					recurseLook(returnState, stopState, ctx.getParent(i), look, lookBusy, calledRuleStack, predicatePolicy, addEOF, poppedDepth);
 				}
 			}
 			finally {
@@ -195,6 +327,9 @@ public class LL1Analyzer {
 			}
         }
 
+		// When s is a RuleStopState falling through with EMPTY_LOCAL to outgoing
+		// FOLLOW edges, mirror EpsilonClosure depth latching (depth > 0 ? depth - 1 : -1).
+		final int edgeDepth = isRuleStop ? (callDepth > 0 ? callDepth - 1 : -1) : callDepth;
         int n = s.getNumberOfTransitions();
         for (int i=0; i<n; i++) {
 			Transition t = s.transition(i);
@@ -205,31 +340,31 @@ public class LL1Analyzer {
 				}
 
 				PredictionContext newContext = ctx.getChild(ruleTransition.followState.stateNumber);
+				int pushedDepth = edgeDepth >= 0 ? edgeDepth + 1 : edgeDepth;
 
 				try {
 					calledRuleStack.set(ruleTransition.ruleIndex);
-					_LOOK(t.target, stopState, newContext, look, lookBusy, calledRuleStack, seeThruPreds, addEOF);
+					recurseLook(t.target, stopState, newContext, look, lookBusy, calledRuleStack, predicatePolicy, addEOF, pushedDepth);
 				}
 				finally {
 					calledRuleStack.clear(ruleTransition.ruleIndex);
 				}
 			}
 			else if ( t instanceof AbstractPredicateTransition ) {
-				if ( seeThruPreds ) {
-					_LOOK(t.target, stopState, ctx, look, lookBusy, calledRuleStack, seeThruPreds, addEOF);
+				if ( predicatePolicy.shouldSeeThrough((AbstractPredicateTransition) t, inDroppedDepth) ) {
+					recurseLook(t.target, stopState, ctx, look, lookBusy, calledRuleStack, predicatePolicy, addEOF, edgeDepth);
 				}
 				else {
 					look.add(HIT_PRED);
 				}
 			}
 			else if ( t.isEpsilon() ) {
-				_LOOK(t.target, stopState, ctx, look, lookBusy, calledRuleStack, seeThruPreds, addEOF);
+				recurseLook(t.target, stopState, ctx, look, lookBusy, calledRuleStack, predicatePolicy, addEOF, edgeDepth);
 			}
 			else if ( t.getClass() == WildcardTransition.class ) {
 				look.addAll( IntervalSet.of(Token.MIN_USER_TOKEN_TYPE, atn.maxTokenType) );
 			}
 			else {
-//				System.out.println("adding "+ t);
 				IntervalSet set = t.label();
 				if (set != null) {
 					if (t instanceof NotSetTransition) {
@@ -238,6 +373,25 @@ public class LL1Analyzer {
 					look.addAll(set);
 				}
 			}
+		}
+	}
+
+	private void recurseLook(@NotNull ATNState target,
+							 @Nullable ATNState stopState,
+							 @NotNull PredictionContext ctx,
+							 @NotNull IntervalSet look,
+							 @NotNull Set<ATNConfig> lookBusy,
+							 @NotNull BitSet calledRuleStack,
+							 @NotNull PredicatePolicy predicatePolicy,
+							 boolean addEOF,
+							 int nextDepth)
+	{
+		if (getClass() != LL1Analyzer.class && predicatePolicy != PredicatePolicy.SEE_THROUGH_DROPPED_CALLEE_PREDS) {
+			_LOOK(target, stopState, ctx, look, lookBusy, calledRuleStack,
+				predicatePolicy == PredicatePolicy.SEE_THROUGH_ALL, addEOF);
+		}
+		else {
+			_LOOKInternal(target, stopState, ctx, look, lookBusy, calledRuleStack, predicatePolicy, addEOF, nextDepth);
 		}
 	}
 }

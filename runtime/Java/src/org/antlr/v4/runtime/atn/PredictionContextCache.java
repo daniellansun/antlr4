@@ -126,8 +126,20 @@ public class PredictionContextCache {
 			return PredictionContext.join(x, y, this);
 		}
 
-		// Fast path: joining a context with itself is a no-op.
+		// Fast paths before probing JoinContextMap: identity, EMPTY_LOCAL
+		// absorption, and EMPTY_FULL when the other operand already hasEmpty().
+		// (Do not bypass JoinContextMap for EMPTY_FULL with !other.hasEmpty(),
+		// because addEmptyContext allocates a new ArrayPredictionContext.)
 		if (x == y) {
+			return getAsCached(x);
+		}
+		if (x == PredictionContext.EMPTY_LOCAL || y == PredictionContext.EMPTY_LOCAL) {
+			return PredictionContext.EMPTY_LOCAL;
+		}
+		if (x == PredictionContext.EMPTY_FULL && y != null && y.hasEmpty()) {
+			return getAsCached(y);
+		}
+		if (y == PredictionContext.EMPTY_FULL && x != null && x.hasEmpty()) {
 			return getAsCached(x);
 		}
 
@@ -143,7 +155,8 @@ public class PredictionContextCache {
 	}
 
 	// -------------------------------------------------------------------------
-	// Monomorphic zero-key-allocation open-addressed tables with sparse clear.
+	// Monomorphic zero-key-allocation open-addressed tables with shared
+	// sparse-clear / shrink bookkeeping.
 	// -------------------------------------------------------------------------
 
 	private static int mix(int h) {
@@ -152,15 +165,62 @@ public class PredictionContextCache {
 	}
 
 	/**
+	 * Shared capacity, sparse-clear tracking, and shrink-on-clear bookkeeping
+	 * for the three open-addressed tables. All helper methods are {@code final}
+	 * so HotSpot C2 inlines them with zero virtual dispatch.
+	 */
+	private abstract static class OpenTableBase {
+		int size;
+		int resizeAt = INITIAL_CAPACITY >>> 1;
+		int[] usedSlots = new int[INITIAL_SPARSE_TRACK];
+		int usedCount;
+
+		final void recordUsedSlot(int slot) {
+			int uc = usedCount;
+			if (uc >= 0) {
+				if (uc < usedSlots.length) {
+					usedSlots[uc] = slot;
+					usedCount = uc + 1;
+				}
+				else if (uc < SPARSE_TRACK_LIMIT) {
+					usedSlots = Arrays.copyOf(usedSlots, Math.min(SPARSE_TRACK_LIMIT, usedSlots.length << 1));
+					usedSlots[uc] = slot;
+					usedCount = uc + 1;
+				}
+				else {
+					usedCount = -1;
+				}
+			}
+		}
+
+		final boolean shouldShrink(int capacity) {
+			return capacity > MAX_RETAINED_CAPACITY && size <= (capacity >>> 2);
+		}
+
+		final boolean canSparseClear(int capacity) {
+			return usedCount >= 0 && usedCount <= (capacity >>> 2);
+		}
+
+		final void finishRehash(int newCapacity) {
+			resizeAt = newCapacity >>> 1;
+			usedCount = -1;
+		}
+
+		final void resetClearState(boolean shrunk) {
+			if (shrunk) {
+				resizeAt = INITIAL_CAPACITY >>> 1;
+			}
+			size = 0;
+			usedCount = 0;
+		}
+	}
+
+	/**
 	 * Monomorphic intern set for {@link PredictionContext} (single array,
 	 * load factor 0.5, O(size) sparse clear).
 	 */
-	private static final class ContextInternSet {
+	private static final class ContextInternSet extends OpenTableBase {
 		private PredictionContext[] table = new PredictionContext[INITIAL_CAPACITY];
-		private int size;
-		private int resizeAt = INITIAL_CAPACITY >>> 1;
-		private int[] usedSlots = new int[INITIAL_SPARSE_TRACK];
-		private int usedCount;
 
 		PredictionContext getOrAdd(PredictionContext ctx) {
 			final PredictionContext[] t = table;
@@ -171,21 +231,7 @@ public class PredictionContextCache {
 				PredictionContext existing = t[slot];
 				if (existing == null) {
 					t[slot] = ctx;
-					int uc = usedCount;
-					if (uc >= 0) {
-						if (uc < usedSlots.length) {
-							usedSlots[uc] = slot;
-							usedCount = uc + 1;
-						}
-						else if (uc < SPARSE_TRACK_LIMIT) {
-							usedSlots = Arrays.copyOf(usedSlots, Math.min(SPARSE_TRACK_LIMIT, usedSlots.length << 1));
-							usedSlots[uc] = slot;
-							usedCount = uc + 1;
-						}
-						else {
-							usedCount = -1;
-						}
-					}
+					recordUsedSlot(slot);
 					if (++size >= resizeAt) {
 						rehash();
 					}
@@ -214,8 +260,7 @@ public class PredictionContextCache {
 				}
 			}
 			table = next;
-			resizeAt = newLen >>> 1;
-			usedCount = -1;
+			finishRehash(newLen);
 		}
 
 		void clear() {
@@ -223,11 +268,13 @@ public class PredictionContextCache {
 				return;
 			}
 			final PredictionContext[] t = table;
-			if (t.length > MAX_RETAINED_CAPACITY && size <= (t.length >>> 2)) {
+			final int cap = t.length;
+			boolean shrunk = false;
+			if (shouldShrink(cap)) {
 				table = new PredictionContext[INITIAL_CAPACITY];
-				resizeAt = INITIAL_CAPACITY >>> 1;
+				shrunk = true;
 			}
-			else if (usedCount >= 0 && usedCount <= (t.length >>> 2)) {
+			else if (canSparseClear(cap)) {
 				final int[] slots = usedSlots;
 				for (int i = 0, n = usedCount; i < n; i++) {
 					t[slots[i]] = null;
@@ -236,22 +283,18 @@ public class PredictionContextCache {
 			else {
 				Arrays.fill(t, null);
 			}
-			size = 0;
-			usedCount = 0;
+			resetClearState(shrunk);
 		}
 	}
 
 	/**
 	 * Monomorphic zero-wrapper map for {@code (PredictionContext, int) -> PredictionContext}.
+	 * Key context and value are stride-2 interleaved in {@link #entries} so
+	 * probing a hit touches one L1 cache line.
 	 */
-	private static final class ChildContextMap {
-		private PredictionContext[] keyCtx = new PredictionContext[INITIAL_CAPACITY];
+	private static final class ChildContextMap extends OpenTableBase {
+		private PredictionContext[] entries = new PredictionContext[INITIAL_CAPACITY << 1];
 		private int[] keyState = new int[INITIAL_CAPACITY];
-		private PredictionContext[] vals = new PredictionContext[INITIAL_CAPACITY];
-		private int size;
-		private int resizeAt = INITIAL_CAPACITY >>> 1;
-		private int[] usedSlots = new int[INITIAL_SPARSE_TRACK];
-		private int usedCount;
 
 		private static int childHash(int ctxHash, int invokingState) {
 			int h = (ctxHash * 31 + invokingState) * 0x9E3779B9;
@@ -259,35 +302,22 @@ public class PredictionContextCache {
 		}
 
 		PredictionContext getOrCompute(PredictionContext context, int invokingState, ContextInternSet internSet) {
-			final PredictionContext[] kCtx = keyCtx;
+			final PredictionContext[] kv = entries;
 			final int[] kState = keyState;
-			final int mask = kCtx.length - 1;
+			final int mask = kState.length - 1;
 			final int ctxHash = context.hashCode();
 			int slot = childHash(ctxHash, invokingState) & mask;
 			while (true) {
-				PredictionContext k = kCtx[slot];
+				int base = slot << 1;
+				PredictionContext k = kv[base];
 				if (k == null) {
 					PredictionContext result = context.getChild(invokingState);
 					result = internSet.getOrAdd(result);
 					// Neither getChild nor internSet mutates this map, so slot is still empty.
-					kCtx[slot] = context;
+					kv[base] = context;
+					kv[base + 1] = result;
 					kState[slot] = invokingState;
-					vals[slot] = result;
-					int uc = usedCount;
-					if (uc >= 0) {
-						if (uc < usedSlots.length) {
-							usedSlots[uc] = slot;
-							usedCount = uc + 1;
-						}
-						else if (uc < SPARSE_TRACK_LIMIT) {
-							usedSlots = Arrays.copyOf(usedSlots, Math.min(SPARSE_TRACK_LIMIT, usedSlots.length << 1));
-							usedSlots[uc] = slot;
-							usedCount = uc + 1;
-						}
-						else {
-							usedCount = -1;
-						}
-					}
+					recordUsedSlot(slot);
 					if (++size >= resizeAt) {
 						rehash();
 					}
@@ -295,83 +325,76 @@ public class PredictionContextCache {
 				}
 				if (kState[slot] == invokingState
 					&& (k == context || (k.hashCode() == ctxHash && k.equals(context)))) {
-					return vals[slot];
+					return kv[base + 1];
 				}
 				slot = (slot + 1) & mask;
 			}
 		}
 
 		private void rehash() {
-			final PredictionContext[] oldCtx = keyCtx;
+			final PredictionContext[] oldKv = entries;
 			final int[] oldState = keyState;
-			final PredictionContext[] oldVals = vals;
-			final int newLen = oldCtx.length << 1;
-			final int mask = newLen - 1;
-			final PredictionContext[] nextCtx = new PredictionContext[newLen];
-			final int[] nextState = new int[newLen];
-			final PredictionContext[] nextVals = new PredictionContext[newLen];
-			for (int i = 0; i < oldCtx.length; i++) {
-				PredictionContext k = oldCtx[i];
+			final int oldCap = oldState.length;
+			final int newCap = oldCap << 1;
+			final int mask = newCap - 1;
+			final PredictionContext[] nextKv = new PredictionContext[newCap << 1];
+			final int[] nextState = new int[newCap];
+			for (int i = 0; i < oldCap; i++) {
+				int oldBase = i << 1;
+				PredictionContext k = oldKv[oldBase];
 				if (k != null) {
 					int st = oldState[i];
 					int slot = childHash(k.hashCode(), st) & mask;
-					while (nextCtx[slot] != null) {
+					while (nextKv[slot << 1] != null) {
 						slot = (slot + 1) & mask;
 					}
-					nextCtx[slot] = k;
+					int nextBase = slot << 1;
+					nextKv[nextBase] = k;
+					nextKv[nextBase + 1] = oldKv[oldBase + 1];
 					nextState[slot] = st;
-					nextVals[slot] = oldVals[i];
 				}
 			}
-			keyCtx = nextCtx;
+			entries = nextKv;
 			keyState = nextState;
-			vals = nextVals;
-			resizeAt = newLen >>> 1;
-			usedCount = -1;
+			finishRehash(newCap);
 		}
 
 		void clear() {
 			if (size == 0) {
 				return;
 			}
-			final PredictionContext[] kCtx = keyCtx;
-			final PredictionContext[] v = vals;
-			if (kCtx.length > MAX_RETAINED_CAPACITY && size <= (kCtx.length >>> 2)) {
-				keyCtx = new PredictionContext[INITIAL_CAPACITY];
+			final PredictionContext[] kv = entries;
+			final int cap = keyState.length;
+			boolean shrunk = false;
+			if (shouldShrink(cap)) {
+				entries = new PredictionContext[INITIAL_CAPACITY << 1];
 				keyState = new int[INITIAL_CAPACITY];
-				vals = new PredictionContext[INITIAL_CAPACITY];
-				resizeAt = INITIAL_CAPACITY >>> 1;
+				shrunk = true;
 			}
-			else if (usedCount >= 0 && usedCount <= (kCtx.length >>> 2)) {
+			else if (canSparseClear(cap)) {
 				final int[] slots = usedSlots;
 				for (int i = 0, n = usedCount; i < n; i++) {
-					int s = slots[i];
-					kCtx[s] = null;
-					v[s] = null;
+					int base = slots[i] << 1;
+					kv[base] = null;
+					kv[base + 1] = null;
 				}
 			}
 			else {
-				Arrays.fill(kCtx, null);
-				Arrays.fill(v, null);
+				Arrays.fill(kv, null);
 			}
-			size = 0;
-			usedCount = 0;
+			resetClearState(shrunk);
 		}
 	}
 
 	/**
 	 * Monomorphic zero-wrapper commutative identity map for
 	 * {@code (PredictionContext x, PredictionContext y) -> PredictionContext}.
-	 * Uses pointer identity exclusively (zero {@code equals()} dispatch).
+	 * Uses pointer identity exclusively (zero {@code equals()} dispatch) with
+	 * stride-3 interleaved {@code (left, right, value)} entries in one array.
 	 */
-	private static final class JoinContextMap {
-		private PredictionContext[] keyLeft = new PredictionContext[INITIAL_CAPACITY];
-		private PredictionContext[] keyRight = new PredictionContext[INITIAL_CAPACITY];
-		private PredictionContext[] vals = new PredictionContext[INITIAL_CAPACITY];
-		private int size;
-		private int resizeAt = INITIAL_CAPACITY >>> 1;
-		private int[] usedSlots = new int[INITIAL_SPARSE_TRACK];
-		private int usedCount;
+	private static final class JoinContextMap extends OpenTableBase {
+		private PredictionContext[] entries = new PredictionContext[INITIAL_CAPACITY * 3];
+		private int capacity = INITIAL_CAPACITY;
 
 		private static int pairHash(PredictionContext x, PredictionContext y) {
 			int hx = x != null ? x.hashCode() : 0;
@@ -380,18 +403,17 @@ public class PredictionContextCache {
 		}
 
 		PredictionContext get(PredictionContext x, PredictionContext y) {
-			final PredictionContext[] lefts = keyLeft;
-			final PredictionContext[] rights = keyRight;
-			final PredictionContext[] v = vals;
-			final int mask = lefts.length - 1;
+			final PredictionContext[] e = entries;
+			final int mask = capacity - 1;
 			int slot = pairHash(x, y) & mask;
 			while (true) {
-				PredictionContext val = v[slot];
+				int base = (slot << 1) + slot;
+				PredictionContext val = e[base + 2];
 				if (val == null) {
 					return null;
 				}
-				PredictionContext lx = lefts[slot];
-				PredictionContext rx = rights[slot];
+				PredictionContext lx = e[base];
+				PredictionContext rx = e[base + 1];
 				if ((lx == x && rx == y) || (lx == y && rx == x)) {
 					return val;
 				}
@@ -400,41 +422,26 @@ public class PredictionContextCache {
 		}
 
 		void put(PredictionContext x, PredictionContext y, PredictionContext result) {
-			final PredictionContext[] lefts = keyLeft;
-			final PredictionContext[] rights = keyRight;
-			final PredictionContext[] v = vals;
-			final int mask = lefts.length - 1;
+			final PredictionContext[] e = entries;
+			final int mask = capacity - 1;
 			int slot = pairHash(x, y) & mask;
 			while (true) {
-				PredictionContext val = v[slot];
+				int base = (slot << 1) + slot;
+				PredictionContext val = e[base + 2];
 				if (val == null) {
-					lefts[slot] = x;
-					rights[slot] = y;
-					v[slot] = result;
-					int uc = usedCount;
-					if (uc >= 0) {
-						if (uc < usedSlots.length) {
-							usedSlots[uc] = slot;
-							usedCount = uc + 1;
-						}
-						else if (uc < SPARSE_TRACK_LIMIT) {
-							usedSlots = Arrays.copyOf(usedSlots, Math.min(SPARSE_TRACK_LIMIT, usedSlots.length << 1));
-							usedSlots[uc] = slot;
-							usedCount = uc + 1;
-						}
-						else {
-							usedCount = -1;
-						}
-					}
+					e[base] = x;
+					e[base + 1] = y;
+					e[base + 2] = result;
+					recordUsedSlot(slot);
 					if (++size >= resizeAt) {
 						rehash();
 					}
 					return;
 				}
-				PredictionContext lx = lefts[slot];
-				PredictionContext rx = rights[slot];
+				PredictionContext lx = e[base];
+				PredictionContext rx = e[base + 1];
 				if ((lx == x && rx == y) || (lx == y && rx == x)) {
-					v[slot] = result;
+					e[base + 2] = result;
 					return;
 				}
 				slot = (slot + 1) & mask;
@@ -442,64 +449,57 @@ public class PredictionContextCache {
 		}
 
 		private void rehash() {
-			final PredictionContext[] oldLeft = keyLeft;
-			final PredictionContext[] oldRight = keyRight;
-			final PredictionContext[] oldVals = vals;
-			final int newLen = oldLeft.length << 1;
-			final int mask = newLen - 1;
-			final PredictionContext[] nextLeft = new PredictionContext[newLen];
-			final PredictionContext[] nextRight = new PredictionContext[newLen];
-			final PredictionContext[] nextVals = new PredictionContext[newLen];
-			for (int i = 0; i < oldVals.length; i++) {
-				PredictionContext val = oldVals[i];
+			final PredictionContext[] old = entries;
+			final int oldCap = capacity;
+			final int newCap = oldCap << 1;
+			final int mask = newCap - 1;
+			final PredictionContext[] next = new PredictionContext[newCap * 3];
+			for (int i = 0; i < oldCap; i++) {
+				int oldBase = (i << 1) + i;
+				PredictionContext val = old[oldBase + 2];
 				if (val != null) {
-					PredictionContext lx = oldLeft[i];
-					PredictionContext rx = oldRight[i];
+					PredictionContext lx = old[oldBase];
+					PredictionContext rx = old[oldBase + 1];
 					int slot = pairHash(lx, rx) & mask;
-					while (nextVals[slot] != null) {
+					while (next[(slot << 1) + slot + 2] != null) {
 						slot = (slot + 1) & mask;
 					}
-					nextLeft[slot] = lx;
-					nextRight[slot] = rx;
-					nextVals[slot] = val;
+					int nextBase = (slot << 1) + slot;
+					next[nextBase] = lx;
+					next[nextBase + 1] = rx;
+					next[nextBase + 2] = val;
 				}
 			}
-			keyLeft = nextLeft;
-			keyRight = nextRight;
-			vals = nextVals;
-			resizeAt = newLen >>> 1;
-			usedCount = -1;
+			entries = next;
+			capacity = newCap;
+			finishRehash(newCap);
 		}
 
 		void clear() {
 			if (size == 0) {
 				return;
 			}
-			final PredictionContext[] lefts = keyLeft;
-			final PredictionContext[] rights = keyRight;
-			final PredictionContext[] v = vals;
-			if (v.length > MAX_RETAINED_CAPACITY && size <= (v.length >>> 2)) {
-				keyLeft = new PredictionContext[INITIAL_CAPACITY];
-				keyRight = new PredictionContext[INITIAL_CAPACITY];
-				vals = new PredictionContext[INITIAL_CAPACITY];
-				resizeAt = INITIAL_CAPACITY >>> 1;
+			final PredictionContext[] e = entries;
+			final int cap = capacity;
+			boolean shrunk = false;
+			if (shouldShrink(cap)) {
+				entries = new PredictionContext[INITIAL_CAPACITY * 3];
+				capacity = INITIAL_CAPACITY;
+				shrunk = true;
 			}
-			else if (usedCount >= 0 && usedCount <= (v.length >>> 2)) {
+			else if (canSparseClear(cap)) {
 				final int[] slots = usedSlots;
 				for (int i = 0, n = usedCount; i < n; i++) {
-					int s = slots[i];
-					lefts[s] = null;
-					rights[s] = null;
-					v[s] = null;
+					int base = (slots[i] << 1) + slots[i];
+					e[base] = null;
+					e[base + 1] = null;
+					e[base + 2] = null;
 				}
 			}
 			else {
-				Arrays.fill(lefts, null);
-				Arrays.fill(rights, null);
-				Arrays.fill(v, null);
+				Arrays.fill(e, null);
 			}
-			size = 0;
-			usedCount = 0;
+			resetClearState(shrunk);
 		}
 	}
 

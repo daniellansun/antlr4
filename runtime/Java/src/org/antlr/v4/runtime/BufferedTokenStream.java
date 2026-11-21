@@ -112,6 +112,34 @@ public class BufferedTokenStream implements TokenStream {
 		cachedLT1 = null;
 	}
 
+	/**
+	 * Package-private encapsulation of the chunked {@link TokenList} size check.
+	 * Written with {@code if/return} (29 bytes &lt;= HotSpot {@code MaxInlineSize}
+	 * 35B) so HotSpot C2 unconditionally inlines it at every call site.
+	 */
+	final int tokenCount() {
+		if (tokens == fastTokens) {
+			return fastTokens.size;
+		}
+		return tokens.size();
+	}
+
+	/**
+	 * Package-private encapsulation of the chunked {@link TokenList} indexed
+	 * read. Callers must ensure {@code 0 <= index < tokenCount()} (no extra
+	 * bounds check here so bytecode stays at 32 bytes &lt;= HotSpot
+	 * {@code MaxInlineSize} 35B; written with {@code if/return} and cached
+	 * locals rather than a ternary, which compiles to 36B due to checkcast).
+	 */
+	final Token tokenAt(int index) {
+		TokenList f = fastTokens;
+		List<Token> t = tokens;
+		if (t == f) {
+			return f.getFast(index);
+		}
+		return t.get(index);
+	}
+
     public BufferedTokenStream(@NotNull TokenSource tokenSource) {
 		if (tokenSource == null) {
 			throw new NullPointerException("tokenSource cannot be null");
@@ -157,10 +185,10 @@ public class BufferedTokenStream implements TokenStream {
 		// adaptivePredict rewinds stay on that path. Past the buffer, sync
 		// until EOF and clamp so index() lands on EOF and LA(1) is EOF.
 		int target = index;
-		final int sz = tokens == fastTokens ? fastTokens.size : tokens.size();
+		final int sz = tokenCount();
 		if (target >= sz) {
 			sync(target);
-			int newSz = tokens == fastTokens ? fastTokens.size : tokens.size();
+			int newSz = tokenCount();
 			if (newSz == 0) {
 				throw new IllegalStateException("seek on an empty token stream");
 			}
@@ -173,29 +201,18 @@ public class BufferedTokenStream implements TokenStream {
 			// Already at the target. Keep cachedLT1 (and cachedLTMinus1) intact
 			// so adaptivePredict's rewind after a no-consume decision does not
 			// evict the lookahead caches.
-			if (cachedLT1 == null && p >= 0) {
-				int curSz = tokens == fastTokens ? fastTokens.size : tokens.size();
-				if (p < curSz) {
-					cachedLT1 = tokens == fastTokens ? fastTokens.getFast(p) : tokens.get(p);
-				}
+			if (cachedLT1 == null && p >= 0 && p < tokenCount()) {
+				cachedLT1 = tokenAt(p);
 			}
 			return;
 		}
         p = adjusted;
 		cachedLTMinus1 = null;
-		if (adjusted >= 0) {
-			int curSz = tokens == fastTokens ? fastTokens.size : tokens.size();
-			cachedLT1 = adjusted < curSz
-				? (tokens == fastTokens ? fastTokens.getFast(adjusted) : tokens.get(adjusted))
-				: null;
-		}
-		else {
-			cachedLT1 = null;
-		}
+		cachedLT1 = (adjusted >= 0 && adjusted < tokenCount()) ? tokenAt(adjusted) : null;
     }
 
     @Override
-    public int size() { return tokens == fastTokens ? fastTokens.size : tokens.size(); }
+    public int size() { return tokenCount(); }
 
     @Override
     public void consume() {
@@ -208,7 +225,7 @@ public class BufferedTokenStream implements TokenStream {
 		else {
 			boolean skipEofCheck;
 			if (p >= 0) {
-				int sz = tokens == fastTokens ? fastTokens.size : tokens.size();
+				int sz = tokenCount();
 				if (fetchedEOF) {
 					// the last token in tokens is EOF. skip check if p indexes any
 					// fetched token except the last.
@@ -227,18 +244,17 @@ public class BufferedTokenStream implements TokenStream {
 			if (!skipEofCheck && LA(1) == EOF) {
 				throw new IllegalStateException("cannot consume EOF");
 			}
-			if (p >= 0 && p < (tokens == fastTokens ? fastTokens.size : tokens.size())) {
-				current = tokens == fastTokens ? fastTokens.getFast(p) : tokens.get(p);
+			if (p >= 0 && p < tokenCount()) {
+				current = tokenAt(p);
 			}
 		}
 
 		if (sync(p + 1)) {
 			p = adjustSeekIndex(p + 1);
 			// Refresh LT(1) and LT(-1) caches for the new cursor.
-			int sz = tokens == fastTokens ? fastTokens.size : tokens.size();
-			if (p >= 0 && p < sz) {
+			if (p >= 0 && p < tokenCount()) {
 				cachedLTMinus1 = current;
-				cachedLT1 = tokens == fastTokens ? fastTokens.getFast(p) : tokens.get(p);
+				cachedLT1 = tokenAt(p);
 			}
 			else {
 				cachedLTMinus1 = null;
@@ -259,11 +275,12 @@ public class BufferedTokenStream implements TokenStream {
 	 */
     protected boolean sync(int i) {
 		assert i >= 0;
-        int n = i - (tokens == fastTokens ? fastTokens.size : tokens.size()) + 1; // how many more elements we need?
-        //System.out.println("sync("+i+") needs "+n);
-        if ( n > 0 ) {
-			int fetched = fetch(n);
-			return fetched >= n;
+        long needed = (long) i - (long) tokenCount() + 1L; // how many more elements we need?
+        //System.out.println("sync("+i+") needs "+needed);
+        if ( needed > 0L ) {
+			int want = needed > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) needed;
+			int fetched = fetch(want);
+			return (long) fetched >= needed;
 		}
 
 		return true;
@@ -325,16 +342,11 @@ public class BufferedTokenStream implements TokenStream {
 
     @Override
     public Token get(int i) {
-		if (tokens == fastTokens) {
-			if (i < 0 || i >= fastTokens.size) {
-				throw new IndexOutOfBoundsException("token index " + i + " out of range 0.." + (fastTokens.size - 1));
-			}
-			return fastTokens.getFast(i);
+		int sz = tokenCount();
+		if (i < 0 || i >= sz) {
+			throw new IndexOutOfBoundsException("token index " + i + " out of range 0.." + (sz - 1));
 		}
-        if ( i < 0 || i >= tokens.size() ) {
-            throw new IndexOutOfBoundsException("token index "+i+" out of range 0.."+(tokens.size()-1));
-        }
-        return tokens.get(i);
+		return tokenAt(i);
     }
 
 	/** Get all tokens from start..stop inclusively. */
@@ -368,13 +380,10 @@ public class BufferedTokenStream implements TokenStream {
 	}
 
 	private int laOneSlow() {
-		if (p >= 0) {
-			int sz = tokens == fastTokens ? fastTokens.size : tokens.size();
-			if (p < sz) {
-				Token t = tokens == fastTokens ? fastTokens.getFast(p) : tokens.get(p);
-				cachedLT1 = t;
-				return t.getType();
-			}
+		if (p >= 0 && p < tokenCount()) {
+			Token t = tokenAt(p);
+			cachedLT1 = t;
+			return t.getType();
 		}
 		return LT(1).getType();
 	}
@@ -386,7 +395,7 @@ public class BufferedTokenStream implements TokenStream {
     protected Token LB(int k) {
         int idx = p - k;
         if ( idx < 0 ) return null;
-        return (tokens == fastTokens && idx < fastTokens.size) ? fastTokens.getFast(idx) : tokens.get(idx);
+        return idx < tokenCount() ? tokenAt(idx) : tokens.get(idx);
     }
 
 	@NotNull
@@ -413,34 +422,31 @@ public class BufferedTokenStream implements TokenStream {
 	 * {@code LA(1)} call sites.
 	 */
 	final Token ltOneSlow() {
-		if (p >= 0) {
-			int sz = tokens == fastTokens ? fastTokens.size : tokens.size();
-			if (p < sz) {
-				Token t = tokens == fastTokens ? fastTokens.getFast(p) : tokens.get(p);
-				cachedLT1 = t;
-				return t;
-			}
+		if (p >= 0 && p < tokenCount()) {
+			Token t = tokenAt(p);
+			cachedLT1 = t;
+			return t;
 		}
 		lazyInit();
 		// Miss path: p was outside the fetched buffer. sync/clamp instead
 		// of indexing blindly (seek past the buffer used to throw
 		// IndexOutOfBoundsException here while LT(k>1) returned EOF).
-		int sz = tokens == fastTokens ? fastTokens.size : tokens.size();
+		int sz = tokenCount();
 		if (p < 0 || p >= sz) {
 			sync(p < 0 ? 0 : p);
-			sz = tokens == fastTokens ? fastTokens.size : tokens.size();
+			sz = tokenCount();
 			if (p >= sz && sz > 0) {
 				p = sz - 1;
 			}
 		}
 		if (p >= 0 && p < sz) {
-			Token t = tokens == fastTokens ? fastTokens.getFast(p) : tokens.get(p);
+			Token t = tokenAt(p);
 			cachedLT1 = t;
 			return t;
 		}
 		int i = p;
 		sync(i);
-		sz = tokens == fastTokens ? fastTokens.size : tokens.size();
+		sz = tokenCount();
 		if ( i >= sz ) {
 			return tokens.get(sz - 1);
 		}
@@ -458,22 +464,20 @@ public class BufferedTokenStream implements TokenStream {
 		}
 
 		long target = (long) p + (long) k - 1L;
-		int sz = tokens == fastTokens ? fastTokens.size : tokens.size();
 		if (target >= Integer.MAX_VALUE) {
 			// Overflow guard: advance to EOF without passing a negative index to sync/getFast.
 			fill();
-			sz = tokens == fastTokens ? fastTokens.size : tokens.size();
-			return tokens.get(sz - 1);
+			return tokens.get(tokenCount() - 1);
 		}
 		int i = (int) target;
 		sync(i);
-		sz = tokens == fastTokens ? fastTokens.size : tokens.size();
+		int sz = tokenCount();
         if ( i >= sz ) { // return EOF token
             // EOF must be last token
-            return (tokens == fastTokens && sz > 0) ? fastTokens.getFast(sz - 1) : tokens.get(sz - 1);
+            return sz > 0 ? tokenAt(sz - 1) : tokens.get(sz - 1);
         }
 //		if ( i>range ) range = i;
-        return (tokens == fastTokens && i >= 0) ? fastTokens.getFast(i) : tokens.get(i);
+        return i >= 0 ? tokenAt(i) : tokens.get(i);
     }
 
 	/**
@@ -520,10 +524,7 @@ public class BufferedTokenStream implements TokenStream {
 		sync(0);
 		p = adjustSeekIndex(0);
 		cachedLTMinus1 = null;
-		int sz = tokens == fastTokens ? fastTokens.size : tokens.size();
-		cachedLT1 = (p >= 0 && p < sz)
-			? (tokens == fastTokens ? fastTokens.getFast(p) : tokens.get(p))
-			: null;
+		cachedLT1 = (p >= 0 && p < tokenCount()) ? tokenAt(p) : null;
 	}
 
 	/**
@@ -533,7 +534,7 @@ public class BufferedTokenStream implements TokenStream {
 	 * {@link UnsupportedOperationException}.
 	 */
 	private void ensureTokenCapacityFromCharStream() {
-		if (tokens == fastTokens || !(tokens instanceof ArrayList)) {
+		if (!(tokens instanceof ArrayList)) {
 			return;
 		}
 		CharStream chars = tokenSource.getInputStream();
@@ -634,49 +635,30 @@ public class BufferedTokenStream implements TokenStream {
 	protected int nextTokenOnChannel(int i, int channel) {
 		// PERF: When the cursor is already inside the filled buffer (common on
 		// warm LT(k>1) and adjustSeekIndex), avoid a sync call per step.
-		if (tokens == fastTokens) {
-			final TokenList list = fastTokens;
-			if (i >= 0 && i < list.size) {
-				Token token = list.getFast(i);
-				while (token.getChannel() != channel) {
-					if (token.getType() == Token.EOF) {
-						return i;
-					}
-					i++;
-					if (i >= list.size) {
-						if (!sync(i)) {
-							return list.size - 1;
-						}
-					}
-					token = list.getFast(i);
-				}
-				return i;
-			}
-		}
-		else if (i >= 0 && i < tokens.size()) {
-			Token token = tokens.get(i);
+		if (i >= 0 && i < tokenCount()) {
+			Token token = tokenAt(i);
 			while (token.getChannel() != channel) {
 				if (token.getType() == Token.EOF) {
 					return i;
 				}
 				i++;
-				if (i >= tokens.size()) {
+				if (i >= tokenCount()) {
 					if (!sync(i)) {
-						return tokens.size() - 1;
+						return tokenCount() - 1;
 					}
 				}
-				token = tokens.get(i);
+				token = tokenAt(i);
 			}
 			return i;
 		}
 
 		sync(i);
-		int sz = size();
+		int sz = tokenCount();
 		if (i >= sz) {
 			return sz - 1;
 		}
 
-		Token token = (tokens == fastTokens && i >= 0) ? fastTokens.getFast(i) : tokens.get(i);
+		Token token = i >= 0 ? tokenAt(i) : tokens.get(i);
 		while ( token.getChannel()!=channel ) {
 			if ( token.getType()==Token.EOF ) {
 				return i;
@@ -684,7 +666,7 @@ public class BufferedTokenStream implements TokenStream {
 
 			i++;
 			sync(i);
-			token = (tokens == fastTokens && i >= 0 && i < fastTokens.size) ? fastTokens.getFast(i) : tokens.get(i);
+			token = (i >= 0 && i < tokenCount()) ? tokenAt(i) : tokens.get(i);
 		}
 
 		return i;

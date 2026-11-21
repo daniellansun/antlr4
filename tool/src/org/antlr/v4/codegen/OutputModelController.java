@@ -35,9 +35,20 @@ import org.antlr.v4.codegen.model.SrcOp;
 import org.antlr.v4.codegen.model.StarBlock;
 import org.antlr.v4.codegen.model.VisitorFile;
 import org.antlr.v4.codegen.model.chunk.ActionChunk;
+import org.antlr.v4.codegen.model.chunk.ActionTemplate;
 import org.antlr.v4.codegen.model.chunk.ActionText;
+import org.antlr.v4.codegen.model.chunk.ArgRef;
+import org.antlr.v4.codegen.model.chunk.LabelRef;
+import org.antlr.v4.codegen.model.chunk.LocalRef;
+import org.antlr.v4.codegen.model.chunk.NonLocalAttrRef;
+import org.antlr.v4.codegen.model.chunk.RetValueRef;
+import org.antlr.v4.codegen.model.chunk.RulePropertyRef;
 import org.antlr.v4.codegen.model.chunk.RulePropertyRef_parser;
+import org.antlr.v4.codegen.model.chunk.SetAttr;
+import org.antlr.v4.codegen.model.chunk.SetNonLocalAttr;
 import org.antlr.v4.codegen.model.chunk.ThisRulePropertyRef_parser;
+import org.antlr.v4.codegen.model.chunk.TokenPropertyRef;
+import org.antlr.v4.codegen.model.chunk.TokenRef;
 import org.antlr.v4.codegen.model.decl.AltLabelStructDecl;
 import org.antlr.v4.codegen.model.decl.CodeBlock;
 import org.antlr.v4.codegen.model.decl.StructDecl;
@@ -351,15 +362,25 @@ public class OutputModelController {
 				|| function.getClass() != RuleFunction.class
 				|| r.args != null || r.locals != null || r.retvals != null
 				|| r.namedActions.get("init") != null
-				|| !r.name.equals(r.getBaseContext())
 				|| function.code == null || function.code.size() != 1) {
+			return;
+		}
+		String baseName = r.getBaseContext();
+		Rule baseRule = r.name.equals(baseName) ? r : g.getRule(baseName);
+		if (baseRule == null
+				|| !baseRule.name.equals(baseRule.getBaseContext())
+				|| baseRule.args != null || baseRule.locals != null || baseRule.retvals != null) {
+			return;
+		}
+		Map<String, AltLabelStructDecl> altLabelCtxs = function.getEffectiveAltLabelContexts(this);
+		if (altLabelCtxs == null || altLabelCtxs.isEmpty()) {
 			return;
 		}
 		boolean hasListener = g.tool.gen_listener;
 		SrcOp rootOp = function.code.get(0);
 		if (rootOp instanceof CodeBlockForOuterMostAlt) {
 			CodeBlockForOuterMostAlt alt = (CodeBlockForOuterMostAlt) rootOp;
-			if (alt.altLabel != null) {
+			if (alt.altLabel != null && altLabelCtxs.containsKey(alt.altLabel)) {
 				function.directAltLabel = alt.altLabel;
 				function.directAltHasListener = hasListener;
 				alt.directInit = true;
@@ -377,7 +398,11 @@ public class OutputModelController {
 					if (!(a instanceof CodeBlockForOuterMostAlt)) {
 						return;
 					}
-					if (((CodeBlockForOuterMostAlt) a).altLabel != null) {
+					String lbl = ((CodeBlockForOuterMostAlt) a).altLabel;
+					if (lbl != null) {
+						if (!altLabelCtxs.containsKey(lbl)) {
+							return;
+						}
 						anyLabeled = true;
 					}
 				}
@@ -396,7 +421,8 @@ public class OutputModelController {
 	}
 
 	private void populateFlatActions(Lexer lexer) {
-		if (lexer.actionFuncs == null || lexer.actionFuncs.isEmpty()) {
+		if (!delegate.getTarget().supportsFlatActionAndSempredDispatch()
+				|| lexer.actionFuncs == null || lexer.actionFuncs.isEmpty()) {
 			return;
 		}
 		TreeMap<Integer, FlatActionCase> byIndex = new TreeMap<Integer, FlatActionCase>();
@@ -415,11 +441,13 @@ public class OutputModelController {
 	}
 
 	private void populateFlatSempreds(Recognizer recog, boolean isLexer) {
-		if (recog.sempredFuncs == null || recog.sempredFuncs.isEmpty()) {
+		if (!delegate.getTarget().supportsFlatActionAndSempredDispatch()
+				|| recog.sempredFuncs == null || recog.sempredFuncs.isEmpty()) {
 			return;
 		}
 		TreeMap<Integer, FlatSempredCase> byIndex = new TreeMap<Integer, FlatSempredCase>();
 		TreeMap<Integer, FlatSempredHelper> helpersByIndex = new TreeMap<Integer, FlatSempredHelper>();
+		ActionRefs refs = new ActionRefs();
 		for (RuleSempredFunction rsf : recog.sempredFuncs.values()) {
 			for (Map.Entry<Integer, Action> entry : rsf.actions.entrySet()) {
 				Integer idx = entry.getKey();
@@ -427,8 +455,12 @@ public class OutputModelController {
 					return;
 				}
 				Action act = entry.getValue();
-				boolean needsTypedCtx = !isLexer && actionReferencesLocalCtx(act);
-				if (needsTypedCtx && actionReferencesText(act, "predIndex")) {
+				refs.reset();
+				if (!isLexer && act != null) {
+					analyzeActionChunks(act.chunks, refs);
+				}
+				boolean needsTypedCtx = refs.referencesLocalCtx;
+				if (needsTypedCtx && refs.referencesPredIndex) {
 					return;
 				}
 				String helperCtxType = needsTypedCtx ? rsf.ctxType : "RuleContext";
@@ -446,38 +478,76 @@ public class OutputModelController {
 		}
 	}
 
-	private static boolean actionReferencesText(Action action, String token) {
-		if (action == null || action.chunks == null) {
-			return false;
+	static final class ActionRefs {
+		boolean referencesLocalCtx;
+		boolean referencesPredIndex;
+
+		void reset() {
+			referencesLocalCtx = false;
+			referencesPredIndex = false;
 		}
-		for (ActionChunk chunk : action.chunks) {
-			if (chunk instanceof ActionText) {
-				String text = ((ActionText) chunk).text;
-				if (text != null && text.contains(token)) {
-					return true;
-				}
-			}
-		}
-		return false;
 	}
 
-	private static boolean actionReferencesLocalCtx(Action action) {
-		if (action == null || action.chunks == null) {
-			return false;
+	/**
+	 * Exhaustively classifies all 31 {@link ActionChunk} subclasses to
+	 * determine whether a semantic predicate references {@code _localctx}
+	 * (requiring a typed context helper) or {@code predIndex} (prohibiting
+	 * outlining without a {@code predIndex} parameter).
+	 */
+	static void analyzeActionChunks(List<ActionChunk> chunks, ActionRefs refs) {
+		if (chunks == null) {
+			return;
 		}
-		for (ActionChunk chunk : action.chunks) {
+		for (ActionChunk chunk : chunks) {
+			if (chunk == null) {
+				continue;
+			}
 			if (chunk instanceof ActionText) {
 				String text = ((ActionText) chunk).text;
-				if (text != null && text.contains("_localctx")) {
-					return true;
+				if (!refs.referencesLocalCtx && JavaIdentifierScanner.containsIdentifier(text, "_localctx")) {
+					refs.referencesLocalCtx = true;
+				}
+				if (!refs.referencesPredIndex && JavaIdentifierScanner.containsIdentifier(text, "predIndex")) {
+					refs.referencesPredIndex = true;
 				}
 			}
-			else if (!(chunk instanceof ThisRulePropertyRef_parser)
-					&& !(chunk instanceof RulePropertyRef_parser)) {
-				return true;
+			else if (chunk instanceof ThisRulePropertyRef_parser
+					|| chunk instanceof RulePropertyRef_parser
+					|| chunk instanceof NonLocalAttrRef) {
+				// Generates `this` or `getInvokingContext(...)`: never touches _localctx or predIndex.
+			}
+			else if (chunk instanceof SetNonLocalAttr) {
+				// Must be checked BEFORE SetAttr (SetNonLocalAttr extends SetAttr).
+				// LHS uses getInvokingContext(...); only RHS chunks may reference _localctx or predIndex.
+				analyzeActionChunks(((SetNonLocalAttr) chunk).rhsChunks, refs);
+			}
+			else if (chunk instanceof SetAttr) {
+				// LHS writes `<ctx(s)>.name = ...` (requires _localctx); RHS may also reference predIndex.
+				refs.referencesLocalCtx = true;
+				analyzeActionChunks(((SetAttr) chunk).rhsChunks, refs);
+			}
+			else if (chunk instanceof ArgRef
+					|| chunk instanceof LocalRef
+					|| chunk instanceof RetValueRef
+					|| chunk instanceof TokenRef
+					|| chunk instanceof LabelRef
+					|| chunk instanceof TokenPropertyRef
+					|| chunk instanceof RulePropertyRef) {
+				// Covers QRetValueRef (extends RetValueRef), ListLabelRef (extends LabelRef),
+				// all TokenPropertyRef_* subclasses, and all RulePropertyRef_* /
+				// ThisRulePropertyRef_{ctx,start,stop,text} subclasses (extend RulePropertyRef).
+				refs.referencesLocalCtx = true;
+			}
+			else if (chunk instanceof ActionTemplate) {
+				refs.referencesLocalCtx = true;
+				refs.referencesPredIndex = true;
+			}
+			else {
+				// Conservative fallback for any unknown future ActionChunk subclass.
+				refs.referencesLocalCtx = true;
+				refs.referencesPredIndex = true;
 			}
 		}
-		return false;
 	}
 
 	public RuleFunction rule(Rule r) {

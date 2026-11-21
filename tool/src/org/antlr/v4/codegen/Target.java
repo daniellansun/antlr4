@@ -460,4 +460,16 @@ public abstract class Target {
 	public boolean supportsCompactLL1AltTests() {
 		return false;
 	}
+
+	/**
+	 * Returns {@code true} if this target's templates support flat single-switch
+	 * {@code action()} and {@code sempred()} dispatch via
+	 * {@link org.antlr.v4.codegen.model.Recognizer#flatSempreds} and
+	 * {@link org.antlr.v4.codegen.model.Lexer#flatActions}.
+	 *
+	 * @since 4.13.2.20
+	 */
+	public boolean supportsFlatActionAndSempredDispatch() {
+		return false;
+	}
 }

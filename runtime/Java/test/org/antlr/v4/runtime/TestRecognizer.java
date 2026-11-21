@@ -12,7 +12,15 @@ import org.antlr.v4.runtime.atn.BasicState;
 import org.antlr.v4.runtime.atn.LexerATNSimulator;
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -211,5 +219,73 @@ public class TestRecognizer {
 		assertEquals(Recognizer.EOF, -1);
 		assertEquals("Stub.g4", r.getGrammarFileName());
 		assertNull(r.getInputStream());
+	}
+
+	@Test
+	public void lockFreeErrorListenersConcurrentAndRemovalEdges() throws Exception {
+		final StubRecognizer r = withInterp(new String[]{null, "A"}, new String[]{"r"}, 1);
+		ANTLRErrorListener<Object> l1 = new ANTLRErrorListener<Object>() {
+			@Override public <T extends Object> void syntaxError(Recognizer<T, ?> rec, T sym, int l, int c, String m, RecognitionException e) {}
+		};
+		ANTLRErrorListener<Object> l2 = new ANTLRErrorListener<Object>() {
+			@Override public <T extends Object> void syntaxError(Recognizer<T, ?> rec, T sym, int l, int c, String m, RecognitionException e) {}
+		};
+		ANTLRErrorListener<Object> l3 = new ANTLRErrorListener<Object>() {
+			@Override public <T extends Object> void syntaxError(Recognizer<T, ?> rec, T sym, int l, int c, String m, RecognitionException e) {}
+		};
+
+		r.removeErrorListeners();
+		r.removeErrorListeners(); // idempotent when already EMPTY_LISTENERS
+		assertTrue(r.getErrorListeners().isEmpty());
+
+		r.addErrorListener(l1);
+		r.addErrorListener(l2);
+		r.addErrorListener(l3);
+		assertEquals(3, r.getErrorListeners().size());
+
+		// Remove missing & null -> no-op
+		r.removeErrorListener(new ANTLRErrorListener<Object>() {
+			@Override public <T extends Object> void syntaxError(Recognizer<T, ?> rec, T sym, int l, int c, String m, RecognitionException e) {}
+		});
+		r.removeErrorListener(null);
+		assertEquals(3, r.getErrorListeners().size());
+
+		// Remove middle, first, then last (returns to EMPTY_LISTENERS)
+		r.removeErrorListener(l2);
+		assertEquals(Arrays.asList(l1, l3), r.getErrorListeners());
+		r.removeErrorListener(l1);
+		assertEquals(Collections.singletonList(l3), r.getErrorListeners());
+		r.removeErrorListener(l3);
+		assertTrue(r.getErrorListeners().isEmpty());
+
+		// Multi-threaded CAS contention check
+		ExecutorService pool = Executors.newFixedThreadPool(4);
+		try {
+			final CountDownLatch start = new CountDownLatch(1);
+			List<Future<?>> futures = new ArrayList<Future<?>>();
+			for (int t = 0; t < 4; t++) {
+				futures.add(pool.submit(new Runnable() {
+					@Override
+					public void run() {
+						try { start.await(); } catch (InterruptedException ignored) {}
+						ANTLRErrorListener<Object> local = new ANTLRErrorListener<Object>() {
+							@Override public <T extends Object> void syntaxError(Recognizer<T, ?> rec, T sym, int l, int c, String m, RecognitionException e) {}
+						};
+						for (int i = 0; i < 200; i++) {
+							r.addErrorListener(local);
+							r.removeErrorListener(local);
+						}
+					}
+				}));
+			}
+			start.countDown();
+			for (Future<?> f : futures) {
+				f.get();
+			}
+			assertTrue(r.getErrorListeners().isEmpty());
+		}
+		finally {
+			pool.shutdownNow();
+		}
 	}
 }

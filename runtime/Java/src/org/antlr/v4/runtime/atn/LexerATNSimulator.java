@@ -7,7 +7,6 @@
 package org.antlr.v4.runtime.atn;
 
 import org.antlr.v4.runtime.CharStream;
-import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CodePointCharStream;
 import org.antlr.v4.runtime.IntStream;
 import org.antlr.v4.runtime.Lexer;
@@ -21,26 +20,17 @@ import org.antlr.v4.runtime.misc.NotNull;
 import org.antlr.v4.runtime.misc.Nullable;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * ATN interpreter for lexers. Builds and consults a per-mode DFA cache while
- * falling back to ATN simulation for unseen edges.
- *
- * <p>PERF: Reach config sets are retained on the simulator and cleared between
- * edge computations so the common DFA-fill path avoids per-character
- * {@link OrderedATNConfigSet} allocation. Clear of the retained pool is
- * occupancy-aware (see {@link ATNConfigSet#clear()} /
- * {@link RetainedConfigSet}): empty clear is O(1) for the merge map (no bulk
- * {@code Arrays.fill}); non-empty clear nulls only the used list prefix and,
- * when few configs remain in a grown open-addressed table, removes known merge
- * keys (O(n)) instead of filling the full table capacity. Obtain/release under
- * {@link #computeTargetState} therefore does not pay repeated full-capacity
- * zeroing. A single lexer (and its simulator) is not used concurrently for
- * matching, so reuse is safe. Stored DFA states always receive a readonly
- * {@link ATNConfigSet#clone(boolean)} of the reach set, never the reusable
- * buffer itself.</p>
+ * falling back to ATN simulation for unseen edges, retaining an occupancy-aware
+ * {@link RetainedConfigSet} reach buffer between {@link #computeTargetState}
+ * calls (stored DFA states always receive a readonly clone).
  */
 public class LexerATNSimulator extends ATNSimulator {
 
@@ -52,21 +42,7 @@ public class LexerATNSimulator extends ATNSimulator {
 
 	public boolean optimize_tail_calls = true;
 
-	/** When we hit an accept state in either the DFA or the ATN, we
-	 *  have to notify the character stream to start buffering characters
-	 *  via {@link IntStream#mark} and record the current state. The current sim state
-	 *  includes the current index into the input, the current line,
-	 *  and current character position in that line. Note that the Lexer is
-	 *  tracking the starting line and characterization of the token. These
-	 *  variables track the "state" of the simulator when it hits an accept state.
-	 *
-	 *  <p>We track these variables separately for the DFA and ATN simulation
-	 *  because the DFA simulation often has to fail over to the ATN
-	 *  simulation. If the ATN simulation fails, we need the DFA to fall
-	 *  back to its previously accepted state, if any. If the ATN succeeds,
-	 *  then the ATN does the accept and the DFA simulator that invoked it
-	 *  can simply return the predicted token type.</p>
-	 */
+	/** Tracks the most recent accept coordinates (index, line, column, DFA state). */
 	protected static class SimState {
 		protected int index = -1;
 		protected int line = 0;
@@ -121,102 +97,106 @@ public class LexerATNSimulator extends ATNSimulator {
 	private int closureDepth;
 
 	/**
-	 * Reusable predicate trace buffers for {@link LexerPredEdgeTable} lookup
-	 * replay and recording, allocated lazily on first predicated DFA miss.
+	 * Per-simulator predicate trace buffers for {@link LexerPredEdgeTable}
+	 * replay and recording, allocated lazily on the first predicated DFA miss.
 	 */
 	@Nullable
-	private int[] predRuleTrace;
-	@Nullable
-	private int[] predIndexTrace;
-	@Nullable
-	private boolean[] predResultTrace;
-	private boolean predCaptureActive;
-	private int predReplayLen;
-	private int predStep;
-	private boolean predRecordAbort;
+	private LexerPredEdgeTable.PredTrace predTrace;
 
 	/**
-	 * Concrete class of Latin-1 (8-bit) {@link CodePointCharStream} instances,
-	 * obtained via {@link CharStreams#fromString(String)} without exposing any
-	 * internal stream subclass on the public API. Dispatching 8-bit inputs into
-	 * a dedicated {@link #execATNFast8Bit} method keeps {@code input.LA(1)}
-	 * monomorphic even in mixed Latin-1 / UTF-16 workloads.
-	 */
-	private static final Class<?> CODEPOINT_8BIT_CLASS = CharStreams.fromString("").getClass();
-
-	/**
-	 * Whether this concrete simulator class leaves the core DFA/ATN execution
-	 * hooks un-overridden, making it eligible for the register-resident fast
-	 * execution path and predicate-guarded DFA edge cache.
-	 *
-	 * <p>Note: the register-resident fast path keeps accept state in local
-	 * variables and does not update {@link #prevAccept}; subclasses that inspect
-	 * {@link #prevAccept} must override one of the protected execution hooks.</p>
+	 * Whether this concrete simulator class is eligible for the fast
+	 * {@link CodePointCharStream} DFA runner and {@link LexerPredEdgeTable}
+	 * predicate-edge cache.
 	 */
 	private final boolean useFastExec;
 
 	/**
-	 * Whether the owning {@link Lexer} leaves {@link Lexer#nextToken()} and
-	 * {@link Lexer#skip()} un-overridden, allowing safe in-place fusion of
-	 * single built-in {@code -> skip} rules inside the fast DFA loop.
+	 * All non-private, non-final, non-static methods declared on
+	 * {@link LexerATNSimulator} and {@link ATNSimulator} (excluding
+	 * {@link #fastDfaEligibleClass()}). Discovered dynamically from class
+	 * metadata rather than a hardcoded name list so new protected hooks are
+	 * never silently bypassed and private/overloaded helpers never collide.
+	 * {@code null} if restricted by a {@link SecurityManager}.
 	 */
-	private final boolean useSkipFusion;
+	@Nullable
+	private static final Method[] OVERRIDABLE_HOOKS = collectOverridableHooks();
 
-	private static final ClassValue<Boolean> FAST_EXEC_ELIGIBLE = new ClassValue<Boolean>() {
+	/**
+	 * Cached structural override check for legacy helper-only subclasses (such
+	 * as Apache Groovy's and ANTLR4's {@code PositionAdjustingLexerATNSimulator})
+	 * that inherit {@link #fastDfaEligibleClass()} without overriding any hook.
+	 */
+	private static final ClassValue<Boolean> NO_HOOK_OVERRIDES = new ClassValue<Boolean>() {
 		@Override
 		protected Boolean computeValue(Class<?> type) {
-			if (type == LexerATNSimulator.class) {
-				return Boolean.TRUE;
-			}
+			if (type == LexerATNSimulator.class) return Boolean.TRUE;
+			Method[] hooks = OVERRIDABLE_HOOKS;
+			if (hooks == null) return Boolean.FALSE;
 			try {
+				ClassLoader baseLoader = LexerATNSimulator.class.getClassLoader();
+				String basePkg = packageName(LexerATNSimulator.class);
 				for (Class<?> c = type; c != null && c != LexerATNSimulator.class; c = c.getSuperclass()) {
-					for (Method m : c.getDeclaredMethods()) {
-						String name = m.getName();
-						if ("execATN".equals(name)
-							|| "getExistingTargetState".equals(name)
-							|| "captureSimState".equals(name)
-							|| "failOrAccept".equals(name)
-							|| "accept".equals(name)
-							|| "computeTargetState".equals(name)
-							|| "getReachableConfigSet".equals(name)
-							|| "getReachableTarget".equals(name)
-							|| "addDFAEdge".equals(name)
-							|| "addDFAState".equals(name)
-							|| "closure".equals(name)
-							|| "getEpsilonTarget".equals(name)
-							|| "evaluatePredicate".equals(name)
-							|| "consume".equals(name)) {
-							return Boolean.FALSE;
+					boolean samePkg = c.getClassLoader() == baseLoader && basePkg.equals(packageName(c));
+					for (Method hook : hooks) {
+						int hm = hook.getModifiers();
+						if (!Modifier.isPublic(hm) && !Modifier.isProtected(hm) && !samePkg) continue;
+						try {
+							Method sub = c.getDeclaredMethod(hook.getName(), hook.getParameterTypes());
+							if (!Modifier.isPrivate(sub.getModifiers()) && !Modifier.isStatic(sub.getModifiers())) {
+								return Boolean.FALSE;
+							}
 						}
+						catch (NoSuchMethodException ignored) { }
 					}
 				}
 				return Boolean.TRUE;
 			}
-			catch (SecurityException ex) {
+			catch (SecurityException | LinkageError ex) {
 				return Boolean.FALSE;
 			}
 		}
 	};
 
-	private static final ClassValue<Boolean> SKIP_FUSION_ELIGIBLE = new ClassValue<Boolean>() {
-		@Override
-		protected Boolean computeValue(Class<?> type) {
-			try {
-				for (Class<?> c = type; c != null && c != Lexer.class; c = c.getSuperclass()) {
-					for (Method m : c.getDeclaredMethods()) {
-						String name = m.getName();
-						if ("nextToken".equals(name) || "skip".equals(name)) {
-							return Boolean.FALSE;
-						}
-					}
+	@Nullable
+	private static Method[] collectOverridableHooks() {
+		try {
+			List<Method> hooks = new ArrayList<Method>();
+			for (Class<?> owner : new Class<?>[] { LexerATNSimulator.class, ATNSimulator.class }) {
+				for (Method m : owner.getDeclaredMethods()) {
+					int mods = m.getModifiers();
+					if (Modifier.isPrivate(mods) || Modifier.isStatic(mods) || Modifier.isFinal(mods) || m.isSynthetic()) continue;
+					if ("fastDfaEligibleClass".equals(m.getName()) && m.getParameterTypes().length == 0) continue;
+					hooks.add(m);
 				}
-				return Boolean.TRUE;
 			}
-			catch (SecurityException ex) {
-				return Boolean.FALSE;
-			}
+			return hooks.toArray(new Method[hooks.size()]);
 		}
-	};
+		catch (SecurityException ex) {
+			return null;
+		}
+	}
+
+	private static String packageName(Class<?> c) {
+		String name = c.getName();
+		int dot = name.lastIndexOf('.');
+		return dot >= 0 ? name.substring(0, dot) : "";
+	}
+
+	/**
+	 * Single-entry lock-free cache of the most recently verified helper-only
+	 * {@link LexerATNSimulator} subclass that overrides no hooks. Avoids
+	 * per-file {@link ClassValue#get} lookups when constructing subclasses such
+	 * as Groovy's {@code PositionAdjustingLexerATNSimulator}.
+	 */
+	private static volatile Class<?> lastFastEligibleClass;
+
+	private static boolean checkNoHookOverrides(Class<? extends LexerATNSimulator> actual) {
+		if (NO_HOOK_OVERRIDES.get(actual)) {
+			lastFastEligibleClass = actual;
+			return true;
+		}
+		return false;
+	}
 
 	/**
 	 * Closure frames before {@link #closureBusy} is consulted. Shallow
@@ -236,8 +216,104 @@ public class LexerATNSimulator extends ATNSimulator {
 	public LexerATNSimulator(@Nullable Lexer recog, @NotNull ATN atn) {
 		super(atn);
 		this.recog = recog;
-		this.useFastExec = FAST_EXEC_ELIGIBLE.get(getClass()).booleanValue();
-		this.useSkipFusion = recog != null && SKIP_FUSION_ELIGIBLE.get(recog.getClass()).booleanValue();
+		Class<? extends LexerATNSimulator> actual = getClass();
+		Class<? extends LexerATNSimulator> eligible = fastDfaEligibleClass();
+		this.useFastExec = (actual == eligible)
+			|| (eligible == LexerATNSimulator.class
+				&& (actual == lastFastEligibleClass || checkNoHookOverrides(actual)));
+	}
+
+	/**
+	 * Returns the exact concrete {@link LexerATNSimulator} class eligible for
+	 * the fast {@link CodePointCharStream} DFA runner. Defaults to
+	 * {@code LexerATNSimulator.class}. Helper-only subclasses that override no
+	 * {@link LexerATNSimulator} or {@link ATNSimulator} methods remain eligible
+	 * automatically; subclasses may also override this to return their own
+	 * class literal to opt in explicitly without reflective inspection, or
+	 * return {@code null} to opt out explicitly. Implementations must not read
+	 * subclass instance fields because this method is invoked during superclass
+	 * construction.
+	 *
+	 * @since 4.13.2.20
+	 */
+	@Nullable
+	protected Class<? extends LexerATNSimulator> fastDfaEligibleClass() {
+		return LexerATNSimulator.class;
+	}
+
+	/**
+	 * Returns whether this simulator instance is eligible for the fast
+	 * {@link CodePointCharStream} DFA runner.
+	 *
+	 * @since 4.13.2.20
+	 */
+	public final boolean isFastDFAEligible() {
+		return useFastExec;
+	}
+
+	/**
+	 * Synchronizes simulator mode, token start index, line, and column from a
+	 * register-resident fast DFA loop before action execution, skip fusion, or
+	 * predicate resolution.
+	 *
+	 * @since 4.13.2.20
+	 */
+	public final void syncFastState(int mode, int startIndex, int line, int charPos) {
+		this.mode = mode;
+		this.startIndex = startIndex;
+		this.line = line;
+		this.charPositionInLine = charPos;
+	}
+
+	/**
+	 * Resolves a missing lexer DFA edge on the fast path, consulting and
+	 * populating {@link LexerPredEdgeTable} for predicate-suppressed ASCII
+	 * transitions. Callers must flush stream position and call
+	 * {@link #syncFastState} beforehand and reload stream/line/column afterward.
+	 *
+	 * @since 4.13.2.20
+	 */
+	@NotNull
+	public final DFAState resolveFastTarget(@NotNull CharStream input,
+											@NotNull DFAState ds0,
+											@NotNull DFAState s,
+											int t)
+	{
+		return LexerPredEdgeTable.resolveFast(this, input, ds0, s, t);
+	}
+
+	/**
+	 * Handles EOF or throws {@link LexerNoViableAltException} when a fast DFA
+	 * loop terminates without reaching an accept state.
+	 *
+	 * @since 4.13.2.20
+	 */
+	public final int handleFastNoViableAlt(@NotNull CharStream input,
+										   int mode,
+										   int startIndex,
+										   @NotNull DFAState s,
+										   int t,
+										   int curLine,
+										   int curCharPos)
+	{
+		this.mode = mode;
+		this.startIndex = startIndex;
+		this.line = curLine;
+		this.charPositionInLine = curCharPos;
+		if (t == IntStream.EOF && input.index() == startIndex) {
+			return Token.EOF;
+		}
+		throw new LexerNoViableAltException(recog, input, startIndex, s.configs);
+	}
+
+	@NotNull
+	LexerPredEdgeTable.PredTrace predTrace() {
+		LexerPredEdgeTable.PredTrace pt = predTrace;
+		if (pt == null) {
+			pt = new LexerPredEdgeTable.PredTrace();
+			predTrace = pt;
+		}
+		return pt;
 	}
 
 	public void copyState(@NotNull LexerATNSimulator simulator) {
@@ -249,37 +325,6 @@ public class LexerATNSimulator extends ATNSimulator {
 
 	public int match(@NotNull CharStream input, int mode) {
 		this.mode = mode;
-		if (useFastExec && !debug) {
-			DFAState s0 = atn.modeToDFA[mode].s0.get();
-			if (s0 != null) {
-				if (input.getClass() == CODEPOINT_8BIT_CLASS) {
-					CodePointCharStream cs = (CodePointCharStream) input;
-					this.startIndex = cs.index();
-					return execATNFast8Bit(cs, s0);
-				}
-				if (input instanceof CodePointCharStream) {
-					CodePointCharStream cs = (CodePointCharStream) input;
-					this.startIndex = cs.index();
-					return execATNFastCodePoint(cs, s0);
-				}
-				return matchFastGeneric(input, s0);
-			}
-		}
-		return matchSlow(input, mode);
-	}
-
-	private int matchFastGeneric(@NotNull CharStream input, @NotNull DFAState s0) {
-		int mark = input.mark();
-		try {
-			this.startIndex = input.index();
-			return execATNFastGeneric(input, s0);
-		}
-		finally {
-			input.release(mark);
-		}
-	}
-
-	private int matchSlow(@NotNull CharStream input, int mode) {
 		int mark = input.mark();
 		try {
 			this.startIndex = input.index();
@@ -297,448 +342,16 @@ public class LexerATNSimulator extends ATNSimulator {
 		}
 	}
 
-	/**
-	 * Monomorphic 8-bit Latin-1 {@link CodePointCharStream} fast path.
-	 * Separating 8-bit inputs from 16/32-bit streams keeps {@code input.LA(1)}
-	 * monomorphic so HotSpot C2 inlines the {@code byte[]} load directly into
-	 * the DFA loop even when a corpus mixes Latin-1 and Unicode source files.
-	 * Structuring the {@code t > '\r'} branch first eliminates redundant EOF
-	 * comparisons on 96%+ of source characters and keeps this method above
-	 * HotSpot's {@code FreqInlineSize} so it receives a dedicated C2 root
-	 * compilation without hitting {@code NodeCountInliningCutoff} inside
-	 * {@link Lexer#nextToken()}.
-	 */
-	private int execATNFast8Bit(@NotNull CodePointCharStream input, @NotNull DFAState ds0) {
-		int curLine = this.line;
-		int curCharPos = this.charPositionInLine;
-
-		outer:
-		while (true) {
-			int acceptIndex = -1;
-			int acceptLine = 0;
-			int acceptCharPos = -1;
-			DFAState acceptState = null;
-
-			if (ds0.isAcceptState()) {
-				acceptIndex = input.index();
-				acceptLine = curLine;
-				acceptCharPos = curCharPos;
-				acceptState = ds0;
-			}
-
-			int t = input.LA(1);
-			DFAState s = ds0;
-
-			while (true) {
-				DFAState target = s.getLexerTarget(t);
-				if (target == null) {
-					this.line = curLine;
-					this.charPositionInLine = curCharPos;
-					target = resolveTargetFast(input, ds0, s, t);
-					curLine = this.line;
-					curCharPos = this.charPositionInLine;
-				}
-
-				if (target == ERROR) {
-					break;
-				}
-
-				if (t > '\r') {
-					curCharPos++;
-					input.consume();
-					if (target.isAcceptState()) {
-						acceptIndex = input.index();
-						acceptLine = curLine;
-						acceptCharPos = curCharPos;
-						acceptState = target;
-					}
-				}
-				else if (t != IntStream.EOF) {
-					if (t == '\n' || (t == '\r' && input.LA(2) != '\n')) {
-						curLine++;
-						curCharPos = 0;
-					}
-					else {
-						curCharPos++;
-					}
-					input.consume();
-					if (target.isAcceptState()) {
-						acceptIndex = input.index();
-						acceptLine = curLine;
-						acceptCharPos = curCharPos;
-						acceptState = target;
-					}
-				}
-				else if (target.isAcceptState()) {
-					acceptIndex = input.index();
-					acceptLine = curLine;
-					acceptCharPos = curCharPos;
-					acceptState = target;
-					break;
-				}
-
-				t = input.LA(1);
-				s = target;
-			}
-
-			if (acceptState != null) {
-				if (input.index() != acceptIndex) {
-					input.seek(acceptIndex);
-				}
-				this.line = acceptLine;
-				this.charPositionInLine = acceptCharPos;
-				AcceptStateInfo acceptInfo = acceptState.getAcceptStateInfo();
-				LexerActionExecutor exec = acceptInfo.getLexerActionExecutor();
-				if (exec != null && recog != null) {
-					// Fuse single built-in -> skip rules (e.g. WS -> skip) in-place
-					// when invoked from Lexer.nextToken() to avoid returning through
-					// Lexer.nextToken -> match -> s0.get() -> class-check on every skip.
-					if (useSkipFusion
-						&& exec.isSingleSkip()
-						&& acceptIndex > this.startIndex
-						&& !recog._hitEOF
-						&& recog._type == Token.INVALID_TYPE
-						&& recog._token == null
-						&& recog._channel == Token.DEFAULT_CHANNEL
-						&& recog._text == null
-						&& recog._tokenStartCharIndex == this.startIndex) {
-						recog.skip();
-						if (recog._type == Lexer.SKIP
-							&& !recog._hitEOF
-							&& recog._mode == this.mode
-							&& recog._token == null
-							&& recog._channel == Token.DEFAULT_CHANNEL
-							&& recog._text == null
-							&& acceptIndex < input.size()
-							&& input.index() == acceptIndex
-							&& this.line == acceptLine
-							&& this.charPositionInLine == acceptCharPos) {
-							this.startIndex = acceptIndex;
-							recog._tokenStartCharIndex = acceptIndex;
-							recog._tokenStartLine = acceptLine;
-							recog._tokenStartCharPositionInLine = acceptCharPos;
-							recog._type = Token.INVALID_TYPE;
-							curLine = acceptLine;
-							curCharPos = acceptCharPos;
-							continue outer;
-						}
-						return acceptInfo.getPrediction();
-					}
-					exec.execute(recog, input, startIndex);
-				}
-				return acceptInfo.getPrediction();
-			}
-
-			return noViableAltFast(input, s, t, curLine, curCharPos);
-		}
-	}
-
-	/**
-	 * Register-resident fast path for non-8-bit {@link CodePointCharStream}
-	 * inputs (16-bit BMP and 32-bit supplementary) when no protected simulator
-	 * hook is overridden.
-	 */
-	private int execATNFastCodePoint(@NotNull CodePointCharStream input, @NotNull DFAState ds0) {
-		int curLine = this.line;
-		int curCharPos = this.charPositionInLine;
-
-		outer:
-		while (true) {
-			int acceptIndex = -1;
-			int acceptLine = 0;
-			int acceptCharPos = -1;
-			DFAState acceptState = null;
-
-			if (ds0.isAcceptState()) {
-				acceptIndex = input.index();
-				acceptLine = curLine;
-				acceptCharPos = curCharPos;
-				acceptState = ds0;
-			}
-
-			int t = input.LA(1);
-			DFAState s = ds0;
-
-			while (true) {
-				DFAState target = s.getLexerTarget(t);
-				if (target == null) {
-					this.line = curLine;
-					this.charPositionInLine = curCharPos;
-					target = resolveTargetFast(input, ds0, s, t);
-					curLine = this.line;
-					curCharPos = this.charPositionInLine;
-				}
-
-				if (target == ERROR) {
-					break;
-				}
-
-				if (t > '\r') {
-					curCharPos++;
-					input.consume();
-					if (target.isAcceptState()) {
-						acceptIndex = input.index();
-						acceptLine = curLine;
-						acceptCharPos = curCharPos;
-						acceptState = target;
-					}
-				}
-				else if (t != IntStream.EOF) {
-					if (t == '\n' || (t == '\r' && input.LA(2) != '\n')) {
-						curLine++;
-						curCharPos = 0;
-					}
-					else {
-						curCharPos++;
-					}
-					input.consume();
-					if (target.isAcceptState()) {
-						acceptIndex = input.index();
-						acceptLine = curLine;
-						acceptCharPos = curCharPos;
-						acceptState = target;
-					}
-				}
-				else if (target.isAcceptState()) {
-					acceptIndex = input.index();
-					acceptLine = curLine;
-					acceptCharPos = curCharPos;
-					acceptState = target;
-					break;
-				}
-
-				t = input.LA(1);
-				s = target;
-			}
-
-			if (acceptState != null) {
-				if (input.index() != acceptIndex) {
-					input.seek(acceptIndex);
-				}
-				this.line = acceptLine;
-				this.charPositionInLine = acceptCharPos;
-				AcceptStateInfo acceptInfo = acceptState.getAcceptStateInfo();
-				LexerActionExecutor exec = acceptInfo.getLexerActionExecutor();
-				if (exec != null && recog != null) {
-					if (useSkipFusion
-						&& exec.isSingleSkip()
-						&& acceptIndex > this.startIndex
-						&& !recog._hitEOF
-						&& recog._type == Token.INVALID_TYPE
-						&& recog._token == null
-						&& recog._channel == Token.DEFAULT_CHANNEL
-						&& recog._text == null
-						&& recog._tokenStartCharIndex == this.startIndex) {
-						recog.skip();
-						if (recog._type == Lexer.SKIP
-							&& !recog._hitEOF
-							&& recog._mode == this.mode
-							&& recog._token == null
-							&& recog._channel == Token.DEFAULT_CHANNEL
-							&& recog._text == null
-							&& acceptIndex < input.size()
-							&& input.index() == acceptIndex
-							&& this.line == acceptLine
-							&& this.charPositionInLine == acceptCharPos) {
-							this.startIndex = acceptIndex;
-							recog._tokenStartCharIndex = acceptIndex;
-							recog._tokenStartLine = acceptLine;
-							recog._tokenStartCharPositionInLine = acceptCharPos;
-							recog._type = Token.INVALID_TYPE;
-							curLine = acceptLine;
-							curCharPos = acceptCharPos;
-							continue outer;
-						}
-						return acceptInfo.getPrediction();
-					}
-					exec.execute(recog, input, startIndex);
-				}
-				return acceptInfo.getPrediction();
-			}
-
-			return noViableAltFast(input, s, t, curLine, curCharPos);
-		}
-	}
-
-	/**
-	 * Register-resident fast path for arbitrary {@link CharStream} inputs when
-	 * no protected simulator hook is overridden.
-	 */
-	private int execATNFastGeneric(@NotNull CharStream input, @NotNull DFAState ds0) {
-		int curLine = this.line;
-		int curCharPos = this.charPositionInLine;
-		int acceptIndex = -1;
-		int acceptLine = 0;
-		int acceptCharPos = -1;
-		DFAState acceptState = null;
-
-		if (ds0.isAcceptState()) {
-			acceptIndex = input.index();
-			acceptLine = curLine;
-			acceptCharPos = curCharPos;
-			acceptState = ds0;
-		}
-
-		int t = input.LA(1);
-		DFAState s = ds0;
-
-		while (true) {
-			DFAState target = s.getLexerTarget(t);
-			if (target == null) {
-				this.line = curLine;
-				this.charPositionInLine = curCharPos;
-				target = resolveTargetFast(input, ds0, s, t);
-				curLine = this.line;
-				curCharPos = this.charPositionInLine;
-			}
-
-			if (target == ERROR) {
-				break;
-			}
-
-			if (t != IntStream.EOF) {
-				if (t > '\r') {
-					curCharPos++;
-				}
-				else if (t == '\n' || (t == '\r' && input.LA(2) != '\n')) {
-					curLine++;
-					curCharPos = 0;
-				}
-				else {
-					curCharPos++;
-				}
-				input.consume();
-			}
-
-			if (target.isAcceptState()) {
-				acceptIndex = input.index();
-				acceptLine = curLine;
-				acceptCharPos = curCharPos;
-				acceptState = target;
-				if (t == IntStream.EOF) {
-					break;
-				}
-			}
-
-			t = input.LA(1);
-			s = target;
-		}
-
-		if (acceptState != null) {
-			if (input.index() != acceptIndex) {
-				input.seek(acceptIndex);
-			}
-			this.line = acceptLine;
-			this.charPositionInLine = acceptCharPos;
-			LexerActionExecutor exec = acceptState.getLexerActionExecutor();
-			if (exec != null && recog != null) {
-				exec.execute(recog, input, startIndex);
-			}
-			return acceptState.getPrediction();
-		}
-
-		return noViableAltFast(input, s, t, curLine, curCharPos);
-	}
-
-	private int noViableAltFast(@NotNull CharStream input, @NotNull DFAState s, int t, int curLine, int curCharPos) {
-		this.line = curLine;
-		this.charPositionInLine = curCharPos;
-		if (t == IntStream.EOF && input.index() == startIndex) {
-			return Token.EOF;
-		}
-		throw new LexerNoViableAltException(recog, input, startIndex, s.configs);
-	}
-
-	/**
-	 * Resolves a missing DFA edge on the fast path, consulting and populating
-	 * {@link LexerPredEdgeTable} for predicate-suppressed ASCII transitions so
-	 * repeated occurrences evaluate only the exact predicates without scanning
-	 * ATN configurations or running epsilon closure.
-	 *
-	 * <p>PERF: Kept as a single method above HotSpot's {@code FreqInlineSize}
-	 * (325 bytes) so C2 compiles it standalone instead of inlining cold
-	 * {@code addDFAState}/{@code ATNConfigSet} construction into
-	 * {@link #execATNFast8Bit} / {@link #execATNFastCodePoint} and exhausting
-	 * {@code NodeCountInliningCutoff} before the hot character loop.</p>
-	 */
 	@NotNull
-	private DFAState resolveTargetFast(@NotNull CharStream input, @NotNull DFAState ds0, @NotNull DFAState s, int t) {
-		if (recog == null || !optimize_tail_calls || (t & ~0x7F) != 0 || s.stateNumber < 0 || s.stateNumber == Integer.MAX_VALUE) {
-			return computeTargetState(input, s, t);
-		}
-
-		LexerPredEdgeTable table = atn.getLexerPredEdgeTable(mode, ds0);
-		int replayLen = 0;
-		if (table != null) {
-			LexerPredEdgeTable.PredNode node = table.getRoot(s.stateNumber, t);
-			if (node != null) {
-				ensurePredTraceBuffers();
-				Object cur = node;
-				while (cur instanceof LexerPredEdgeTable.PredNode) {
-					LexerPredEdgeTable.PredNode pn = (LexerPredEdgeTable.PredNode) cur;
-					boolean res = evaluatePredicate(input, pn.ruleIndex, pn.predIndex, true);
-					if (replayLen < LexerPredEdgeTable.MAX_PRED_DEPTH) {
-						predRuleTrace[replayLen] = pn.ruleIndex;
-						predIndexTrace[replayLen] = pn.predIndex;
-						predResultTrace[replayLen] = res;
-						replayLen++;
-					}
-					cur = res ? pn.onTrue : pn.onFalse;
-				}
-				if (cur != null) {
-					return (DFAState) cur;
-				}
-			}
-		}
-
-		ensurePredTraceBuffers();
-		ATNConfigSet reach = obtainRetainedReach(s.configs.size());
-		predCaptureActive = true;
-		predReplayLen = replayLen;
-		predStep = 0;
-		predRecordAbort = false;
-		try {
-			getReachableConfigSet(input, s.configs, reach, t);
-
-			boolean suppressEdge = reach.hasSemanticContext();
-			DFAState target;
-			if (reach.isEmpty()) {
-				if (!suppressEdge) {
-					addDFAEdge(s, t, ERROR);
-				}
-				target = ERROR;
-			}
-			else {
-				target = addDFAEdge(s, t, reach);
-			}
-
-			if (suppressEdge && !predRecordAbort && predStep > 0) {
-				atn.getOrCreateLexerPredEdgeTable(mode, ds0)
-					.put(s.stateNumber, t, predRuleTrace, predIndexTrace, predResultTrace, predStep, target);
-			}
-			return target;
-		}
-		finally {
-			predCaptureActive = false;
-			predReplayLen = 0;
-			retainedReach.release();
-		}
-	}
-
-	private void ensurePredTraceBuffers() {
-		if (predRuleTrace == null) {
-			predRuleTrace = new int[LexerPredEdgeTable.MAX_PRED_DEPTH];
-			predIndexTrace = new int[LexerPredEdgeTable.MAX_PRED_DEPTH];
-			predResultTrace = new boolean[LexerPredEdgeTable.MAX_PRED_DEPTH];
-		}
-	}
-
-	@NotNull
-	private ATNConfigSet obtainRetainedReach(int hint) {
+	final ATNConfigSet obtainRetainedReach(int hint) {
 		if (retainedReach == null) {
 			retainedReach = new RetainedConfigSet(true);
 		}
 		return retainedReach.obtain(hint);
+	}
+
+	final void releaseRetainedReach() {
+		retainedReach.release();
 	}
 
 	@Override
@@ -756,13 +369,6 @@ public class LexerATNSimulator extends ATNSimulator {
 
 	protected int matchATN(@NotNull CharStream input) {
 		ATNState startState = atn.modeToStartState.get(mode);
-
-		/*if ( debug ) {
-			System.out.format(Locale.getDefault(), "matchATN mode %d start: %s\n", mode, startState);
-		}*/
-
-		int old_mode = mode;
-
 		ATNConfigSet s0_closure = computeStartState(input, startState);
 		boolean suppressEdge = s0_closure.hasSemanticContext();
 		if (suppressEdge) {
@@ -776,21 +382,10 @@ public class LexerATNSimulator extends ATNSimulator {
 			}
 		}
 
-		int predict = execATN(input, next);
-
-		/*if ( debug ) {
-			System.out.format(Locale.getDefault(), "DFA after matchATN: %s\n", atn.modeToDFA[old_mode].toLexerString());
-		}*/
-
-		return predict;
+		return execATN(input, next);
 	}
 
 	protected int execATN(@NotNull CharStream input, @NotNull DFAState ds0) {
-		//System.out.println("enter exec index "+input.index()+" from "+ds0.configs);
-		/*if ( debug ) {
-			System.out.format(Locale.getDefault(), "start state closure=%s\n", ds0.configs);
-		}*/
-
 		if (ds0.isAcceptState()) {
 			// allow zero-length tokens
 			captureSimState(prevAccept, input, ds0);
@@ -801,30 +396,10 @@ public class LexerATNSimulator extends ATNSimulator {
 		DFAState s = ds0; // s is current/from DFA state
 
 		while ( true ) { // while more work
-			/*if ( debug ) {
-				System.out.format(Locale.getDefault(), "execATN loop starting closure: %s\n", s.configs);
-			}*/
-
-			// As we move src->trg, src->trg, we keep track of the previous trg to
-			// avoid looking up the DFA state again, which is expensive.
-			// If the previous target was already part of the DFA, we might
-			// be able to avoid doing a reach operation upon t. If s!=null,
-			// it means that semantic predicates didn't prevent us from
-			// creating a DFA state. Once we know s!=null, we check to see if
-			// the DFA state has an edge already for t. If so, we can just reuse
-			// it's configuration set; there's no point in re-computing it.
-			// This is kind of like doing DFA simulation within the ATN
-			// simulation because DFA simulation is really just a way to avoid
-			// computing reach/closure sets. Technically, once we know that
-			// we have a previously added DFA state, we could jump over to
-			// the DFA simulator. But, that would mean popping back and forth
-			// a lot and making things more complicated algorithmically.
-			// This optimization makes a lot of sense for loops within DFA.
-			// A character will take us back to an existing DFA state
-			// that already has lots of edges out of it. e.g., .* in comments.
+			// Follow cached DFA edges while available; compute and cache on miss.
 			DFAState target = getExistingTargetState(s, t);
 			if (target == null) {
-				target = computeTargetState(input, s, t);
+				target = useFastExec ? resolveFastTarget(input, ds0, s, t) : computeTargetState(input, s, t);
 			}
 
 			if (target == ERROR) {
@@ -982,10 +557,6 @@ public class LexerATNSimulator extends ATNSimulator {
 				continue;
 			}
 
-			/*if ( debug ) {
-				System.out.format(Locale.getDefault(), "testing %s at %s\n", getTokenName(t), c.toString(recog, true));
-			}*/
-
 			final ATNState state = c.getState();
 			final Transition[] frozen = state.frozenOptimizedTransitions();
 			final int n = frozen != null ? frozen.length : state.getNumberOfOptimizedTransitions();
@@ -1000,7 +571,9 @@ public class LexerATNSimulator extends ATNSimulator {
 					if (lexerActionExecutor != null) {
 						LexerActionExecutor fixed = lexerActionExecutor.fixOffsetBeforeMatch(input.index() - startIndex);
 						if (fixed != lexerActionExecutor) {
-							predRecordAbort = true;
+							if (predTrace != null) {
+								predTrace.recordAbort = true;
+							}
 							lexerActionExecutor = fixed;
 						}
 					}
@@ -1020,10 +593,6 @@ public class LexerATNSimulator extends ATNSimulator {
 	protected void accept(@NotNull CharStream input, LexerActionExecutor lexerActionExecutor,
 						  int startIndex, int index, int line, int charPos)
 	{
-		/*if ( debug ) {
-			System.out.format(Locale.getDefault(), "ACTION %s\n", lexerActionExecutor);
-		}*/
-
 		// seek to after last char in token
 		input.seek(index);
 		this.line = line;
@@ -1083,21 +652,8 @@ public class LexerATNSimulator extends ATNSimulator {
 			return currentAltReachedAcceptState;
 		}
 
-		/*if ( debug ) {
-			System.out.println("closure("+config.toString(recog, true)+")");
-		}*/
-
 		final ATNState configState = config.getState();
 		if ( configState.stateType == ATNState.RULE_STOP ) {
-			/*if ( debug ) {
-				if ( recog!=null ) {
-					System.out.format(Locale.getDefault(), "closure at %s rule stop %s\n", recog.getRuleNames()[configState.ruleIndex], config);
-				}
-				else {
-					System.out.format(Locale.getDefault(), "closure at rule stop %s\n", config);
-				}
-			}*/
-
 			PredictionContext context = config.getContext();
 			if ( context.isEmpty() ) {
 				configs.add(config);
@@ -1220,35 +776,11 @@ public class LexerATNSimulator extends ATNSimulator {
 
 		case Transition.PREDICATE:
 			PredicateTransition pt = (PredicateTransition)t;
-			/*if ( debug ) {
-				System.out.println("EVAL rule "+pt.ruleIndex+":"+pt.predIndex);
-			}*/
 			configs.markExplicitSemanticContext();
 			boolean predResult;
-			if (predCaptureActive) {
-				if (predStep < predReplayLen && !predRecordAbort) {
-					if (predRuleTrace[predStep] == pt.ruleIndex && predIndexTrace[predStep] == pt.predIndex) {
-						predResult = predResultTrace[predStep++];
-					}
-					else {
-						predRecordAbort = true;
-						predResult = evaluatePredicate(input, pt.ruleIndex, pt.predIndex, speculative);
-					}
-				}
-				else {
-					predResult = evaluatePredicate(input, pt.ruleIndex, pt.predIndex, speculative);
-					if (!predRecordAbort) {
-						if (predStep < LexerPredEdgeTable.MAX_PRED_DEPTH) {
-							predRuleTrace[predStep] = pt.ruleIndex;
-							predIndexTrace[predStep] = pt.predIndex;
-							predResultTrace[predStep] = predResult;
-							predStep++;
-						}
-						else {
-							predRecordAbort = true;
-						}
-					}
-				}
+			LexerPredEdgeTable.PredTrace trace = predTrace;
+			if (trace != null && trace.captureActive) {
+				predResult = trace.evaluateOrReplay(this, input, pt.ruleIndex, pt.predIndex, speculative);
 			}
 			else {
 				predResult = evaluatePredicate(input, pt.ruleIndex, pt.predIndex, speculative);
@@ -1366,10 +898,6 @@ public class LexerATNSimulator extends ATNSimulator {
 	}
 
 	protected void addDFAEdge(@NotNull DFAState p, int t, @NotNull DFAState q) {
-		/*if ( debug ) {
-			System.out.println("EDGE "+p+" -> "+q+" upon "+((char)t));
-		}*/
-
 		if ( p!=null ) {
 			p.setTarget(t, q);
 		}

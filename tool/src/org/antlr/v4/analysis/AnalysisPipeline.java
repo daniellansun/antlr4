@@ -8,10 +8,7 @@ package org.antlr.v4.analysis;
 
 import org.antlr.v4.misc.Utils;
 import org.antlr.v4.runtime.Token;
-import org.antlr.v4.runtime.atn.ATN;
-import org.antlr.v4.runtime.atn.ATNConfig;
 import org.antlr.v4.runtime.atn.ATNState;
-import org.antlr.v4.runtime.atn.AbstractPredicateTransition;
 import org.antlr.v4.runtime.atn.BasicBlockStartState;
 import org.antlr.v4.runtime.atn.BlockStartState;
 import org.antlr.v4.runtime.atn.DecisionState;
@@ -21,13 +18,8 @@ import org.antlr.v4.runtime.atn.PlusLoopbackState;
 import org.antlr.v4.runtime.atn.PrecedencePredicateTransition;
 import org.antlr.v4.runtime.atn.PredicateTransition;
 import org.antlr.v4.runtime.atn.PredictionContext;
-import org.antlr.v4.runtime.atn.RuleStopState;
-import org.antlr.v4.runtime.atn.RuleTransition;
 import org.antlr.v4.runtime.atn.StarBlockStartState;
 import org.antlr.v4.runtime.atn.StarLoopEntryState;
-import org.antlr.v4.runtime.atn.Transition;
-import org.antlr.v4.runtime.atn.WildcardTransition;
-import org.antlr.v4.runtime.atn.NotSetTransition;
 import org.antlr.v4.runtime.misc.IntervalSet;
 import org.antlr.v4.tool.ErrorType;
 import org.antlr.v4.tool.Grammar;
@@ -36,9 +28,6 @@ import org.antlr.v4.tool.ast.GrammarAST;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.BitSet;
-import java.util.HashSet;
-import java.util.Set;
 
 public class AnalysisPipeline {
 	public Grammar g;
@@ -158,109 +147,17 @@ public class AnalysisPipeline {
 		}
 
 		ATNState ruleStop = g.atn.ruleToStopState[s.ruleIndex];
-		IntervalSet exitLook = new IntervalSet();
-		lookExitThroughCalleePreds(
-			g.atn,
+		IntervalSet exitLook = anal.LOOK(
 			s.transition(1).target,
 			ruleStop,
 			PredictionContext.EMPTY_LOCAL,
-			exitLook,
-			new HashSet<ATNConfig>(),
-			new BitSet());
+			LL1Analyzer.PredicatePolicy.SEE_THROUGH_DROPPED_CALLEE_PREDS,
+			false);
 		if (!exitLook.isNil()
 				&& !exitLook.contains(LL1Analyzer.HIT_PRED)
 				&& !exitLook.contains(Token.EPSILON)
 				&& look[0].and(exitLook).isNil()) {
 			look[1] = exitLook;
-		}
-	}
-
-	private static void lookExitThroughCalleePreds(ATN atn,
-												   ATNState s,
-												   ATNState stopState,
-												   PredictionContext ctx,
-												   IntervalSet look,
-												   Set<ATNConfig> lookBusy,
-												   BitSet calledRuleStack) {
-		ATNConfig c = ATNConfig.create(s, 0, ctx);
-		if (!lookBusy.add(c)) {
-			return;
-		}
-
-		if (s == stopState && PredictionContext.isEmptyLocal(ctx)) {
-			look.add(Token.EPSILON);
-			return;
-		}
-
-		if (s instanceof RuleStopState) {
-			boolean removed = calledRuleStack.get(s.ruleIndex);
-			try {
-				calledRuleStack.clear(s.ruleIndex);
-				for (int i = 0; i < ctx.size(); i++) {
-					if (ctx.getReturnState(i) == PredictionContext.EMPTY_FULL_STATE_KEY) {
-						continue;
-					}
-					ATNState returnState = atn.states.get(ctx.getReturnState(i));
-					lookExitThroughCalleePreds(atn, returnState, stopState, ctx.getParent(i), look, lookBusy, calledRuleStack);
-				}
-			}
-			finally {
-				if (removed) {
-					calledRuleStack.set(s.ruleIndex);
-				}
-			}
-			if (!PredictionContext.isEmptyLocal(ctx)) {
-				return;
-			}
-		}
-
-		int n = s.getNumberOfTransitions();
-		for (int i = 0; i < n; i++) {
-			Transition t = s.transition(i);
-			if (t instanceof RuleTransition) {
-				RuleTransition rt = (RuleTransition) t;
-				if (calledRuleStack.get(rt.ruleIndex)) {
-					continue;
-				}
-				PredictionContext newContext = ctx.getChild(rt.followState.stateNumber);
-				try {
-					calledRuleStack.set(rt.ruleIndex);
-					lookExitThroughCalleePreds(atn, t.target, stopState, newContext, look, lookBusy, calledRuleStack);
-				}
-				finally {
-					calledRuleStack.clear(rt.ruleIndex);
-				}
-			}
-			else if (t instanceof AbstractPredicateTransition) {
-				// Only see through predicates that ALL(*) EpsilonClosure itself
-				// drops at callee depth > 0: PrecedencePredicateTransition and
-				// context-dependent PredicateTransition. Context-independent
-				// predicates are hoisted and evaluated by ALL(*), so they remain
-				// opaque to preserve exact equivalence on both valid and error inputs.
-				boolean droppedInCallee = (t instanceof PrecedencePredicateTransition)
-					|| (t instanceof PredicateTransition && ((PredicateTransition) t).isCtxDependent);
-				if (!PredictionContext.isEmptyLocal(ctx) && droppedInCallee) {
-					lookExitThroughCalleePreds(atn, t.target, stopState, ctx, look, lookBusy, calledRuleStack);
-				}
-				else {
-					look.add(LL1Analyzer.HIT_PRED);
-				}
-			}
-			else if (t.isEpsilon()) {
-				lookExitThroughCalleePreds(atn, t.target, stopState, ctx, look, lookBusy, calledRuleStack);
-			}
-			else if (t.getClass() == WildcardTransition.class) {
-				look.addAll(IntervalSet.of(Token.MIN_USER_TOKEN_TYPE, atn.maxTokenType));
-			}
-			else {
-				IntervalSet set = t.label();
-				if (set != null) {
-					if (t instanceof NotSetTransition) {
-						set = set.complement(IntervalSet.of(Token.MIN_USER_TOKEN_TYPE, atn.maxTokenType));
-					}
-					look.addAll(set);
-				}
-			}
 		}
 	}
 
