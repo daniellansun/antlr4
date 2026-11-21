@@ -1,18 +1,25 @@
 # Optimized Fork
 
-The optimized fork of ANTLR 4 is maintained by Sam Harwell at Tunnel Vision Laboratories, LLC. This "bleeding edge" implementation of ANTLR 4 contains numerous features and performance optimizations which are not included in the reference release. In general, these features are not included in the reference release for one or more of the following reasons.
+## Overview
 
-* **Implementation complexity:** Many features of the optimized fork were developed to meet specific concerns found during the use of ANTLR 4 for large-scale commercial applications. In some cases, the implementation of the feature is *extremely* complex, while the target audience likely to benefit from the change is small. The reference release of ANTLR is widely used in both educational scenarios and small- to medium-sized parsing applications where these optimizations are not needed.
-* **Incomplete specification and/or implementation:** Some features of the optimized fork were developed to address a specific use case without specific concern to other use cases. These features may or may not work in other use cases.
-* **Configuration required:** Some optimizations present in the optimized fork, including some of the most powerful, have the ability to dramatically improve performance for some grammars while reducing performance for others. Optimal use of these features requires manual configuration with respect to a specific grammar, and in some cases knowledge about characteristics of the machine where the application is being executed. While these features are essential for certain applications, including them all in a reference release of ANTLR would be quite overwhelming for new users.
+The optimized fork of ANTLR 4 originated with Sam Harwell at Tunnel Vision Laboratories, LLC, and is continued and extended in this repository (`daniellansun/antlr4`, published under Maven group `me.sunlan` targeting Java 8). It builds on the reference ANTLR 4 implementation with grammar features, runtime architectural improvements, and Java code-generation optimizations aimed at large, demanding, production-scale recognizers such as Apache Groovy's Parrot parser.
 
-## Features
+In general, features and optimizations in this fork are not part of the reference ANTLR 4 release for one or more of the following reasons:
+
+* **Implementation complexity:** Many mechanisms were introduced to solve throughput, allocation, or memory-footprint bottlenecks observed in large-scale commercial and language-tooling workloads. Their implementations can be intricate and tightly tuned to JVM behavior, whereas the reference release prioritizes simplicity and maintainability for educational use and small- to medium-sized grammars.
+* **Specialized scope:** Several grammar transformations were designed for specific large grammars and may not handle every corner case of arbitrary user grammars.
+* **Configuration and tuning trade-offs:** Certain high-impact optimizations can substantially accelerate some grammars while increasing memory consumption or regressing throughput on others. Using them effectively requires grammar-specific measurement rather than one-size-fits-all defaults.
+* **Internal dependencies:** Hot-path primitive collections rely on HPPC (`com.carrotsearch:hppc`), which is kept strictly internal and shaded into the published runtime artifact to avoid transitive dependency conflicts.
+
+---
+
+## Grammar and Runtime Features
 
 ### Base Context
 
-**Reason for exclusion:** Incomplete implementation (not known to work in all grammars)
+**Reason for exclusion:** Specialized scope (not guaranteed to work across all grammars)
 
-This release has the ability to instruct multiple rules in a grammar to use the same context object. This feature was originally intended for use in cases like the following, which is extracted from a [Java 8 grammar](https://github.com/sharwell/antlr4/blob/java8-grammar/tool/test/org/antlr/v4/test/Java.g4) derived from the language specification (many uses of the feature are seen in this grammar).
+Multiple parser rules can be instructed to share a single parse-tree context type via the `baseContext` rule option. This is especially useful for specification-derived grammars (such as a [Java 8 grammar](https://github.com/sharwell/antlr4/blob/java8-grammar/tool/test/org/antlr/v4/test/Java.g4)) where syntactic variants must be separated in the grammar without duplicating downstream parse-tree visitor or listener logic:
 
 ```antlr
 primitiveType
@@ -27,13 +34,13 @@ options { baseContext=primitiveType; }
     ;
 ```
 
-In the above example, the rule `unannPrimitiveType` does not allow annotations, but the parse tree will still contain `PrimitiveTypeContext`
+In the example above, `unannPrimitiveType` disallows leading annotations syntactically, yet produces a `PrimitiveTypeContext` node in the resulting parse tree.
 
-### Automated left factoring
+### Automated Left Factoring
 
-**Reason for exclusion:** Incomplete implementation (not known to work in all grammars)
+**Reason for exclusion:** Specialized scope (not guaranteed to work across all grammars)
 
-This release has the ability to automatically left-factor a named rule reference from alternatives of a rule. This feature was created a few releases into GoWorks in an effort to reduce memory consumption by reducing the lookahead requirements for a specific rule in the grammar. Many features of GoWorks were already written with a specific parse tree shape in mind, and changing the shape of the parse tree in order to manually left factor the offending rule would be both time-consuming and risky for introducing bugs. To address this, I created a parse-tree-preserving grammar transformation which left-factors a rule without changing the shape of the final parse tree. GoWorks [uses the feature](https://github.com/tunnelvisionlabs/goworks/blob/5543a633dfc0d9b0e2ab407445a82bc70b24f100/goworks.editor/src/org/tvl/goworks/editor/go/parser/GoParser.g4#L435-L444) to left factor its *expression* rule out of the *simpleStmt* rule.
+A rule can automatically left-factor a named rule reference out of its alternatives via `@leftfactor{...}` without altering the parse tree shape produced for valid input. This transformation was originally created for GoWorks to cut lookahead depth and DFA memory consumption without rewriting downstream code that depended on the original tree structure (for example, factoring `expression` out of `simpleStmt` in [GoParser.g4](https://github.com/tunnelvisionlabs/goworks/blob/5543a633dfc0d9b0e2ab407445a82bc70b24f100/goworks.editor/src/org/tvl/goworks/editor/go/parser/GoParser.g4#L435-L444)):
 
 ```antlr
 simpleStmt
@@ -48,344 +55,272 @@ simpleStmt
     ;
 ```
 
-> :warning: While the parse tree shape will not be changed for *correct* input, it is possible that use of the automatic left factoring functionality could change the behavior in error handling scenarios. Specifically, it may be possible for erroneous input to result in parse trees where nodes are placed in locations that appear impossible according to the grammar.
+> :warning: Although the parse tree shape is preserved for *valid* input, automated left factoring can alter error-recovery behavior. On syntactically invalid input, recovery may produce parse trees whose node arrangement would not be reachable in the unfactored grammar.
 
-### Indirect left recursion elimination
+### Indirect Left Recursion Elimination
 
-**Reason for exclusion:** Incomplete implementation (not known to work in all grammars)
+**Reason for exclusion:** Specialized scope (not guaranteed to work across all grammars)
 
-This release has the ability to eliminate indirect left recursion (reported by the reference release as "mutual" left recursion). This feature is an early expansion of the ability to automatically left factor a grammar.
+This fork extends ANTLR 4's direct left-recursion transformation to eliminate indirect ("mutual") left recursion, building on the same grammar-rewriting infrastructure as automated left factoring.
 
-### Backwards compatibility
-
-**Reason for exclusion:** Implementation complexity (quite constraining to the benefit of only a few users)
-
-The optimized fork releases have a stronger emphasis on preserving compatibility. Unlike the reference release, grammars typically do not need to be regenerated when upgrading the runtime. However, we still recommend that grammars be generated using the new version as it may improve performance or the available features at runtime.
-
-### `@Nullable` and `@NotNull` annotations
+### Rule Versioning
 
 **Reason for exclusion:** Implementation complexity
 
-### Rule versioning
+Rules can be annotated with `@version{N}`, emitting `@RuleVersion(N)` on the generated rule methods. Together with `@RuleDependency` / `@RuleDependencies` and the compile-time `RuleDependencyProcessor` / runtime `RuleDependencyChecker`, this lets downstream listeners, visitors, and IDE integrations declare and verify compatibility with specific rule revisions. See the [Rule Versioning](https://github.com/sharwell/antlr4/wiki/Rule-Versioning) design notes for details.
+
+### `@NotNull` and `@Nullable` Annotations
 
 **Reason for exclusion:** Implementation complexity
 
-The optimized fork includes the [rule versioning](https://github.com/sharwell/antlr4/wiki/Rule-Versioning) feature.
+The companion `me.sunlan:antlr4-annotations` artifact provides `@NotNull` and `@Nullable` annotations (`org.antlr.v4.runtime.misc`) together with `NullUsageProcessor`, a `javac` compile-time annotation processor. During compilation of the runtime (and optionally consumer code), `NullUsageProcessor` validates nullability contracts—reporting errors for conflicting `@NotNull`/`@Nullable` pairs, annotations on `void` methods, `@Nullable` on primitive types, and incompatible override variance (such as widening a `@NotNull` return type to `@Nullable` or narrowing a `@Nullable` parameter to `@NotNull`).
 
-## Optimizations
+### Bare Carriage Return (`\r`) Line Endings
 
-### Improved SLL termination condition
+**Reason for exclusion:** Behavioral extension introduced for real-world legacy source files (since `4.13.2.19`)
+
+Both `LexerATNSimulator.consume` (including the `consume(CharStream, int)` overload used on the DFA walk) and `CodePointLexerRunner` treat a standalone carriage return (`\r` not immediately followed by `\n`, including `\r` at EOF and consecutive `\r\r`) as a line break, incrementing the line number and resetting `charPositionInLine` to `0`. Standard `\r\n` pairs remain a single line break whose line increment occurs on `\n`, leaving `\r\n` and `\n` line/column coordinates unchanged. `Lexer.recover(RecognitionException)` advances through the same path, keeping token positions consistent during recovery.
+
+### Backwards Compatibility
 
 **Reason for exclusion:** Implementation complexity
 
-This release of ANTLR 4 uses a stronger termination condition for SLL prediction. In some cases it is possible for this implementation to detect an SLL conflict with fewer symbols of lookahead than the reference release. In general, this change would not be observable. However, aside from the performance benefit it is possible for the shorter lookahead to allow for better error handling in some edge cases.
+The optimized fork places strong emphasis on preserving source and binary compatibility across runtime upgrades. In most cases, existing generated recognizers continue to run without regeneration when upgrading `me.sunlan:antlr4-runtime` (for example, legacy generated parsers that call `match`, `getInterpreter().adaptivePredict`, or `_errHandler.sync(this)` remain fully supported). Regenerating grammars with the matching tool version is nonetheless recommended to unlock the Java code-generation optimizations described below.
 
-### Full context DFA
+---
 
-**Reason for exclusion:** Implementation complexity, unproven theoretical impact on algorithmic complexity of ALL(*)
+## Runtime Optimizations
 
-The reference release of ANTLR 4 only uses a DFA for local-context prediction (SLL). The optimized fork expands on that by allowing the use of a DFA for full-context prediction (LL) as well.
+### Prediction Strategy and DFA Architecture
 
-> :bulb: This optimization is disabled by default. It can be enabled by setting `ParserATNSimulator.enable_global_context_dfa` to true:
+#### Improved SLL Termination Condition
+
+**Reason for exclusion:** Implementation complexity
+
+The parser ATN simulator enforces a stronger termination condition during SLL prediction, allowing SLL conflicts to be detected with fewer lookahead symbols than in the reference release. Under normal parsing this is transparent, while the shorter lookahead improves throughput and can yield cleaner error recovery in edge cases.
+
+#### Full-Context DFA
+
+**Reason for exclusion:** Implementation complexity; unproven worst-case impact on ALL(\*) complexity
+
+Whereas reference ANTLR 4 maintains a DFA only for local-context (SLL) prediction, this fork optionally caches full-context (LL) transitions in the DFA as well.
+
+> :bulb: Full-context DFA caching is **disabled by default** (`ParserATNSimulator.enable_global_context_dfa = false`). It can be enabled per parser instance:
 >
 > ```java
 > Parser myParser = new MyParser(input);
 > myParser.getInterpreter().enable_global_context_dfa = true;
 > ```
 >
-> :warning: This feature can substantially increase the memory consumed by the DFA. For grammars and applications that rarely need to use full context prediction, especially in combination with two-stage parsing, the overhead of this feature may not provide gains that justify its use. I recommend leaving this feature disabled initially, and only experiment with it if you find that other options do not provide an acceptable level of performance. With that said, there are multiple known grammars which are practically unusable without this feature.
+> :warning: Enabling `enable_global_context_dfa` can substantially increase DFA memory consumption. For grammars that rarely enter full-context prediction—especially under two-stage parsing (`SLL` then `LL`)—the memory overhead may outweigh the speed benefit. Leave this option disabled initially and enable it only after profiling demonstrates that full-context recomputation is a bottleneck. For certain heavily context-sensitive grammars, however, this option is essential for acceptable performance.
 
-### Tail call elimination
+#### Tail Call Elimination
 
-**Reason for exclusion:** Incomplete specification (work in progress)
+**Reason for exclusion:** Incomplete formal specification
 
-The optimized fork of ANTLR compacts `PredictionContext` instances associated with states in the DFA by eliminating certain unnecessary return states. As an added bonus, this feature reduced overall DFA storage requirements by allowing `DFAState` instances to be shared in scenarios where the reference release of ANTLR believes the states to be distinct.
+During ATN closure, the simulator compacts `PredictionContext` chains by eliding redundant return states on tail calls (`ParserATNSimulator.optimize_tail_calls`, default `true`). Eliminating unnecessary stack frames reduces context-graph depth and allows equivalent `DFAState` instances to be shared where the reference runtime treats them as distinct.
 
-> :bulb: This feature includes a configuration option `ParserATNSimulator.tail_call_preserves_sll`, which has a default value of `true`. Before enabling this feature, be aware of the following advantages and disadvantages.
+> :bulb: Tail-call compaction is governed by `ParserATNSimulator.tail_call_preserves_sll` (default `true`):
 >
-> * Advantages of `tail_call_preserves_sll=true` (the default)
->   * Preserves maximum accuracy of `PredictionMode.SLL`. When the setting is false, it is possible (varies by grammar and input) for `PredictionMode.SLL` to report a parse error even though the input successfully parses when the setting is true.
->   * Minimizes lookahead of SLL decisions. When the setting is false, it is possible (varies by grammar and input) for SLL prediction - which is enabled even for `PredictionMode.LL` - to increase the lookahead. In one case it was observed that overall performance was degraded due to the impact of this.
-> * Advantages of `tail_call_preserves_sll=false`
->   * Reduces DFA size. For cases where two-stage parsing is used (so reduced accuracy of SLL mode is acceptable) and lookahead doesn't hit a pathological case, explicitly setting `tail_call_preserves_sll` to false can substantially reduce the size of the DFA.
+> * **`tail_call_preserves_sll = true` (default):**
+>   * Preserves maximum `PredictionMode.SLL` accuracy. Setting this to `false` can cause pure SLL parsing to report a syntax error on inputs that succeed when `true`.
+>   * Minimizes SLL lookahead length. Setting this to `false` can lengthen SLL lookahead (even under `PredictionMode.LL`), which has been observed to degrade overall throughput on some grammars.
+> * **`tail_call_preserves_sll = false`:**
+>   * Further reduces DFA state count and memory footprint. In two-stage parsing setups where occasional SLL fallback is acceptable and lookahead does not hit pathological cases, disabling preservation can noticeably shrink the DFA.
 
-### DFA edge optimization
+#### Adaptive DFA Edge Maps and Lock-Free Lookups
 
-**Reason for exclusion:** Implementation complexity (the reference release uses a subset of this optimization)
+**Reason for exclusion:** Implementation complexity (the reference release implements only a subset)
 
-The optimized fork uses several different map implementations based on the number of outgoing edges held in a DFA state. This feature minimizes the size of DFA states, especially in infrequently used areas of the DFA.
+Each `DFAState` dynamically selects an `AbstractEdgeMap` implementation according to its outgoing edge count (`EmptyEdgeMap` → `SingletonEdgeMap` → `HashEdgeMap` → `ArrayEdgeMap`), keeping sparse DFA regions compact while giving dense states O(1) array lookup:
 
-### ATN configuration optimization
+* **`HashEdgeMap`:** Uses an open-addressed power-of-two table starting at capacity 8 (`DEFAULT_MAX_SIZE = 8`), promoting to `ArrayEdgeMap` when density approaches half of the allowed symbol range. Structural writes update `keys[bucket]` before release-publishing the target through `AtomicReferenceArray.lazySet`; lock-free readers acquire-load from `values` first to establish full JMM happens-before ordering. An `AtomicInteger` occupancy counter makes `size()` and `isEmpty()` O(1), while `toMap()` stays a cold diagnostic path (sorted `TreeMap` for deterministic `DFASerializer` output). Lexer maps whose keys all lie in `[0, tableLength)` may also use an identity-indexed layout (`directArray()`).
+* **Exact-class edge dispatch (`DFAState.getTarget`):** Dispatches directly on the final map classes (`HashEdgeMap`, `ArrayEdgeMap`, `SingletonEdgeMap`) so HotSpot C2 eliminates megamorphic virtual stubs and inlines edge lookups into warm prediction loops.
+* **Lock-free ASCII and wide lexer tables (`DFAState.getLexerTarget`):** For lexer states (`minIndex >= 0 && maxIndex > 0xFFFF`), `DFAState` maintains a copy-on-write length-128 `volatile DFAState[] asciiEdges` table for ASCII code points (`0..127`) and a `volatile AtomicReferenceArray<DFAState> directValues` reference for identity-indexed wider ranges. Copy-on-write volatile publication guarantees full JMM happens-before safety across x86, ARM64, and POWER while keeping warm ASCII lookups to a single volatile read plus array load (within HotSpot C2's 35-byte `MaxInlineSize`).
+* **O(1) DFA emptiness and context-sensitivity checks:** `DFA.isEmpty()` and `DFA.isContextSensitive()` delegate to `DFAState.isEdgesEmpty()` and `DFAState.isContextEdgesEmpty()` rather than calling `getEdgeMap().isEmpty()`, avoiding cold `TreeMap` materialization (historically profiled at ~17% CPU on precedence-DFA parses). In addition, warm LL(1), precedence LL(1), and warm SLL calls in `ParserATNSimulator.adaptivePredict` bypass `DFA.isEmpty()` entirely; only `adaptivePredictSlow` consults it for precedence DFAs.
+* **Compact state metadata:** `DFAState` caches immutable `minEdgeIndex`, publishes `volatile BitSet contextSymbols` copy-on-write for lock-free concurrent LL reads, and caches `unconflictedPrediction` (`getUnconflictedPrediction()`) before safe DFA publication so warm SLL lookups collapse `acceptStateInfo` and `configs.getConflictInfo()` checks into a single field read.
 
-**Reason for exclusion:** Implementation complexity (most small- and medium-sized applications don't run into DFA-related memory problems)
+---
 
-The optimized fork uses several `ATNConfig` classes to reduce the size of the DFA. For configurations returning default values from most properties, a small `ATNConfig` instance is used. The larger types are only used for configurations that need to represent non-default values from one or more methods. As a simple example, configurations appearing in the lexer DFA need to store a few more fields than configurations appearing in the parser DFA. By removing these fields from `ATNConfig` instances used in the parser DFA, some applications observe marked reductions in the memory overhead for the parser DFA (we've seen 20MiB or more for large applications).
+### ATN Data Structures and Prediction Context Caching
 
-### Primitive collections on prediction hot paths (HPPC)
-
-**Reason for exclusion:** Additional dependency (mitigated by shading)
-
-Hot prediction paths store primitive keys in HPPC maps/sets instead of boxed
-JDK collections. **HPPC types are never part of any `public` or `protected`
-API surface** — they appear only as non-exported implementation detail
-(private fields/locals and package-private diagnostics). Callers and
-subclasses see JDK collection interfaces (for example `Set<ATNConfig>`).
-
-| Structure | Storage (package-private; never public/protected) | Exposed API | Role |
-| --- | --- | --- | --- |
-| `ATNConfigSet` merge index | `ClearableLongObjectHashMap` extends HPPC `LongObjectHashMap` (empty-fast clear; monomorphic hot path) | `Set<ATNConfig>` | packed `(state, alt)` → config; no `Long` boxing; empty clear O(1) |
-| Precedence filter | `ClearableIntObjectHashMap` extends HPPC `IntObjectHashMap` (private field on simulator) | not in any method signature | state number → alt-1 context; retained; empty clear O(1) |
-| Epsilon-closure busy set | package-private `OpenAddressedHashSet` **composes** HPPC `ObjectHashSet` + empty-fast `clear` | `Set<ATNConfig>` | right-recursion / EOF* guards; no `HashMap.Node`; empty clear O(1) |
-| LL(1) prediction cache | `ConcurrentIntIntMap` **composes** HPPC `IntIntHashMap` (COW) | `protected ConcurrentMap<Integer,Integer> LL1Table` via `ConcurrentIntIntMapView` | primitive get/put on hot path; JDK map for subclasses/tests |
-
-**Rule:** HPPC types never appear in any `public` or `protected` field, method, or constructor signature. JDK interfaces (`Set`, `ConcurrentMap`) are used at API boundaries. Package-private types may extend HPPC on monomorphic hot paths for performance; `TestHppcApiBoundary` enforces the signature rule by reflection.
-
-`ATNConfigSet.add` / `contains` use `indexOf` / `indexGet` / `indexInsert` so
-each long key is hashed once per operation (not a separate `get` then `put`).
-Busy sets still key by `ATNConfig.hashCode()` / `equals` (see hash cache below).
-Cold paths (for example ATN deserialization) keep JDK maps.
-
-Epsilon-closure orchestration (busy set, predicate vs BFS control, double-
-buffered intermediate layers) lives in package-private `EpsilonClosure` so
-`ParserATNSimulator` stays orchestration-focused. The retained busy set is an
-`OpenAddressedHashSet` (JDK `Set` over HPPC `ObjectHashSet` with empty-fast
-`clear`) so the protected recursive `closure` SPI stays interface-
-oriented and source-compatible with the pre-HPPC `Set` signature. Edge
-reach / target-state computation lives in package-private
-`ReachComputation` (retained config sets + `ReachConfigSource`) so
-`ParserATNSimulator` stays orchestration-focused.
-
-HPPC is shaded into `org.antlr.v4.runtime.shaded.com.carrotsearch.hppc` at
-package time (Java 8–compatible HPPC release). The published runtime is
-self-contained and does not clash with a consumer's own HPPC.
-
-### ATN hot-path package (parser + lexer simulation)
+#### Compact `ATNConfig` Hierarchy and Hash Caching
 
 **Reason for exclusion:** Implementation complexity
 
-When a DFA edge is missing, the simulator runs ATN *reach* + *epsilon closure*
-to build the next DFA state. That path used to allocate many short-lived
-config sets, recompute MurmurHash repeatedly, and pay virtual dispatch on
-edges that cannot contribute to closure. The optimized fork packages several
-related fixes so prediction and lexing do less work per symbol.
+To minimize DFA memory overhead (often saving 20 MiB or more on large grammars), `ATNConfig` uses specialized concrete subclasses selected automatically by `ATNConfig.create` / `transform` (`ATNConfig`, `SemanticContextATNConfig`, `ActionATNConfig`, `ActionSemanticContextATNConfig`) so default parser configurations store only the fields they need:
 
-All retained buffers assume **one thread owns one simulator** for the duration
-of `adaptivePredict` / `match` (the existing ANTLR threading model). Do not
-share a single simulator across concurrent predictions.
+* **32-byte base layout (64-bit CompressedOops):** Alternative number, outer-context depth (saturated at `0x7F`), and the precedence-filter suppression flag are bit-packed into `altAndOuterContextDepth`. The `passedThroughNonGreedyDecision` flag sits in base-class alignment padding, keeping object size at 32 bytes while keeping `hasPassedThroughNonGreedyDecision()` monomorphic without promoting parser configs to `ActionATNConfig`.
+* **Cached MurmurHash3 (`cachedHashCode`):** `ATNConfig.hashCode()` computes an inline bit-exact MurmurHash3 once and caches it (`0` is reserved as the uncomputed sentinel; a raw hash of `0` is biased to `1`). Mutating `context` or toggling `reachesIntoOuterContext` invalidates the cache. `ATNConfig.equals` rejects unequal cached hashes before performing structural comparison. This accelerates lexer `OrderedATNConfigSet` lookups, epsilon-closure busy-set probes, and DFA state hashing.
+* **Zero-allocation merge-on-hit (`ATNConfigSet.addTransformed`):** On base `ATNConfigSet`, `EpsilonClosure` and `ReachComputation` probe the merge index by packed `(targetState, alt)` *before* allocating a transformed `ATNConfig`. On a merge hit, the existing entry's context is merged in place (with hash invalidation whenever `mergeConfigContext` flips `reachesIntoOuterContext`); on a miss, a fresh transformed instance is allocated so templates are never aliased.
 
-#### Retained scratch buffers (`RetainedConfigSet`)
+#### Exact `PredictionContext` Reduction and Monomorphic `PredictionContextCache`
 
-| Owner | What is retained |
+**Reason for exclusion:** Implementation complexity
+
+The fork implements an exact merge algorithm for `PredictionContext` graphs, ensuring contexts stored in the DFA are fully reduced (maximally shared) rather than leaving redundant unreduced subgraphs.
+
+* **Fast canonicalization (`PredictionContext.getCachedContextInternal`):** Walks pure `SingletonPredictionContext` chains iteratively without allocating a visited map, falling back to an internal HPPC `ObjectObjectIdentityHashMap` only when an `ArrayPredictionContext` node is encountered.
+* **Monomorphic `PredictionContextCache`:** Backed by three specialized open-addressed tables at 0.5 load factor—`ContextInternSet`, stride-2 `ChildContextMap`, and stride-3 `JoinContextMap`—sharing capacity, sparse-clear tracking (`SPARSE_TRACK_LIMIT = 4096`), and shrink-on-clear (`MAX_RETAINED_CAPACITY = 16384`) logic through `private` `OpenTableBase`. This eliminates `HashMap.Node` and wrapper-key allocations during cold DFA construction and full-context LL(\*) prediction, performs O(size) sparse clears on reuse, and shrinks tables that temporarily grew during an outlier decision.
+
+#### Frozen ATN Snapshots and O(1) `IntervalSet` Bitsets
+
+**Reason for exclusion:** Implementation complexity
+
+* **Single-buffer deserialization (`ATNDeserializer`):** `deserialize(String)` converts the serialized literal with a single `toCharArray()` call and decodes the `+2` shift in place (avoiding a second defensive clone). `deserialize(char[])` preserves its defensive `clone()` for full backwards compatibility when callers may reuse the input array.
+* **Frozen ATN state and transition arrays:** Once deserialization and ATN optimization complete, `ATNDeserializer` calls `ATNState.freezeOptimizedTransitions()` on every state and `ATN.freezeStatesSnapshot()` on the ATN:
+  * Each `ATNState` caches its constant `stateType`, freezes `optimizedTransitions` into a `Transition[]` (`optimizedTransitionsArray`), and precomputes `singleNonEpsilonTransition` and `noNonEpsilonOptimizedTransitions` so `ReachComputation` skips array loading and loop iteration on single-edge and epsilon-only states. Any subsequent mutation to transitions automatically invalidates the snapshot.
+  * `ATN.statesSnapshot` backs closure return-state lookups with a plain array load rather than `ArrayList.get`.
+* **O(1) `IntervalSet` lookup (`fastBits`):** During read-only sealing (`setReadonly(true)`—invoked automatically for every `SetTransition` set at the end of `ATNDeserializer`), immutable sets with more than 2 disjoint intervals whose elements all fall within `[-2..511]` (`Token.EPSILON` through `511`) materialize a compact `long[]` bitmask (`fastBits`) so `contains(int)` executes in O(1) without binary search or unsynchronized lazy initialization.
+
+---
+
+### Parser ATN Simulation and Hot-Path Engines
+
+All per-simulator retained caches and scratch buffers assume ANTLR's standard threading model: **one thread owns a given simulator instance for the duration of a parse or lex call**, while `ATN`, `DFA` tables, and `PredictionContext` graphs are safely shared across threads.
+
+#### Dense LL(1) and Precedence LL(1) Prediction Tables
+
+Before touching any volatile DFA start-state reference or allocating simulator state, `ParserATNSimulator.adaptivePredict` (when `optimize_ll1` is enabled) probes lock-free primitive arrays on `ATN`:
+
+* **Standard decisions (`ATN.ll1Dense`):** A flat `short[]` table indexed by `decision * ll1Stride + la` (`0` = miss) answers cached single-token LL(1) decisions without hashing or boxing. `ATN.ll1Cache` (`ConcurrentIntIntMap`) and `protected final ConcurrentMap<Integer, Integer> LL1Table` (`ConcurrentIntIntMapView`) remain synchronized with `ll1Dense` to preserve full subclass and test compatibility.
+* **Left-recursive precedence decisions (`ATN.precedenceLL1`):** Per-decision `PrecedenceTable` objects store flat `short[]` arrays indexed by `precedence * stride + la` for precedences in `0..200` (when vocabulary stride `<= 4096`), capturing the steady state of left-recursive expression loops (operator-or-stop decisions that accept without consuming input or evaluating semantic predicates).
+* **In-place `ATN.clearDFA()`:** Reuses existing `DFA` objects via `DFA.clear()` whenever decision/mode counts are unchanged, avoiding per-decision reallocation on cache flushes.
+
+#### Cursorless Warm SLL Fast Path
+
+For base `ParserATNSimulator` instances on warm local-context decisions (`!useContext && isBaseSimulator && !debug && !dfa_debug`), `adaptivePredict` (367 B, `exc=0`) dispatches directly to `execDFASllWarm` (509 B, `exc=0`, zero `try/finally`):
+
+* Handles **both single-token and multi-token** warm SLL accepts without allocating `SimulatorState`, mutating `this.dfa` (avoiding G1GC write barriers), or calling `input.mark()` / `consume()` / `seek()` / `release()`.
+* Multi-token lookahead on base `CommonTokenStream` reads ahead via cursorless `CommonTokenStream.nextOnChannel(int)`, keeping the stream cursor (`p`) and `cachedLTMinus1` intact.
+* Intentionally kept above HotSpot C2's 325-byte `FreqInlineSize` so it compiles as a dedicated C2 root with full inlining budget for `DFAState.getTarget` and `CommonTokenStream.nextOnChannel`, while cold paths stay strictly out-of-line in `execDFASllWarmSlow` (342 B), `adaptivePredictSlow` (281 B), and `completeAccept` (720 B).
+
+#### Unified `EpsilonClosure`, `ReachComputation`, and Zero-Sort `ConflictDetector`
+
+To keep `ParserATNSimulator` orchestration-focused without diverging fast and subclass-overridable semantics, ATN simulation is factored into three lazily allocated, package-private per-simulator engines:
+
+* **`EpsilonClosure`:** Unifies both the base direct walker (`walk`, which carries `(state, template)` lazily along pure-epsilon chains, tail-loops on single/final edges, and merges via `ATNConfigSet.addTransformed`) and overriding-subclass virtual dispatch (`walkVirtual`) around a single closure core and shared rule-stop / precedence-suppression logic. When EOF is not treated as epsilon, non-epsilon transitions are skipped before `getEpsilonTarget`.
+* **`ReachComputation`:** Encapsulates `computeTargetState` using `ATNState.singleNonEpsilonTransition` / `noNonEpsilonOptimizedTransitions` fast checks, index-based config walks (no `Iterator` allocations), and a retained `ReachConfigSource` view that stays zero-copy on SLL paths and lazily materializes a capacity-preserving rewrite list only when full-context step-out calls `appendContext`. Both unique-closure and general reach paths converge through `finishTargetEdge`.
+* **`ConflictDetector`:** Implements Sam Harwell's exact join-semilattice conflict definition in 3-pass O(n) time using lazily allocated, sparsely cleared open-addressed primitive arrays—completely eliminating `DualPivotQuicksort.sort` during DFA state construction (with a `ClearableLongObjectHashMap` fallback for read-only or duplicate-entry sets).
+* **O(D) bottom-up `computeStartState`:** Uses a lazily retained `int[] startReturnStates` stack on `ParserATNSimulator` to construct full-context start states in linear time relative to call-stack depth `D`.
+
+#### Retained Scratch Buffers and Occupancy-Aware Clearing
+
+Hot ATN reach and closure paths reuse lazily allocated scratch sets rather than allocating fresh `ATNConfigSet` instances on every missing DFA edge:
+
+| Owner (all per-simulator, single-threaded) | Retained Scratch Structures |
 | --- | --- |
-| `ParserATNSimulator` | reach + intermediate config sets for `computeTargetState` |
-| `LexerATNSimulator` | ordered reach set for lexer `computeTargetState` |
-| `EpsilonClosure` | busy set + BFS intermediate buffers |
+| `ReachComputation` | `retainedReach` (`RetainedConfigSet`), `retainedIntermediate` (`RetainedConfigSet`), `retainedReachConfigs` (`ReachConfigSource`) |
+| `ParserATNSimulator` | `retainedStartConfigs` / `retainedStartIntermediate` (`RetainedConfigSet`), `retainedPrecedenceAlt1` (`ClearableIntObjectHashMap`), `startReturnStates` (`int[]`), `retainedContextCache` (`PredictionContextCache`), `conflictDetector` (`ConflictDetector`) |
+| `EpsilonClosure` | `closureBusy` (`OpenAddressedHashSet` typed as `Set<ATNConfig>`), double-buffered `bufferA` / `bufferB` (`ATNConfigSet`) |
+| `LexerATNSimulator` | `retainedReach` (ordered `RetainedConfigSet`), lazy `closureBusy` (allocated only when `closureDepth > 64`), lazy `predTrace` (`LexerPredEdgeTable.PredTrace`) |
 
-Contract: `obtain(n)` always returns an **empty** writable set; `release()` in
-`finally` drops config-graph references but keeps list/map capacity. DFA
-states always store a readonly `clone`, never the reusable buffer. Capacity
-hints go through `ATNConfigSet.scratchCapacity`.
+**Ownership contract:** `RetainedConfigSet.obtain(sourceSize)` always returns an empty writable set (sized via `ATNConfigSet.scratchCapacity`); `release()` runs in `finally` to drop config-graph references while preserving backing capacity. DFA states always receive a read-only `clone`, never a retained buffer. `ATNConfigSet.clear()` also resets `outermostConfigSet` so flags cannot leak across edges.
 
-`ATNConfigSet.clear()` also resets `outermostConfigSet`, so a retained set
-cannot leave a sticky outermost flag that would break later edges.
-
-#### Retained-pool clear cost (no wholesale `Arrays.fill`)
-
-HPPC's stock `LongObjectHashMap.clear` / `ObjectHashSet.clear` always
-`Arrays.fill` the **entire** open-addressed table (O(capacity)), even when
-the container is already empty. Retained scratch called clear on both
-`obtain` and `release`, so every missing DFA edge paid two full-table zero
-passes — profiled as ~13% of lexer worker CPU on Groovy compile
-(`Arrays.fill(Object[])` under lexer `computeTargetState` pool).
-
-Mitigations (package-private only; HPPC types stay off `public`/`protected`
-API surfaces):
+**Eliminating wholesale `Arrays.fill` clear overhead:** Stock HPPC `clear()` fills the entire open-addressed table (O(capacity)), even when already empty. Calling `clear()` defensively on both `obtain()` and `release()` previously caused double full-table zeroing on every DFA miss (~13% of lexer CPU on Groovy compilation). This fork eliminates that cost via:
 
 | Mechanism | Effect |
 | --- | --- |
-| `ClearableLongObjectHashMap` / `OpenAddressedHashSet` | empty `clear()` is O(1) (no bulk fill) |
-| `ATNConfigSet.clear` sparse path | when `size * 4 < tableLength`, remove known merge keys (O(n)) instead of filling capacity |
-| `ArrayList.clear` | already nulls only the used prefix `[0, size)` |
-| `RetainedConfigSet` obtain+release | still both clear (defensive); second clear is free when empty |
+| `ClearableLongObjectHashMap` / `ClearableIntObjectHashMap` / `OpenAddressedHashSet` | `clear()` is O(1) when already empty (no backing-array fill) |
+| `ATNConfigSet.clear()` sparse path | When `size * 4 < tableLength` (`SPARSE_CLEAR_CAPACITY_FACTOR = 4`), removes only occupied merge keys in O(n) instead of zeroing the full table (with a safety fallback if any entry remains) |
+| `ArrayList.clear()` | Nulls only the used prefix `[0, size)`, never full capacity |
+| `RetainedConfigSet` obtain + release | Both remain defensive; `release()` clears once after work and the next `obtain()` is a free O(1) empty clear |
 
-Net: one non-empty clear per edge (on `release` after work), never a double
-full-capacity zero of the merge map or busy set.
+---
 
-#### `ATNConfig.hashCode` cache
+### Lexer Simulation, Character Streams, and Token Streams
 
-`hashCode()` is computed once (MurmurHash) and cached. Cache is invalidated
-when hash-participating fields change (`context`, or the
-reaches-into-outer-context flag). Zero is reserved as "uncomputed"; a raw
-hash of zero is stored as `1`.
+#### Fast `CodePointCharStream` and Direct `CodePointLexerRunner`
 
-Why it matters:
+* **`CodePointCharStream` & `CharStreams`:** `CharStreams.fromString` constructs Latin-1 (`byte[]`), BMP (`char[]`), or supplementary (`int[]`) backing buffers directly without intermediate `ByteBuffer` wrappers, widening lazily only when non-Latin-1 or surrogate code points appear. `LA(1)` is a compact position/size compare plus direct array load (`laSlow` outlined). `getText(int start, int stop)` (since `4.13.2.19`) avoids `Interval` allocations, uses 64-bit overflow-safe bounds math (`computeTextLength`), returns cached single-character `ASCII_STRINGS[0..127]` and `"\r\n"`, and performs direct Latin-1 `char[]` widening on JDK 8. The concrete subclasses `CodePoint{8,16,32}BitCharStream` and their backing arrays are strictly package-private in `org.antlr.v4.runtime`—never exposed on any `public` or `protected` API.
+* **`CodePointLexerRunner`:** Package-private in `org.antlr.v4.runtime`, invoked from `Lexer.nextToken()` (27 B, outlining `nextTokenSlow` at 20 B) via `nextTokenCodePoint`. Executes register-resident `exec8Bit`, `exec16Bit`, and `exec32Bit` DFA scan loops directly over the stream's package-private backing array, sharing a single `finishToken` tail that fuses built-in single-action `-> skip` rules (`LexerActionExecutor.isSingleSkip()`) in place without exiting the scan loop or calling `recog.skip()`.
+* **Safe subclass gating:** Fast DFA execution is governed by `LexerATNSimulator.fastDfaEligibleClass()` together with a metadata-driven `ClassValue<Boolean> NO_HOOK_OVERRIDES` check (backed by a single-entry `volatile Class<?>` cache `lastFastEligibleClass` to avoid per-file `ClassValue.get` lookups). Helper-only subclasses that override no `LexerATNSimulator` or `ATNSimulator` hooks remain eligible automatically; subclasses that override hooks fall back safely to standard `LexerATNSimulator.match`. Likewise, `Lexer` tracks a single-entry `volatile Class<?>` cache (`lastDefaultSkipClass`) so in-place `-> skip` fusion runs only when `Lexer.skip()` is not overridden. `Lexer.emit()` (75 B) outlines `emitWithFactory()` (51 B) and `pushMode(int)` stays at 17 B to respect HotSpot C2 inlining thresholds.
 
-* lexer `OrderedATNConfigSet` keys configs by `hashCode()`
-* closure busy sets hash configs on right-recursion / EOF* guards
-* DFA state lookup hashes entire config sets
+#### Predicate-Guarded ASCII Lexer Edge Cache (`LexerPredEdgeTable`)
 
-#### Lazy full-context config view (`ReachConfigSource`)
+Standard ANTLR suppresses static DFA edges whenever lexer ATN reach encounters a `PredicateTransition`, forcing full ATN reach and closure on every subsequent occurrence of `(state, char)`—a major hotspot for context-sensitive tokens in languages like Groovy (such as `/` and `'`).
 
-`computeTargetState` walks source configs via a retained `ReachConfigSource`:
+Package-private `LexerPredEdgeTable` caches the deterministic binary decision tree of `(ruleIndex, predIndex)` boolean outcomes (up to `MAX_PRED_DEPTH = 8`) per `(stateNumber, asciiChar)` in lock-free copy-on-write `AtomicReferenceArray<PredNode>[]` rows, bound to the owning mode's `dfaS0` identity so `DFA.clear()` automatically invalidates stale entries. Warm single-predicate hits execute with zero `PredTrace` allocation. `LexerPredEdgeTable.resolveFast` is deliberately kept as a single 460-byte static method (`> 325 B` `FreqInlineSize`) so HotSpot C2 does not inline its cold ATN-capture path into `CodePointLexerRunner`'s scan loops and spill registers.
 
-1. **SLL / common case:** zero-copy view over `s.configs` (`size` / `get` only).
-2. **Full-context step-out:** first `appendContext` materializes a mutable
-   list once; later appends reuse that list; capacity is kept across edges
-   via `reset` / `release`.
+#### Compiled `LexerActionExecutor` Dispatch
 
-SLL never allocates the rewrite list. Unique-closure and normal reach both
-finish through `finishTargetEdge` (no nullable edge-result sentinel).
+`LexerActionExecutor` precomputes dispatch metadata at construction time:
 
-#### Early non-epsilon skip in closure
+* `hasUnfixedPositionDependent` makes `fixOffsetBeforeMatch` O(1) when no unindexed position-dependent actions are present.
+* `isSingleSkip()` (`public final`) identifies single built-in `LexerSkipAction` executors in O(1) for safe in-place skip fusion.
+* `fastMode` classifies common non-indexed action sequences into `MODE_SINGLE`, `MODE_MULTI`, `MODE_CUSTOM_OPT_BUILTIN` (a leading `LexerCustomAction` with an optional trailing built-in command), or `MODE_SLOW`. Maintaining a single `lexer.action(...)` call site avoids HotSpot C2 `NodeCountInliningCutoff` regressions on parallel lexing.
 
-When EOF is not treated as epsilon, both parser (`EpsilonClosure`) and lexer
-(`LexerATNSimulator.closure`) skip non-epsilon optimized transitions before
-`getEpsilonTarget`. Pure consume edges cannot contribute to epsilon closure.
+#### Chunked `TokenList`, On-Demand Streaming, and Lookahead Caching
 
-#### Index-based config walks
+* **Chunked `TokenList`:** `BufferedTokenStream.tokens` defaults to package-private `TokenList`, which stores tokens in fixed **256-slot** `Token[]` chunks (1 KiB per chunk under 64-bit CompressedOops, initial chunk directory of 4). Appending never copies prior token references, eliminating `ArrayList` resize stalls and G1GC copy barriers on large files; `clear()` releases excess chunks when the directory has grown past its initial size. If a subclass replaces `tokens` with an `ArrayList`, `setup()` / `fill()` still pre-size it (~4 characters per token) when `CharStream.size()` is finite.
+* **On-demand fetch semantics preserved:** Token fetching remains lazy via 64-bit overflow-safe `BufferedTokenStream.sync(int)`. Eagerly lexing to EOF in `setup()` is intentionally avoided because it would reorder lexer-vs-parser error notifications; callers requiring a full buffer should call `fill()` explicitly.
+* **Lookahead caches (`cachedLT1` / `cachedLTMinus1`):** `BufferedTokenStream` maintains package-private `cachedLT1` and `cachedLTMinus1` fields—refreshed on `consume()` and on in-buffer `seek()` (keeping `cachedLT1` intact on no-op `seek(p)`), and cleared on `setTokenSource()` or when `consume()` cannot advance. `cachedLTMinus1` eliminates repeated backward channel scans from `Parser.pushNewRecursionContext` and `unrollRecursionContexts`.
+* **Fused `CommonTokenStream` operations:** When `getClass() == CommonTokenStream.class && tokens == fastTokens`, `consume()` (178 B), `LT(k > 1)` (`ltForwardFast`), and cursor-safe `nextOnChannel(int)` (111 B) operate directly on `TokenList` and pull unbuffered frontier tokens via `fetchNextOnChannel` without intermediate `lazyInit` / `sync` frames. Internal `tokens == fastTokens` reads are encapsulated behind compact `tokenCount()` (29 B) and `tokenAt(int)` (32 B) helpers.
+* **MDO profile isolation and inline-shape preservation:** `BufferedTokenStream.LA(int)` (32 B), `BufferedTokenStream.LT(int)` (27 B), and `CommonTokenStream.LT(int)` (27 B) all stay below HotSpot C2's 35-byte `MaxInlineSize` on the `k == 1` hit path (`cachedLT1`), splitting rare `k == 1` cache misses (`laOneSlow` 50 B, `ltOneSlow` 184 B) from `k != 1` lookahead (`laSlow`, `ltSlow`, `ltCommonSlow` 136 B) so C2 dead-code-eliminates `k != 1` IR at constant `LA(1)`/`LT(1)` call sites and never pollutes generated parser methods with cold slow-path inlines. *(Design note: extracting a helper method on the warm hit path, e.g. `return lt1().getType()`, previously introduced a call boundary that C2 did not consistently fold and regressed multi-scenario benchmarks; the warm hit path therefore remains directly inlined.)*
+* **`CommonTokenFactory`:** Uses the 7-argument `CommonToken` constructor (passing start line and column directly) rather than querying `TokenSource.getLine()` / `getCharPositionInLine()` after matching.
 
-Hot loops walk `ATNConfigSet` by index (`get(i)`) instead of enhanced-for
-iterators, avoiding `Iterator` allocation on reach, closure BFS layers, and
-related paths.
+---
 
-#### DFA emptiness without `TreeMap` (precedence DFAs)
+### Parser Runtime, Parse Trees, and Error Handling
 
-`ParserATNSimulator.adaptivePredict` calls `DFA.isEmpty()` (historically twice
-per prediction). For **precedence DFAs** (left-recursive expression rules —
-the common case in Java, Groovy, etc.) the synthetic `s0` / `s0full` states
-always exist, so emptiness was defined as “no outgoing symbol edges yet”.
+* **`Parser` and `ParserDiagnostics`:** `Parser` (< 1,000 lines) hosts the `protected final` generated-parser hooks and outlined cold helpers (`_syncSlow`, `_reportMatchSlow`, `_recoverInline`, `_consumeMatched`, `_consumeEOF`), fuses `consume(Token)` and `addChild` using `TerminalNodeImpl(Token, RuleNode)`, caches `errorSyncEnabled`, `reportMatchRequired`, `errorRecoveryMode`, and `lastConsumed` (so `exitRule()` avoids backward `LT(-1)` scans), and offers `setTrimParseTree(boolean)` (`TrimToSizeListener`). Cold diagnostic, expected-token, and tracing utilities live in package-private `ParserDiagnostics`.
+* **`ANTLRErrorStrategy` and `DefaultErrorStrategy`:** `ANTLRErrorStrategy` adds two Java 8 default methods—`isSyncRequired()` (default `true`; `BailErrorStrategy` returns `false`) and `isReportMatchRequired()` (default `true`; `DefaultErrorStrategy` returns `false`)—allowing generated parsers to skip virtual `sync` and `reportMatch` calls on the common success path via `Parser`'s cached flags. `DefaultErrorStrategy.reportMatch` is a no-op outside recovery, and `sync` exits early while recovering and skips clearing `nextTokensContext` when already `null`.
+* **Lock-free `Recognizer` error listeners:** Replaces `synchronized (this)` listener mutation with a copy-on-write `ANTLRErrorListener<?>[]` updated via `AtomicReferenceFieldUpdater`, starting on a shared default array so constructing a recognizer or calling `removeErrorListeners()` allocates nothing and acquires no locks.
+* **Parse-tree helpers:** `ParserRuleContext` initializes `children` lists at capacity 4 (`CHILDREN_INITIAL_CAPACITY = 4`) and provides package-private `replaceLastChild` to swap labeled-alternative contexts in place without `remove` + `add` shifting; `RuleContext.getText()` fast-paths single-child nodes without allocating a `StringBuilder`; `AbstractParseTreeVisitor.visitChildren` iterates `ParserRuleContext.children` directly.
 
-The previous implementation answered that via
-`s0.get().getEdgeMap().isEmpty()`, and `HashEdgeMap.toMap()` built a
-**`TreeMap<Integer, DFAState>`** (boxed keys + red-black inserts) on every
-call. Flame graphs of synthetic Java multi-file parse showed
-`DFA.isEmpty` → `HashEdgeMap.toMap` → `TreeMap` at **~17% inclusive CPU**.
+---
 
-Mitigation:
+### Internal Primitive Collections (HPPC) and API Encapsulation
 
-| API | Behavior |
-| --- | --- |
-| `DFAState.isEdgesEmpty()` / `isContextEdgesEmpty()` | O(1) occupancy; no `Map` allocation |
-| `DFA.isEmpty()` / `isContextSensitive()` | use the above; never `getEdgeMap().isEmpty()` |
-| `HashEdgeMap.size` / `isEmpty` | O(1) via retained occupancy counter |
-| `HashEdgeMap.toMap()` | cold path only (still sorted `TreeMap` for stable dumps) |
-| `adaptivePredict` | answers emptiness **once** per call |
+**Reason for exclusion:** Additional dependency (mitigated by shading and strict API encapsulation)
 
-`getEdgeMap()` remains for diagnostics / `DFASerializer` only.
+Hot ATN and prediction data structures use HPPC (`com.carrotsearch:hppc:0.9.1`, the last HPPC release targeting Java 8 bytecode) to avoid boxed keys and `HashMap.Node` allocations. **HPPC types never appear in any `public` or `protected` class, field, method, constructor, generic parameter, or annotation signature.**
 
-#### Frozen optimized ATN transitions
+| Subsystem | Internal Storage (never `public`/`protected`) | Exposed API Boundary | Role |
+| --- | --- | --- | --- |
+| `ATNConfigSet` merge index | `ClearableLongObjectHashMap` extends HPPC `LongObjectHashMap` | `Set<ATNConfig>` | Packed `(state, alt)` → `ATNConfig`; single-hash `indexOf` / `indexGet` / `indexInsert`; O(1) empty `clear()` |
+| `ParserATNSimulator` precedence filter | `ClearableIntObjectHashMap` extends HPPC `IntObjectHashMap` (private field) | Not in any method signature | State number → alt-1 `PredictionContext`; lazily retained; O(1) empty `clear()` |
+| `ConflictDetector` duplicate fallback | `ClearableLongObjectHashMap` (local on read-only / duplicate-entry path) | Not in any method signature | Packed `(slot, alt)` → joined `PredictionContext` |
+| `EpsilonClosure` busy set | Package-private `OpenAddressedHashSet` **composes** HPPC `ObjectHashSet` | `Set<ATNConfig>` | Right-recursion / `EOF*` guards; no `HashMap.Node`; O(1) empty `clear()` |
+| `ATN` LL(1) fallback cache | Package-private `ConcurrentIntIntMap` **composes** HPPC `IntIntHashMap` (COW) | `protected final ConcurrentMap<Integer, Integer> LL1Table` via `ConcurrentIntIntMapView` | Lock-free primitive reads behind the JDK `ConcurrentMap` façade (hot path hits `ATN.ll1Dense` first) |
+| `PredictionContext` graph interning | Local HPPC `ObjectObjectIdentityHashMap` in `getCachedContextInternal` | `PredictionContext` | Visited identity map allocated only when an `ArrayPredictionContext` is reached |
 
-After ATN deserialization and optimization, each `ATNState` freezes its
-optimized transition list into a `Transition[]`. Epsilon closure and reach
-prefer the array (`getOptimizedTransition` /
-`getNumberOfOptimizedTransitions`) so the common case is a null-check plus
-array load — matching the shape the JIT expects on production ATNs.
-Unfrozen construction/test graphs still fall back to the `ArrayList` until
-`freezeOptimizedTransitions()` is called. Mutations of optimized transitions
-invalidate the snapshot automatically.
+Cold paths (such as ATN deserialization) retain standard JDK collections. At package time, `maven-shade-plugin` minimizes and relocates HPPC exclusively into `org.antlr.v4.runtime.shaded.com.carrotsearch.hppc` and publishes a dependency-reduced POM with zero transitive HPPC dependency, ensuring the runtime is self-contained and cannot clash with a consumer's own HPPC version. Both `TestHppcApiBoundary` (reflective scan of all `public`/`protected` signatures in `runtime/Java`) and Maven's `verify-shaded-hppc` build gate enforce zero HPPC leakage.
 
-#### Token buffer capacity pre-size + LA(1) fast path
+---
 
-When `TokenSource.getInputStream()` reports a finite `CharStream.size()`,
-`BufferedTokenStream.setup` / `fill` pre-size the token list capacity
-(~4 characters per token) so on-demand growth avoids repeated array copies.
-**Fetch order remains on-demand** via `sync`: fully lexing in `setup` would
-advance the lexer to EOF before the parser runs and reorder lexer-vs-parser
-error notifications (CI regressions on single-token deletion tests). Callers
-that need a complete buffer should still call `fill()` explicitly.
-
-`CommonTokenStream.LT(1)` / `LA(1)` and `BufferedTokenStream.LA(1)` short-circuit
-to `tokens.get(p)` after the cursor is initialized (p already on-channel).
-`BufferedTokenStream` retains a private `cachedLT1` reference, refreshed on
-`consume` and cleared on `seek` / `setTokenSource`, so `Parser.enterRule` /
-`match` do not re-index the token list on every call.
-
-**Design note (post-review):** experiments that extracted a private helper used on
-the *warm hit* path (`return lt1().getType()`) added a call boundary that the
-JIT did not always remove, and showed multi-scenario regressions in A/B
-harness runs. The production hit path remains **fully inlined** (field load +
-`getType`); maintainability cleanups that touch this path must preserve that
-shape.
-
-#### API note (subclasses)
-
-The recursive protected
-`ParserATNSimulator.closure(ATNConfig, ..., Set<ATNConfig>, ...)` entry point
-takes a JDK `Set` for the busy set. Production code supplies the retained
-`OpenAddressedHashSet` from `EpsilonClosure` (HPPC open addressing underneath);
-subclasses may pass any `Set` implementation. No HPPC type appears in this or
-any other `public`/`protected` signature of the optimized runtime.
-
-### Prediction context optimization
-
-**Reason for exclusion:** Implementation complexity
-
-The optimized release uses an exact implementation for merging `PredictionContext` instances. In some cases, the reference release produces prediction context graphs which are not fully reduced (maximum sharing of nodes in the graph). The algorithm used by the optimized fork implements an exact merge for these contexts, so the `PredictionContext` instances appearing in the DFA cache are fully reduced.
-
-### Generated recognizer code quality (Java target / tool module)
+## Tool Static Analysis and Java Code Generation
 
 **Reason for exclusion:** Implementation complexity (target-specific)
 
-The Java code generator (`tool/.../templates/codegen/Java/Java.stg`) is tuned so
-that the *generated* lexer/parser sources themselves are leaner and cheaper on
-the hot path, without changing parse semantics.
+The ANTLR 4 tool (`tool/src/...` and `tool/resources/org/antlr/v4/tool/templates/codegen/Java/Java.stg`) includes static-analysis and Java target code-generation optimizations that shrink generated recognizer bytecode and align hot rule methods with HotSpot C2 inlining thresholds without altering parse semantics.
 
-| Generated pattern | Before | After | Why |
+| Pattern / Subsystem | Reference / Prior Codegen | Optimized Fork Codegen | Engineering Benefit |
 | --- | --- | --- | --- |
-| LL(\*) decisions | `getInterpreter().adaptivePredict(_input, d, _ctx)` | inherited `protected final _adaptivePredict(d)` (20 B) | one monomorphic `Parser` hook (`<= 35 B` HotSpot C2 `MaxInlineSize`); no virtual `getInterpreter()` and no per-parser boilerplate |
-| Decision / loop resync | `_errHandler.sync(this)` at every site | inherited `protected final _sync()` (12 B) / `_sync(int)` (17 B) / `_syncPredict(int, int)` (22 B) | two-stage SLL skips the virtual call via cached `errorSyncEnabled` (`ANTLRErrorStrategy.isSyncRequired()`); cold slow path outlined to `_syncSlow()` |
-| Rule context ctor | `new XContext(_ctx, getState())` | unchanged (`getState()` is `final` and inlines) | generated code does not reach into `_stateNumber` |
-| Set match | `_input.LA(1)` + `consume()` | inherited `protected final _matchSet(...)` (17 B) / `_matchSetEOF(...)` (30 B) | single `LT(1)` lookup on success; `matchedEOF` only when the set contains `EOF`; shrinks generated rule bytecode |
-| EOF match | `_match(EOF)` | inherited `protected final _matchEOF()` (34 B) + `_consumeEOF` (11 B) | skips redundant `matchedEOF` branch on normal tokens while remaining within HotSpot C2 `MaxInlineSize` (35 B) |
-| Star/plus exit test | FQN `org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER` | `while (_alt==continueAlt)` | no `ATN` token-name shadowing; one compare per iteration |
-| Single-token `*` loops | inline `setState`/`_sync`/`while`/`_match` per site | inherited `protected final _matchStar(...)` / `_matchStarPredict(...)` (Java target opt-in via `Target.supportsCompactSingleTokenStarLoop()`) | eliminates repeated per-site loop boilerplate and unlocks HotSpot C2 inlining of hot rules (`<= 325` B) |
-| LL(1) multi-alt switches | dense `switch (_input.LA(1))` or long `==` chains | compact `if`/bitmask test chains for 2–4 alts (`Target.supportsCompactLL1AltTests()`) | smaller bytecode & fewer indirect jumps when token span fits a 64-bit mask |
-| Token match | `match(T)` | inherited `protected final _match(T)` (34 B) + `_consumeMatched` (24 B) | monomorphic; skips `reportMatch` when not recovering; cold paths outlined to `_reportMatchSlow` / `_recoverInline` |
-| Left-rec `precpred` | `precpred(_ctx, n)` | inherited `protected final _prec(n)` (17 B) | no virtual call; unused context dropped |
-| Rule error recovery | inline `catch (RecognitionException re)` body | inherited `protected final _recover(re)` (28 B) | shrinks generated exception handlers in every rule method |
-| Labeled rec alt start | `new FooContext(new BarContext(parent, state))` | `new FooContext(parent, state)` | no dummy parent context allocation |
-| Single-alt & LL(1) labeled rules (Tier 2a / 2b) | allocate base `RuleContext` then copy into `AltContext` | direct `AltContext` allocation (Tier 2a) or deferred `enterRule` via inherited `_enterDeferred` (18 B, Tier 2b) when `_parseListeners == null`, no rule `catch`/`finally`, and sound `baseContext` / `AltBlock` guards hold | eliminates 1–2 wasted context allocations + `copyFrom()` per rule call while preserving exact listener, `baseContext`, and error-recovery semantics |
-| Flat `action()` / `sempred()` dispatch | 2-level switch (`ruleIndex` → per-rule helper → `actionIndex`/`predIndex`) | flat O(1) `tableswitch` directly on `actionIndex` / `predIndex` (Java target opt-in via `Target.supportsFlatActionAndSempredDispatch()`, exhaustive `ActionChunk` analysis + zero-alloc `JavaIdentifierScanner` with JLS §3.3 `\uXXXX` and text-block guards; `_localctx`-dependent parser preds outline to typed helpers) | eliminates 2nd dispatch hop + virtual/helper overhead on lexer/parser actions and predicates without duplicating logic across non-Java targets |
-| EBNF exit LL(1) recovery (`AnalysisPipeline`) | `X*` / `X+` / `X?` before a left-recursive or context-predicated sub-rule fell back to `_adaptivePredict` | delegates to `LL1Analyzer.look(..., PredicatePolicy.SEE_THROUGH_DROPPED_CALLEE_PREDS)` (3-regime `busyAlt` for `callDepth == 0`, `> 0`, `< 0`) to see through only callee predicates dropped by ALL(\*) `EpsilonClosure` at depth > 0 | cuts `_adaptivePredict` call sites dramatically (e.g. `GroovyParser`: 327 → 187, −42.8%) while eliminating duplicated ATN-walk logic and keeping context-independent hoisted predicates 100% ALL(\*)-sound |
-| ATN class init | `deserialize(_serializedATN.toCharArray())` | `deserialize(_serializedATN)` | single buffer (see below); no `toCharArray`+`clone` double copy |
-| Imports | `java.util.Iterator` always imported | omitted when unused | cleaner generated sources |
+| LL(\*) adaptive decisions & sync | `setState(s); _errHandler.sync(this);` + `getInterpreter().adaptivePredict(_input, d, _ctx)` | Inherited `protected final` `_sync()` (12 B), `_sync(int)` (17 B), `_adaptivePredict(int)` (20 B), and fused `_syncPredict(int, int)` (22 B) | Monomorphic hooks strictly `<= 35 B` (`MaxInlineSize`); skips virtual `sync` via cached `errorSyncEnabled`; eliminates per-parser boilerplate |
+| Token & EOF matching | `match(T)` / `match(EOF)` | Inherited `protected final _match(T)` (34 B) + `_consumeMatched` (24 B), and dedicated `_matchEOF()` (34 B) + `_consumeEOF` (11 B) | Monomorphic; skips `reportMatch` when not recovering; avoids `matchedEOF` branch on normal tokens; outlines `_reportMatchSlow` / `_recoverInline` / `_matchRecover` |
+| Set & inverted-set matching | Inline `_input.LA(1)` + `consume()` + recovery | Inherited `protected final _matchSet(...)` (17 B) / `_matchSetEOF(...)` (30 B) | Single `LT(1)` lookup on success; tracks `matchedEOF` only when EOF is in the set; shrinks rule bytecode |
+| Single-token `*` loops | Inline `setState` / `_sync` / `while` / `_match` per site | Inherited `protected final _matchStar(...)` (53 B) / `_matchStarPredict(...)` (41 B), opt-in via `Target.supportsCompactSingleTokenStarLoop()` | Removes repetitive loop boilerplate and brings hot rules back under HotSpot C2's 325-byte `FreqInlineSize` |
+| Star/plus loop exit test | `while (_alt!=2 && _alt!=org.antlr.v4.runtime.atn.ATN.INVALID_ALT_NUMBER)` | `while (_alt==continueAlt)` | Single comparison per iteration; immune to `ATN` token-name shadowing |
+| Compact LL(1) multi-alt tests | Sparse `switch (_input.LA(1))` or verbose `==` chains | Compact `if` / 64-bit bitmask test chains for 1–3 alternatives (`LL1AltBlock`, opt-in via `Target.supportsCompactLL1AltTests()`) | Replaces bloated sparse `lookupswitch` tables when 1–2 tiny alts (`<= 3` cases) or 1–3 sparse alts (`>= 6` cases) fit cleanly in `<= 4` words/arm (`<= 6` total) |
+| Left-recursive precedence check | `precpred(_ctx, n)` | Inherited `protected final _prec(n)` (17 B) | Monomorphic; drops unused context argument |
+| Rule error recovery | Inline `catch (RecognitionException re)` body | Inherited `protected final _recover(_localctx, re)` (28 B) | Shrinks exception-handler bytecode in every rule method |
+| Rule context construction | `new XContext(_ctx, getState())` | Unchanged (`Recognizer.getState()` is `final`) | Inlines cleanly while keeping `Recognizer._stateNumber` private |
+| Labeled recursive alt start | `new FooContext(new BarContext(parent, state))` | `new FooContext(parent, state)` | Eliminates throwaway intermediate context allocation |
+| Single-alt & LL(1) labeled-alt rules (Tier 2a / 2b) | Allocate base `RuleContext` then `copyFrom()` into `AltContext` | Direct `AltContext` allocation (Tier 2a) or deferred entry via inherited `protected final _enterDeferred(...)` (18 B, Tier 2b) when no rule `catch`/`finally` and sound `baseContext` / `LL1AltBlock` guards hold (and `_parseListeners == null` at runtime for Tier 2b) | Eliminates 1–2 wasted context allocations and `copyFrom()` per invocation while preserving exact listener, `baseContext`, and recovery semantics |
+| Flat `action()` / `sempred()` dispatch | Two-level switch (`ruleIndex` → per-rule helper → `actionIndex`/`predIndex`) | Flat O(1) `tableswitch` directly on `actionIndex` / `predIndex` (opt-in via `Target.supportsFlatActionAndSempredDispatch()`), using exhaustive 31-subclass `ActionChunk` analysis in `OutputModelController` and zero-alloc JLS §3.3 `JavaIdentifierScanner` (`\uXXXX`, literals, text blocks, comments); `_localctx`-dependent parser predicates outline to typed helpers | Eliminates the second dispatch hop and helper overhead on lexer/parser actions and predicates without affecting non-Java targets |
+| EBNF exit LL(1) recovery (`AnalysisPipeline`) | Greedy `X*` / `X+` / `X?` before a left-recursive or context-predicated sub-rule fell back to adaptive prediction | Delegates to `LL1Analyzer.LOOK(..., PredicatePolicy.SEE_THROUGH_DROPPED_CALLEE_PREDS)` (exact 3-regime `callDepth`: `== 0`, `> 0`, `< 0`) to see through only callee precedence and context-dependent predicates dropped by ALL(\*) `EpsilonClosure` at depth `> 0` | Eliminates a large share of adaptive prediction sites (for example, cutting Apache Groovy's benchmark grammar from 326 to 184 fused `_syncPredict` sites, −43.6%) while keeping context-independent hoisted predicates 100% ALL(\*)-sound |
+| ATN initialization | `deserialize(_serializedATN.toCharArray())` | `deserialize(_serializedATN)` | Single buffer allocation without `toCharArray()` + `clone()` double copy |
+| Generated imports | `java.util.Iterator` imported unconditionally | Omitted when unused | Cleaner generated Java sources |
 
-Runtime counterparts used heavily by generated call sites:
+---
 
-| Runtime site | Optimization |
-| --- | --- |
-| `ATNDeserializer.deserialize(String)` | owns one `toCharArray()` buffer; mutates in place (no defensive clone); precomputes `IntervalSet.fastBits` during read-only deserialization (eliminating post-publish unsynchronized races on `contains`) and freezes `ATNState.singleNonEpsilonTransition` |
-| `ATNDeserializer.deserialize(char[])` | still clones (caller may reuse the array) — source-compatible |
-| `DefaultErrorStrategy.reportMatch` | no-op when not in recovery (every successful `match`) |
-| `DefaultErrorStrategy.sync` | early exit while recovering; skip `nextTokensContext` store when already clear |
-| `Parser` / `ParserDiagnostics` | `Parser` (< 1,000 lines) hosts the `protected final` `<= 35 B` generated hooks with outlined cold slow paths (`_syncSlow`, `_reportMatchSlow`, `_recoverInline`, `_consumeMatched`, `_consumeEOF`), fused `consume(Token)` & `addChild` fast paths with `TerminalNodeImpl(Token, RuleNode)`, cached `errorSyncEnabled`, and fast `enterRule`/`exitRule`; diagnostic/trace/DFA-dump helpers live in package-private `ParserDiagnostics` |
-| `Recognizer` error listeners | lock-free copy-on-write array via `AtomicReferenceFieldUpdater` (replaces `synchronized (this)` on `addErrorListener`/`removeErrorListener`) |
-| `ParserATNSimulator` / `ConflictDetector` / `EpsilonClosure` | cursorless warm SLL fast path `execDFASllWarm` (509 B, 0 `try/finally`, gated on `!useContext && isBaseSimulator && !debug && !dfa_debug`) with outlined `execDFASllWarmSlow` (342 B), `adaptivePredictSlow` (281 B), and `completeAccept` (720 B) avoids `this.dfa` G1 write barriers and skips `SimulatorState` + `mark`/`release` on 1-token unpredicated accepts; O(D) `computeStartState` via `ATNState.singleNonEpsilonTransition`; unified `EpsilonClosure.walk`/`walkVirtual`; conflict/ambiguity detection extracted to per-simulator package-private `ConflictDetector` (3-pass O(n) zero-sort open-addressed state-grouping + `DFAState.getUnconflictedPrediction()` fast path); LL(1) cache uses dense `short[]` (`ATN.ll1Dense`) and per-decision `ATN.precedenceLL1` |
-| `PredictionContextCache` | refactored over package-private `OpenTableBase` (power-of-two capacity, O(size) sparse `clear()`, automatic shrink of oversized tables) with cache-dense `ContextInternSet`, stride-2 `ChildContextMap`, and stride-3 `JoinContextMap` at 0.5 load factor; eliminates `HashMap.Node` & wrapper-key allocations during cold DFA builds and full-context LL(\*) |
-| `ATNConfig` / `ATNConfigSet` | stores `passedThroughNonGreedyDecision` in base-class alignment padding (32-byte CompressedOops object, monomorphic getter), inline MurmurHash3 `computeHashCode()`, cached hash fast-reject in `equals()`, and hash invalidation when `mergeConfigContext` flips `reachesIntoOuterContext` |
-| `DFAState` | copy-on-write length-128 `asciiEdges` array (volatile publish for full JMM happens-before safety across x86/ARM64/POWER), immutable `minEdgeIndex`, `volatile BitSet contextSymbols`, and `getUnconflictedPrediction()` for O(1) conflict-free accept checks |
-| `TokenList` / `BufferedTokenStream` / `CommonTokenStream` | chunked `TokenList` (1024-slot chunks, zero `Arrays.copyOf` stalls on large files, chunk release on oversized `clear()`); 64-bit overflow-safe `BufferedTokenStream.sync(int)`; `CommonTokenStream` fuses `consume()`, `LT(k > 1)` frontier fetching, and cursor-safe `nextOnChannel(int)` directly on `TokenList`; MDO profile isolation splits cold `k==1` misses (`ltOneSlow`/`laOneSlow` > 35 B) from `k != 1` (`ltCommonSlow`/`laSlow`) so C2 never pollutes generated parser methods with cold slow-path inlines |
-| `CodePointCharStream` / `CharStreams` | `LA(1)` is a position/size compare + direct array load; `fromString` constructs backed 8-bit/16-bit/32-bit buffers directly with 64-bit overflow-safe `getText(Interval)` bounds math; `CodePoint{8,16,32}BitCharStream` and their backing arrays are strictly package-private (zero mutable internal array exposure) |
-| `CommonTokenFactory` | constructs via the 7-arg `CommonToken` ctor (start line/column); does not query `TokenSource.getLine` after the token is matched |
-| `Lexer` / `LexerATNSimulator` / `CodePointLexerRunner` / `LexerPredEdgeTable` | `LexerATNSimulator` (< 1,000 lines) delegates direct 8-bit/16-bit/32-bit `CodePointCharStream` DFA matching and in-place `-> skip` loop fusion to package-private `CodePointLexerRunner`, gated by `ClassValue`-cached metadata-driven `NO_HOOK_OVERRIDES` + `fastDfaEligibleClass()` subclass override hook; `LexerPredEdgeTable` (with `PredTrace`) caches ASCII predicated lexer DFA edges in lock-free COW `AtomicReferenceArray<PredNode>[]` rows (zero ATN re-closure on warm predicated transitions such as Groovy `/` and `'`) |
-| `LexerActionExecutor` | caches `hasPositionDependentAction`, `isSingleSkip`, and `MODE_CUSTOM_OPT_BUILTIN` fast-dispatch metadata (single `lexer.action(...)` and `executeBuiltIn(...)` call sites) to avoid per-token action scanning and enable safe in-place skip fusion |
-| `IntervalSet` | immutable readonly sets with > 2 intervals in `[-2..2048]` precompute a compact `long[]` bitset (`fastBits`) via `buildFastBits()` for O(1) `contains(int)` |
-| `ParserRuleContext` / `RuleContext` / `AbstractParseTreeVisitor` | `children` list starts at capacity 4; `replaceLastChild` avoids `remove`+`add` shifts; `RuleContext.getText()` fast-paths 1-child nodes; `AbstractParseTreeVisitor.visitChildren` iterates `ParserRuleContext.children` directly |
+## API Compatibility and Subclass Contracts
 
-**Compatibility:** Generated parsers remain source- and binary-compatible at the
-public API level. The `protected final` `_adaptivePredict`, `_sync`, `_syncPredict`,
-`_match`, `_matchEOF`, `_matchSet`, `_matchSetEOF`, `_matchStar`,
-`_matchStarPredict`, `_prec`, `_recover`, and `_enterDeferred` hooks on `Parser`
-are reserved for generated Java parsers rather than third-party overriding.
-Non-Java targets inherit `false` from `Target.supportsCompactSingleTokenStarLoop()`,
-`Target.supportsCompactLL1AltTests()`, and
-`Target.supportsFlatActionAndSempredDispatch()`, preserving full compatibility
-with pluggable third-party targets. `ANTLRErrorStrategy.isSyncRequired()` is a
-Java 8 default method (existing implementations keep the previous always-call-`sync`
-behavior). `Parser.consume(Token)` is `protected` for generated code and
-subclasses. `Recognizer._stateNumber` stays private, and `CodePointCharStream`
-internal subclasses and backing arrays stay package-private (zero mutable internal
-array exposure). HPPC types remain confined to package-private runtime internals
-(see the HPPC section above); nothing in the tool templates emits HPPC types into
-generated code, and both `TestHppcApiBoundary` and Maven's `verify-shaded-hppc`
-enforce zero HPPC leakage.
+* **Public source and binary compatibility:** Generated recognizers preserve standard ANTLR 4 public APIs. Existing compiled parsers continue to function on newer `me.sunlan:antlr4-runtime` releases, though regeneration is recommended to take advantage of the Java code-generation improvements.
+* **Reserved `Parser` hooks:** The 13 `protected final` hooks on `Parser`—11 single-step hooks (`_adaptivePredict`, `_sync()`, `_sync(int)`, `_syncPredict`, `_match`, `_matchEOF`, `_matchSet`, `_matchSetEOF`, `_prec`, `_recover`, `_enterDeferred`, all `<= 35 B`) and 2 compact single-token loop helpers (`_matchStar` 53 B, `_matchStarPredict` 41 B)—are reserved for generated Java parsers and cannot be overridden by third-party subclasses. `Parser.consume(Token)` is `protected` for generated code and subclasses.
+* **Error-strategy opt-in defaults:** `ANTLRErrorStrategy.isSyncRequired()` and `ANTLRErrorStrategy.isReportMatchRequired()` are Java 8 `default` methods returning `true`, so custom implementations of `ANTLRErrorStrategy` retain the historical always-invoke contract without code changes. Subclasses of `DefaultErrorStrategy` that override `reportMatch` or `inErrorRecoveryMode` to run logic on every successful match should override `isReportMatchRequired()` to return `true`; subclasses of `BailErrorStrategy` that override `sync` should override `isSyncRequired()` to return `true`.
+* **`ParserATNSimulator` subclass SPI:** The protected recursive `closure(ATNConfig, ..., Set<ATNConfig>, ...)` entry point accepts any JDK `Set<ATNConfig>` (production code passes `EpsilonClosure`'s retained `OpenAddressedHashSet`). Overriding subclasses bypass `isBaseSimulator` fast paths automatically so every protected hook remains observable.
+* **`LexerATNSimulator` subclass SPI:** `LexerATNSimulator.fastDfaEligibleClass()` defaults to `LexerATNSimulator.class`. Helper-only subclasses that override no `LexerATNSimulator` or `ATNSimulator` methods remain automatically eligible for `CodePointLexerRunner`; subclasses may also return their own class literal to opt in explicitly (without reflective inspection) or `null` to opt out.
+* **Multi-target tool compatibility:** `Target.supportsCompactSingleTokenStarLoop()`, `Target.supportsCompactLL1AltTests()`, and `Target.supportsFlatActionAndSempredDispatch()` default to `false` and are enabled only in `JavaTarget`, preserving full compatibility with pluggable non-Java targets.
+* **Encapsulation guarantees:** `Recognizer._stateNumber` stays `private`; `CodePoint{8,16,32}BitCharStream` and their backing arrays stay package-private (zero mutable internal array exposure); and HPPC remains strictly confined to package-private runtime internals, never emitted into generated code, and enforced by `TestHppcApiBoundary` and Maven's `verify-shaded-hppc`.
